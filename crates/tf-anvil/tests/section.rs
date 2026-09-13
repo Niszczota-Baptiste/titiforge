@@ -7,7 +7,7 @@
 mod common;
 use common::fixture::{bits_for as fixture_bits, li, pack, Rng};
 
-use tf_anvil::{bits_for, local_index, Section, MAX_PALETTE, VOL};
+use tf_anvil::{bits_for, local_index, Packing, Section, MAX_PALETTE, VOL};
 
 fn section_from(palette_len: usize, indices: &[u16]) -> Section {
     let mut s = Section {
@@ -15,6 +15,7 @@ fn section_from(palette_len: usize, indices: &[u16]) -> Section {
         palette: (0..palette_len as u32).collect(),
         bits: bits_for(palette_len),
         data: Box::new([]),
+        packing: Packing::NoStraddle,
     };
     s.repack(indices);
     s

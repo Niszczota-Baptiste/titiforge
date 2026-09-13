@@ -260,20 +260,75 @@ fn key_of(entry: &Tag) -> String {
     format!("{name}|{}", body.join(","))
 }
 
+/// Dépacke des indices, en déduisant le packing de la LONGUEUR du tableau.
+///
+/// Réimplémenté ici depuis la spec, sans regarder `format.rs`. Les deux
+/// dispositions ne donnent la même longueur que lorsque `bits` divise 64 —
+/// et là elles produisent les mêmes octets, donc l'ambiguïté est sans effet.
+fn depack(data: &[i64], bits: usize, count: usize) -> Vec<usize> {
+    let par_long = 64 / bits;
+    let sans = count.div_ceil(par_long);
+    let avec = (count * bits).div_ceil(64);
+    let mask = (1u64 << bits) - 1;
+    let mut out = Vec::with_capacity(count);
+
+    if data.len() == sans {
+        // sans chevauchement
+        'a: for &w in data {
+            let w = w as u64;
+            for k in 0..par_long {
+                if out.len() >= count {
+                    break 'a;
+                }
+                out.push(((w >> (k * bits)) & mask) as usize);
+            }
+        }
+    } else if data.len() == avec {
+        // avec chevauchement
+        for n in 0..count {
+            let off = n * bits;
+            let li = off / 64;
+            let b = off % 64;
+            let Some(&low) = data.get(li) else { break };
+            let low = low as u64;
+            let v = if b + bits <= 64 {
+                (low >> b) & mask
+            } else {
+                let high = data.get(li + 1).map(|&h| h as u64).unwrap_or(0);
+                ((low >> b) | (high << (64 - b))) & mask
+            };
+            out.push(v as usize);
+        }
+    } else {
+        panic!(
+            "décodeur gelé : {} longs ne correspond ni à {sans} (sans chevauchement) \
+             ni à {avec} (avec) pour {bits} bits",
+            data.len()
+        );
+    }
+    out.resize(count, 0);
+    out
+}
+
 /// Les 4096 états d'une section, dans l'ordre YZX.
 ///
 /// Le dépack est réécrit ici depuis la spec : longs BIG-endian,
 /// `bits = max(4, ceil(log2(len)))`, aucun chevauchement entre deux longs.
 pub fn section_states(section: &Tag) -> Option<Vec<String>> {
-    let bs = section.get("block_states")?;
-    let palette: Vec<String> = bs.get("palette")?.as_list()?.iter().map(key_of).collect();
+    // Les deux dispositions : 1.18+ met tout dans un compound `block_states`,
+    // 1.13–1.17 pose `Palette` et `BlockStates` en champs frères.
+    let (palette_tag, data_tag) = match section.get("block_states") {
+        Some(bs) => (bs.get("palette")?, bs.get("data")),
+        None => (section.get("Palette")?, section.get("BlockStates")),
+    };
+    let palette: Vec<String> = palette_tag.as_list()?.iter().map(key_of).collect();
     if palette.is_empty() {
         return None;
     }
     if palette.len() == 1 {
         return Some(vec![palette[0].clone(); 4096]);
     }
-    let data = match bs.get("data").and_then(|t| t.as_longs()) {
+    let data = match data_tag.and_then(|t| t.as_longs()) {
         Some(d) if !d.is_empty() => d,
         _ => return Some(vec![palette[0].clone(); 4096]),
     };
@@ -282,28 +337,29 @@ pub fn section_states(section: &Tag) -> Option<Vec<String>> {
     while (1usize << bits) < palette.len() {
         bits += 1;
     }
-    let per_long = 64 / bits;
-    let mask = (1u64 << bits) - 1;
-
-    let mut out = Vec::with_capacity(4096);
-    'outer: for &w in data.iter() {
-        let w = w as u64;
-        for k in 0..per_long {
-            if out.len() >= 4096 {
-                break 'outer;
-            }
-            let idx = ((w >> (k * bits)) & mask) as usize;
-            out.push(palette.get(idx).cloned().unwrap_or_else(|| "?".into()));
-        }
-    }
-    out.resize(4096, palette[0].clone());
-    Some(out)
+    Some(
+        depack(data, bits, 4096)
+            .into_iter()
+            .map(|i| palette.get(i).cloned().unwrap_or_else(|| "?".into()))
+            .collect(),
+    )
 }
 
 /// Tous les états d'un chunk, par `Y` de section.
 pub fn chunk_states(chunk: &FrozenChunk) -> BTreeMap<i8, Vec<String>> {
     let mut out = BTreeMap::new();
-    if let Some(list) = chunk.root.get("sections").and_then(|t| t.as_list()) {
+    let liste = chunk
+        .root
+        .get("sections")
+        .and_then(|t| t.as_list())
+        .or_else(|| {
+            chunk
+                .root
+                .get("Level")
+                .and_then(|l| l.get("Sections"))
+                .and_then(|t| t.as_list())
+        });
+    if let Some(list) = liste {
         for s in list {
             let y = s.get("Y").and_then(|t| t.as_i8()).unwrap_or(0);
             if let Some(states) = section_states(s) {

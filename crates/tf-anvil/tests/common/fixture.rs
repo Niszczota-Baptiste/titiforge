@@ -358,3 +358,87 @@ pub fn terrain_region(side: u32, sections_per_chunk: usize, seed: u32) -> Vec<u8
     }
     region_file(&chunks, 7)
 }
+
+// ── format ancien : 1.13 – 1.17 ─────────────────────────────────────────────
+
+/// Packe AVEC chevauchement — les indices sont collés bout à bout, un indice
+/// peut donc être à cheval sur deux longs. C'est la disposition de 1.13 à 1.15,
+/// et celle de Litematica aujourd'hui encore.
+pub fn pack_straddle(indices: &[u16], bits: usize) -> Vec<u64> {
+    let total = (indices.len() * bits).div_ceil(64);
+    let mut out = vec![0u64; total];
+    for (n, &v) in indices.iter().enumerate() {
+        let off = n * bits;
+        let li = off / 64;
+        let b = off % 64;
+        out[li] |= (v as u64) << b;
+        if b + bits > 64 {
+            out[li + 1] |= (v as u64) >> (64 - b);
+        }
+    }
+    out
+}
+
+/// Un chunk 1.13 – 1.17 : tout sous `Level`, et la section porte deux champs
+/// FRÈRES, `Palette` et `BlockStates`.
+///
+/// `straddle` choisit le packing : `true` pour 1.13 – 1.15, `false` pour
+/// 1.16 – 1.17 (le changement date de 20w17a).
+pub fn legacy_chunk_nbt(
+    chunk_x: i32,
+    chunk_z: i32,
+    sections: &[SectionSpec],
+    straddle: bool,
+) -> Vec<u8> {
+    let mut n = Nbt::new();
+    n.field(t::COMPOUND, ""); // racine
+    n.field(t::INT, "DataVersion")
+        .i32v(if straddle { 2230 } else { 2724 });
+
+    n.field(t::COMPOUND, "Level");
+    n.field(t::INT, "xPos").i32v(chunk_x);
+    n.field(t::INT, "zPos").i32v(chunk_z);
+    n.field(t::STRING, "Status").strv("full");
+
+    // Un champ que le lecteur n'interprète pas, DANS Level.
+    n.field(t::BYTE_ARRAY, "modtest:legacy")
+        .bytes(&[0xC0, 0xFF, 0xEE]);
+
+    n.field(t::LIST, "Sections")
+        .list(t::COMPOUND, sections.len());
+    for s in sections {
+        n.field(t::BYTE, "Y").i8v(s.y);
+        n.field(t::LIST, "Palette")
+            .list(t::COMPOUND, s.palette.len());
+        for (name, props) in &s.palette {
+            n.field(t::STRING, "Name").strv(name);
+            if !props.is_empty() {
+                n.field(t::COMPOUND, "Properties");
+                for (k, v) in props {
+                    n.field(t::STRING, k).strv(v);
+                }
+                n.end();
+            }
+            n.end();
+        }
+        // Une palette d'une entrée n'écrit PAS de BlockStates : c'est le cas
+        // qui oblige à INSÉRER le champ si la section cesse d'être homogène.
+        if s.palette.len() > 1 {
+            let bits = bits_for(s.palette.len());
+            let longs = if straddle {
+                pack_straddle(&s.indices, bits)
+            } else {
+                pack(&s.indices, bits)
+            };
+            n.field(t::LONG_ARRAY, "BlockStates").longs(&longs);
+        }
+        // Et un champ inconnu voisin, comme dans le format moderne.
+        n.field(t::BYTE_ARRAY, "SkyLight")
+            .bytes(&vec![0x77u8; 2048]);
+        n.end(); // la section
+    }
+
+    n.end(); // Level
+    n.end(); // racine
+    n.b
+}

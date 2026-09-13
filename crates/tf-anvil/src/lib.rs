@@ -13,14 +13,20 @@
 
 pub mod chunk;
 pub mod codec;
+pub mod format;
 pub mod region;
 pub mod section;
 pub mod state;
 
 pub use chunk::{
-    decode_section, encode_section, scan, splice, ChunkScan, Edit, ScannedSection, SpliceError,
+    decode_section, encode_section, scan, section_edits, splice, ChunkScan, Edit, ScannedSection,
+    SectionSpans, SpliceError,
 };
 pub use codec::{deflate, inflate, CodecError};
+pub use format::{
+    detect_packing, longs_for, pack, packing_de_repli, unpack_into, version_label, Layout, Packing,
+    DV_SANS_CHEVAUCHEMENT,
+};
 pub use region::{
     chunk_of_block, floor_div, read, region_coords_from_name, region_file_name, region_of_chunk,
     write, Compression, RawChunk, ReadError, Region, WriteError, CHUNKS, HEADER, MAX_SECTORS,

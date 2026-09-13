@@ -12,6 +12,7 @@
 //! poids fort inutilisés de chaque long sont à zéro. (Litematica, elle, packe
 //! AVEC chevauchement : ne pas confondre les deux.)
 
+use crate::format::{self, Packing};
 use crate::state::StateId;
 
 /// Nombre de blocs dans une section.
@@ -46,16 +47,21 @@ pub struct Section {
     pub bits: u8,
     /// Vide pour une section homogène (palette d'une entrée), comme Minecraft.
     pub data: Box<[u64]>,
+    /// Comment `data` est rangé. Portée par la section et non déduite d'une
+    /// version : on réécrit une section dans le packing du fichier d'où elle
+    /// vient, sinon un monde 1.15 ressortirait illisible pour son propre jeu.
+    pub packing: Packing,
 }
 
 impl Section {
-    /// Section homogène d'un seul état.
+    /// Section homogène d'un seul état, au packing moderne.
     pub fn uniform(y: i8, id: StateId) -> Self {
         Section {
             y,
             palette: vec![id],
             bits: bits_for(1),
             data: Box::new([]),
+            packing: Packing::NoStraddle,
         }
     }
 
@@ -84,20 +90,7 @@ impl Section {
         if self.is_uniform() {
             return;
         }
-        let bits = self.bits as usize;
-        let per_long = 64 / bits;
-        let mask = (1u64 << bits) - 1;
-        let mut n = 0usize;
-        for &w in self.data.iter() {
-            if n >= VOL {
-                break;
-            }
-            let up_to = per_long.min(VOL - n);
-            for k in 0..up_to {
-                out[n] = ((w >> (k * bits)) & mask) as u16;
-                n += 1;
-            }
-        }
+        format::unpack_into(&self.data, VOL, self.bits as usize, self.packing, out);
     }
 
     /// Repacke depuis 4096 indices, en recalculant `bits` d'après la palette.
@@ -109,22 +102,8 @@ impl Section {
             return;
         }
         let bits = bits_for(self.palette.len()) as usize;
-        let per_long = 64 / bits;
-        let long_count = VOL.div_ceil(per_long);
-        let mut out = vec![0u64; long_count];
-        for (li, w) in out.iter_mut().enumerate() {
-            let mut acc = 0u64;
-            for k in 0..per_long {
-                let n = li * per_long + k;
-                if n >= VOL {
-                    break;
-                }
-                acc |= (idx[n] as u64) << (k * bits);
-            }
-            *w = acc;
-        }
         self.bits = bits as u8;
-        self.data = out.into_boxed_slice();
+        self.data = format::pack(idx, bits, self.packing).into_boxed_slice();
     }
 
     /// État à une position locale.
@@ -134,10 +113,26 @@ impl Section {
             return self.palette.first().copied();
         }
         let bits = self.bits as usize;
-        let per_long = 64 / bits;
-        let w = *self.data.get(n / per_long)?;
-        let k = n % per_long;
-        let i = ((w >> (k * bits)) & ((1u64 << bits) - 1)) as usize;
+        let mask = (1u64 << bits) - 1;
+        let i = match self.packing {
+            Packing::NoStraddle => {
+                let per_long = 64 / bits;
+                let w = *self.data.get(n / per_long)?;
+                ((w >> ((n % per_long) * bits)) & mask) as usize
+            }
+            Packing::Straddle => {
+                let off = n * bits;
+                let low = *self.data.get(off / 64)?;
+                let b = off % 64;
+                let v = if b + bits <= 64 {
+                    (low >> b) & mask
+                } else {
+                    let high = self.data.get(off / 64 + 1).copied().unwrap_or(0);
+                    ((low >> b) | (high << (64 - b))) & mask
+                };
+                v as usize
+            }
+        };
         self.palette.get(i).copied()
     }
 

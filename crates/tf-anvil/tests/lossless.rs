@@ -19,7 +19,7 @@ use common::frozen;
 
 use std::borrow::Cow;
 use tf_anvil::{
-    decode_section, deflate, encode_section, inflate, read, scan, splice, write, Edit, Interner,
+    decode_section, deflate, inflate, read, scan, section_edits, splice, write, Edit, Interner,
     Section, VOL,
 };
 
@@ -61,15 +61,12 @@ fn editer_chunk(
     let mut edits: Vec<Edit> = Vec::new();
 
     for sc in &scanned.sections {
-        let Some(mut section) = decode_section(&inflated, sc, &mut interner).unwrap() else {
+        let Some(mut section) = decode_section(&inflated, &scanned, sc, &mut interner).unwrap()
+        else {
             continue;
         };
         if f(&mut section, &interner) {
-            let bytes = encode_section(&section, &interner).expect("palette résoluble");
-            edits.push(Edit {
-                span: sc.states.unwrap(),
-                bytes,
-            });
+            edits.extend(section_edits(&section, sc, &interner).expect("palette résoluble"));
         }
     }
 
@@ -451,12 +448,12 @@ fn une_section_sans_block_states_est_ignoree_sans_etre_detruite() {
     assert_eq!(s.sections.len(), 1);
     assert_eq!(s.sections[0].y, 5);
     assert!(
-        s.sections[0].states.is_none(),
-        "pas de block_states à repérer"
+        s.sections[0].spans.is_none(),
+        "pas de champs de blocs à repérer"
     );
 
     let mut interner = Interner::new();
-    assert!(decode_section(&inflated, &s.sections[0], &mut interner)
+    assert!(decode_section(&inflated, &s, &s.sections[0], &mut interner)
         .unwrap()
         .is_none());
 
@@ -489,7 +486,7 @@ fn un_etat_a_proprietes_ne_se_trouve_pas_sous_son_nom_nu() {
 
     let mut interner = Interner::new();
     for sc in &scanned.sections {
-        let _ = decode_section(&inflated, sc, &mut interner).unwrap();
+        let _ = decode_section(&inflated, &scanned, sc, &mut interner).unwrap();
     }
 
     // bloc_3 porte `facing=north, half=top` dans la fixture.

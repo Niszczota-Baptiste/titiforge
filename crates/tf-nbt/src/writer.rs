@@ -110,6 +110,20 @@ pub struct PaletteEntryRef<'a> {
     pub props: &'a [(String, String)],
 }
 
+fn write_palette_entry(w: &mut Writer, e: &PaletteEntryRef<'_>) {
+    w.field(tag::STRING, "Name").raw_str(e.name);
+    if !e.props.is_empty() {
+        w.field(tag::COMPOUND, "Properties");
+        let mut sorted: Vec<&(String, String)> = e.props.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (k, v) in sorted {
+            w.field(tag::STRING, k).raw_str(v);
+        }
+        w.end();
+    }
+    w.end();
+}
+
 /// Compose la CHARGE d'un compound `block_states` — sans son octet de type ni
 /// son nom, puisqu'on la splice à la place de l'ancienne.
 ///
@@ -122,22 +136,39 @@ pub fn block_states_payload(palette: &[PaletteEntryRef<'_>], data: &[u64]) -> Ve
     w.field(tag::LIST, "palette");
     w.list_header(tag::COMPOUND, palette.len());
     for e in palette {
-        w.field(tag::STRING, "Name").raw_str(e.name);
-        if !e.props.is_empty() {
-            w.field(tag::COMPOUND, "Properties");
-            let mut sorted: Vec<&(String, String)> = e.props.iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            for (k, v) in sorted {
-                w.field(tag::STRING, k).raw_str(v);
-            }
-            w.end();
-        }
-        w.end();
+        write_palette_entry(&mut w, e);
     }
     if palette.len() > 1 && !data.is_empty() {
         w.field(tag::LONG_ARRAY, "data");
         w.long_array_payload(data);
     }
     w.end();
+    w.into_bytes()
+}
+
+/// Charge d'une liste de palette 1.13–1.17 (`Palette`), sans son nom.
+/// Même contenu que la `palette` de 1.18+ — seul le champ hôte diffère.
+pub fn palette_list_payload(palette: &[PaletteEntryRef<'_>]) -> Vec<u8> {
+    let mut w = Writer::with_capacity(16 + palette.len() * 48);
+    w.list_header(tag::COMPOUND, palette.len());
+    for e in palette {
+        write_palette_entry(&mut w, e);
+    }
+    w.into_bytes()
+}
+
+/// Charge d'un `TAG_Long_Array`, sans son nom.
+pub fn long_array_payload(data: &[u64]) -> Vec<u8> {
+    let mut w = Writer::with_capacity(4 + data.len() * 8);
+    w.long_array_payload(data);
+    w.into_bytes()
+}
+
+/// Champ `TAG_Long_Array` COMPLET — type, nom et charge. Sert à insérer un
+/// champ qui n'existait pas dans le chunk d'origine.
+pub fn named_long_array(name: &str, data: &[u64]) -> Vec<u8> {
+    let mut w = Writer::with_capacity(8 + name.len() + data.len() * 8);
+    w.field(tag::LONG_ARRAY, name);
+    w.long_array_payload(data);
     w.into_bytes()
 }

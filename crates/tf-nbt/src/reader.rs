@@ -2,6 +2,7 @@
 //! aucune allocation tant que l'appelant n'en demande pas.
 
 use crate::tag;
+use crate::tag::END;
 
 /// Entrée tronquée, malformée, ou type de tag inconnu.
 ///
@@ -287,5 +288,34 @@ impl<'a> Cur<'a> {
             out.push(self.u64()?);
         }
         Ok(out)
+    }
+}
+
+impl<'a> Cur<'a> {
+    /// Longueur d'un tableau (`TAG_*_Array`), le curseur étant sur sa charge.
+    /// Laisse le curseur juste après le compteur.
+    pub fn array_len(&mut self) -> R<usize> {
+        let n = self.count()?;
+        // La place est vérifiée par l'appelant qui saute ensuite : on la
+        // contrôle quand même ici pour qu'une longueur forgée ne se propage
+        // pas en multiplication.
+        if n > self.buf.len() {
+            return Err(Trunc);
+        }
+        Ok(n)
+    }
+
+    /// Saute le CORPS d'une liste dont l'en-tête vient d'être lu.
+    pub fn skip_list_body(&mut self, element: TagId, n: usize) -> R<()> {
+        if element == END {
+            return Ok(());
+        }
+        if let Some(sz) = crate::tag::fixed_size(element) {
+            return self.skip(n.checked_mul(sz).ok_or(Trunc)?);
+        }
+        for _ in 0..n {
+            self.skip_payload(element)?;
+        }
+        Ok(())
     }
 }

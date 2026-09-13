@@ -20,7 +20,7 @@ use common::frozen;
 
 use std::borrow::Cow;
 use tf_anvil::{
-    decode_section, deflate, encode_section, inflate, read, scan, splice, write, Edit, Interner,
+    decode_section, deflate, inflate, read, scan, section_edits, splice, write, Edit, Interner,
 };
 
 fn fichier_tiers() -> Option<Vec<u8>> {
@@ -98,7 +98,7 @@ fn un_replace_sur_un_mca_tiers_donne_le_bon_recensement() {
             let mut interner = Interner::new();
             let mut sections = Vec::new();
             for sc in &scanned.sections {
-                sections.push(decode_section(&inflated, sc, &mut interner).unwrap());
+                sections.push(decode_section(&inflated, &scanned, sc, &mut interner).unwrap());
             }
             let (Some(a), Some(b)) = (interner.get(de), interner.get(vers)) else {
                 continue;
@@ -108,10 +108,7 @@ fn un_replace_sur_un_mca_tiers_donne_le_bon_recensement() {
             for (sc, section) in scanned.sections.iter().zip(sections.iter_mut()) {
                 let Some(section) = section else { continue };
                 if section.replace_state(a, b) > 0 {
-                    edits.push(Edit {
-                        span: sc.states.unwrap(),
-                        bytes: encode_section(section, &interner).unwrap(),
-                    });
+                    edits.extend(section_edits(section, sc, &interner).unwrap());
                 }
             }
             if edits.is_empty() {
