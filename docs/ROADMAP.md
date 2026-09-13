@@ -15,11 +15,14 @@ zéro, `criterion` avec les scénarios de `we-engine` sous leurs noms actuels.
 > croisés contre deux implémentations indépendantes **et** contre un `.mca`
 > produit par le moteur JS.
 >
-> Les deux dispositions (1.13–1.17 et 1.18+), les deux packings, et les
-> chunks surdimensionnés `.mcc` sont couverts. **109 tests.**
+> **Atteinte.** Région pleine décodée en 88,8 ms monofil (48 ms avec `rayon`
+> dans le prototype), empreinte **0,27 o/bloc**. Les deux dispositions
+> (1.13–1.17 et 1.18+), les deux packings, et les chunks surdimensionnés
+> `.mcc` sont couverts. **113 tests**, harnais `criterion` en place avec une
+> fixture construite en Rust.
 >
-> Reste : le harnais `criterion`, pour que les chiffres viennent d'une mesure
-> continue et non du seul prototype.
+> Ce que la mesure désigne pour la suite : `inflate` pèse désormais **75 %** du
+> chargement, contre 6 % pour notre balayage NBT. Voir `docs/RESULTATS.md`.
 
 ## Phase 1 — Monde résident · 3–4 semaines
 

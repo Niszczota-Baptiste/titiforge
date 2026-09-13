@@ -55,7 +55,7 @@ Le chemin rapide n'est pas « itérer plus vite », c'est **ne pas itérer**.
 
 ## État — phase 0
 
-`tf-nbt` et `tf-anvil` sont écrits et testés : **109 tests**, lecture et
+`tf-nbt` et `tf-anvil` sont écrits et testés : **113 tests**, lecture et
 écriture, round-trip lossless, formats 1.13 → 1.21 et chunks déportés `.mcc`.
 
 Le round-trip ne repose pas sur une promesse mais sur une propriété
@@ -81,15 +81,18 @@ que le jeu ne réécrit un chunk que lorsqu'un joueur le visite. Le packing
 **longueur** du tableau — les deux ne coïncident qu'aux largeurs où elles
 produisent les mêmes octets.
 
-Reste en phase 0 : le harnais `criterion`, pour que les chiffres viennent
-d'une mesure continue et non du seul prototype.
+La phase 0 est close : `cargo bench -p tf-bench` mesure en continu, sur une
+fixture construite en Rust — plus besoin de Node ni d'une save réelle. Et la
+mesure désigne déjà la suite : `inflate` pèse **75 %** du chargement, contre
+6 % pour notre balayage NBT.
 
 Feuille de route complète : `docs/ROADMAP.md`.
 
 ## Rejouer les mesures
 
 ```bash
-cargo test            # les 109 tests
+cargo test            # les 113 tests
+cargo bench -p tf-bench   # les mesures
 cargo clippy --all-targets
 
 # ExeWorldEdit doit être cloné à côté, avec npm install fait

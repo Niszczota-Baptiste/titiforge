@@ -128,3 +128,92 @@ node proto/fixtures/bench-js-full.mjs
 # le prototype
 cd proto && cargo run --release -- ./r.0.1.mca
 ```
+
+---
+
+# Mesure continue — `criterion`
+
+Les chiffres ci-dessus viennent du prototype, mesuré une fois. À partir d'ici,
+c'est `cargo bench -p tf-bench` qui mesure, sur une fixture construite **en
+Rust** — plus besoin de Node ni d'une save réelle.
+
+```bash
+cargo bench -p tf-bench                        # mesurer
+cargo bench -p tf-bench -- --save-baseline v0  # figer la référence
+cargo bench -p tf-bench -- --baseline v0       # comparer
+```
+
+Deux règles héritées du bench de `we-engine` : un écart ne compte **qu'au-delà
+de 25 %** (mesuré là-bas : 18 % de dérive à code identique), et ce qui est
+exploitable ici, ce sont les **rapports entre scénarios**, pas les valeurs
+absolues — c'est un conteneur partagé.
+
+Première exécution, région pleine (24 576 sections, 100 663 296 blocs),
+**monofil** :
+
+## Chargement
+
+| Scénario | Temps | Part |
+|---|---:|---:|
+| `1_inflate_seul` | **66,6 ms** | **75 %** |
+| `2_scan_seul` | 5,5 ms | 6 % |
+| `3_region_complete` | 88,8 ms | 100 % |
+
+## Opérations
+
+| Scénario | Temps | Rapport |
+|---|---:|---:|
+| `replace_par_palette` | **349 µs** | — |
+| `replace_par_bloc` | 33,1 ms | **× 95** |
+| `set_uniforme` | 501 µs | — |
+| `compact_palette` | 103,8 ms | — |
+
+## Packing
+
+| Scénario | Temps (4 096 indices) |
+|---|---:|
+| `unpack_sans_chevauchement` | 2,45 µs |
+| `unpack_avec_chevauchement` | 3,95 µs |
+| `pack_sans_chevauchement` | 6,81 µs |
+| `pack_avec_chevauchement` | 4,61 µs |
+
+## Écriture
+
+| Scénario | Temps |
+|---|---:|
+| `region_intacte` (rien n'a changé) | 1,66 ms |
+| `splice_et_recompression` (un chunk) | 1,10 ms |
+
+## Empreinte
+
+```
+fichier                     8,01 Mio
+sections                   24 576
+blocs                  100 663 296
+états distincts                22
+structure packée            26,0 Mio   = 0,27 o/bloc
+RSS du processus            39,2 Mio
+(we-engine, région équivalente : 633 Mio, 6,59 o/bloc)
+```
+
+## Ce que la mesure désigne
+
+**Le goulot a changé de place, et ce n'est plus notre code.** `inflate` pèse
+désormais **75 %** du chargement — 66,6 ms sur 88,8. Notre balayage NBT ciblé,
+lui, fait 5,5 ms, soit 6 %. Pour mémoire, dans `we-engine` le parseur NBT
+pesait 35 % et l'inflate 9 % : la proportion s'est inversée parce que le
+parseur a été supprimé, pas parce que la décompression a ralenti.
+
+Deux pistes, dans cet ordre :
+
+1. **Le backend de décompression.** `flate2` utilise `miniz_oxide`, en Rust
+   pur. `zlib-ng` est couramment 2 à 3 fois plus rapide sur ce profil. Ça ne
+   demande qu'un drapeau de fonctionnalité — mais ça se **mesure** avant de
+   s'annoncer.
+2. **Le parallélisme.** Ces chiffres sont monofil. Le prototype, avec `rayon`
+   sur 4 cœurs, décodait la même région en 48 ms contre 88,8 ici — cohérent, et
+   la décompression est parfaitement parallélisable par chunk.
+
+`compact_palette` à 103 ms est cher, et c'est assumé : il ne tourne qu'à
+l'écriture, jamais dans une boucle chaude. Si un profil le montrait ailleurs,
+ce serait un bug d'appelant.

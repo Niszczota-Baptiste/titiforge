@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tf-nbt", "crates/tf-anvil", "proto"]
+members = ["crates/tf-nbt", "crates/tf-anvil", "crates/tf-bench", "proto"]
 
 [workspace.package]
 edition = "2021"

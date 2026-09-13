@@ -1,0 +1,19 @@
+[package]
+name = "tf-bench"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Fixtures et mesures de performance du moteur"
+
+[dependencies]
+tf-anvil.workspace = true
+tf-nbt.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "anvil"
+harness = false

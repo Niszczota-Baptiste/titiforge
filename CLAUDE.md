@@ -87,7 +87,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (109 tests aujourd'hui)
+cargo test            # tous les crates (113 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -95,9 +95,17 @@ cargo fmt
 node proto/fixtures/gen.mjs
 TF_MCA_TIERS=./r.0.1.mca cargo test -p tf-anvil --test croisement -- --nocapture
 
-# le prototype de mesure
+# mesure continue — fixture construite en Rust, aucune dépendance extérieure
+cargo bench -p tf-bench
+cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
+cargo bench -p tf-bench -- --baseline v0        # comparer
+
+# le prototype de mesure (gelé, cité dans docs/RESULTATS.md)
 cargo run --release -p tf-proto -- ./r.0.1.mca
 ```
+
+Un écart ne compte **qu'au-delà de 25 %**, sur une médiane : mesuré dans
+`we-engine`, un scénario a bougé de 18 % à code identique.
 
 Le profil de test active `overflow-checks` : tout ce dépôt est de
 l'arithmétique d'indices, et un débordement silencieux y produit une corruption
@@ -117,7 +125,7 @@ crates/
   tf-mesh/     greedy + AO, cuisson des modèles, mips de LOD
   tf-render/   wgpu : arène, multi-draw indirect, HZB, transparence
   tf-app/      coque winit + egui, outils, commandes
-  tf-bench/    criterion + générateurs de fixtures
+  tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
 
 `proto/` est le prototype de performance. Il ne fait pas partie du produit :
