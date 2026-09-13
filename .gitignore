@@ -1,6 +1,10 @@
 target/
 *.mca
+*.mcc
 node_modules/
+
+# Les rapports de criterion : régénérables, et volumineux.
+criterion/
 
 # Dans un workspace, seul le Cargo.lock de la RACINE fait foi. Un lock dans un
 # membre ne verrouille rien et laisse croire le contraire.
