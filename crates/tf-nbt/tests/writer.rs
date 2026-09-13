@@ -8,15 +8,21 @@
 
 use tf_nbt::{block_states_payload, tag, Cur, PaletteEntryRef, Writer};
 
+/// Une palette relue : le nom, et ses propriétés triées.
+type PaletteRelue = Vec<(String, Vec<(String, String)>)>;
+
 fn props(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 /// Relit une charge de `block_states` et rend `(palette, data)` sous une forme
 /// comparable : le nom, les propriétés triées, et les longs.
-fn relire(payload: &[u8]) -> (Vec<(String, Vec<(String, String)>)>, Vec<u64>) {
+fn relire(payload: &[u8]) -> (PaletteRelue, Vec<u64>) {
     let mut c = Cur::new(payload);
-    let mut palette = Vec::new();
+    let mut palette: PaletteRelue = Vec::new();
     let mut data = Vec::new();
     while let Some((t, key)) = c.next_field().unwrap() {
         match (t, key) {
@@ -53,12 +59,20 @@ fn relire(payload: &[u8]) -> (Vec<(String, Vec<(String, String)>)>, Vec<u64>) {
 fn round_trip_d_une_palette_simple() {
     let names = ["minecraft:air", "minecraft:stone", "minecraft:dirt"];
     let vide: Vec<(String, String)> = Vec::new();
-    let pal: Vec<PaletteEntryRef> =
-        names.iter().map(|n| PaletteEntryRef { name: n, props: &vide }).collect();
+    let pal: Vec<PaletteEntryRef> = names
+        .iter()
+        .map(|n| PaletteEntryRef {
+            name: n,
+            props: &vide,
+        })
+        .collect();
     let data = vec![0x0123_4567_89AB_CDEF, 42, u64::MAX];
 
     let (relu_pal, relu_data) = relire(&block_states_payload(&pal, &data));
-    assert_eq!(relu_pal.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), names);
+    assert_eq!(
+        relu_pal.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+        names
+    );
     assert!(relu_pal.iter().all(|(_, p)| p.is_empty()));
     assert_eq!(relu_data, data);
 }
@@ -69,9 +83,18 @@ fn round_trip_avec_proprietes() {
     let p1 = props(&[("axis", "y")]);
     let vide: Vec<(String, String)> = Vec::new();
     let pal = vec![
-        PaletteEntryRef { name: "minecraft:air", props: &vide },
-        PaletteEntryRef { name: "minecraft:oak_stairs", props: &p0 },
-        PaletteEntryRef { name: "minecraft:oak_log", props: &p1 },
+        PaletteEntryRef {
+            name: "minecraft:air",
+            props: &vide,
+        },
+        PaletteEntryRef {
+            name: "minecraft:oak_stairs",
+            props: &p0,
+        },
+        PaletteEntryRef {
+            name: "minecraft:oak_log",
+            props: &p1,
+        },
     ];
     let (relu, _) = relire(&block_states_payload(&pal, &[1, 2]));
     assert_eq!(relu[0], ("minecraft:air".into(), vec![]));
@@ -85,11 +108,17 @@ fn une_palette_d_une_entree_n_ecrit_pas_de_data() {
     // tableau d'indices tous nuls serait valide, mais ferait diverger nos
     // octets des siens et grossir le fichier sans raison.
     let vide: Vec<(String, String)> = Vec::new();
-    let pal = vec![PaletteEntryRef { name: "minecraft:stone", props: &vide }];
+    let pal = vec![PaletteEntryRef {
+        name: "minecraft:stone",
+        props: &vide,
+    }];
     let payload = block_states_payload(&pal, &[7, 7, 7]);
     let (relu, data) = relire(&payload);
     assert_eq!(relu.len(), 1);
-    assert!(data.is_empty(), "`data` ne doit pas être écrit pour une palette de 1");
+    assert!(
+        data.is_empty(),
+        "`data` ne doit pas être écrit pour une palette de 1"
+    );
 
     // Et le tampon ne contient littéralement pas le champ.
     assert!(!payload.windows(4).any(|w| w == b"data"));
@@ -99,8 +128,14 @@ fn une_palette_d_une_entree_n_ecrit_pas_de_data() {
 fn une_palette_multiple_sans_data_n_ecrit_pas_de_data_non_plus() {
     let vide: Vec<(String, String)> = Vec::new();
     let pal = vec![
-        PaletteEntryRef { name: "minecraft:air", props: &vide },
-        PaletteEntryRef { name: "minecraft:stone", props: &vide },
+        PaletteEntryRef {
+            name: "minecraft:air",
+            props: &vide,
+        },
+        PaletteEntryRef {
+            name: "minecraft:stone",
+            props: &vide,
+        },
     ];
     let (_, data) = relire(&block_states_payload(&pal, &[]));
     assert!(data.is_empty());
@@ -112,8 +147,20 @@ fn des_proprietes_vides_ne_produisent_pas_de_compound_properties() {
     // décrit de deux façons occuperait deux entrées de palette — le piège
     // `grass_block[snowy=false]` de we-engine, sous une autre forme.
     let vide: Vec<(String, String)> = Vec::new();
-    let a = block_states_payload(&[PaletteEntryRef { name: "minecraft:stone", props: &vide }], &[]);
-    let b = block_states_payload(&[PaletteEntryRef { name: "minecraft:stone", props: &[] }], &[]);
+    let a = block_states_payload(
+        &[PaletteEntryRef {
+            name: "minecraft:stone",
+            props: &vide,
+        }],
+        &[],
+    );
+    let b = block_states_payload(
+        &[PaletteEntryRef {
+            name: "minecraft:stone",
+            props: &[],
+        }],
+        &[],
+    );
     assert_eq!(a, b);
     assert!(!a.windows(10).any(|w| w == b"Properties"));
 }
@@ -127,7 +174,13 @@ fn l_ordre_des_proprietes_ne_change_pas_les_octets() {
     let p1 = props(&[("a", "1"), ("b", "2"), ("c", "3")]);
     let p2 = props(&[("c", "3"), ("a", "1"), ("b", "2")]);
     let f = |p: &Vec<(String, String)>| {
-        block_states_payload(&[PaletteEntryRef { name: "x:y", props: p }], &[])
+        block_states_payload(
+            &[PaletteEntryRef {
+                name: "x:y",
+                props: p,
+            }],
+            &[],
+        )
     };
     assert_eq!(f(&p1), f(&p2));
 }
@@ -162,8 +215,13 @@ fn une_chaine_trop_longue_refuse_plutot_que_de_tronquer() {
 #[test]
 fn la_charge_produite_se_termine_par_le_end_du_compound() {
     let vide: Vec<(String, String)> = Vec::new();
-    let payload =
-        block_states_payload(&[PaletteEntryRef { name: "minecraft:stone", props: &vide }], &[]);
+    let payload = block_states_payload(
+        &[PaletteEntryRef {
+            name: "minecraft:stone",
+            props: &vide,
+        }],
+        &[],
+    );
     assert_eq!(*payload.last().unwrap(), tag::END);
 
     // Et le lecteur la traverse jusqu'au bout sans rien laisser derrière.
@@ -179,11 +237,18 @@ fn round_trip_sur_une_palette_de_quatre_mille_entrees() {
     // La borne réelle du format : 4096 entrées, soit 12 bits par indice.
     let noms: Vec<String> = (0..4096).map(|i| format!("modtest:bloc_{i}")).collect();
     let vide: Vec<(String, String)> = Vec::new();
-    let pal: Vec<PaletteEntryRef> =
-        noms.iter().map(|n| PaletteEntryRef { name: n, props: &vide }).collect();
+    let pal: Vec<PaletteEntryRef> = noms
+        .iter()
+        .map(|n| PaletteEntryRef {
+            name: n,
+            props: &vide,
+        })
+        .collect();
     // `wrapping_mul` est délibéré : on veut des motifs de bits variés, et le
     // débordement est vérifié dans le profil de test — un `*` nu échouerait.
-    let data: Vec<u64> = (0..820).map(|i| (i as u64).wrapping_mul(0x0101_0101_0101_0101)).collect();
+    let data: Vec<u64> = (0..820)
+        .map(|i| (i as u64).wrapping_mul(0x0101_0101_0101_0101))
+        .collect();
 
     let (relu_pal, relu_data) = relire(&block_states_payload(&pal, &data));
     assert_eq!(relu_pal.len(), 4096);

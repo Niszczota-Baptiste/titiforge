@@ -165,7 +165,13 @@ fn span_of_payload_delimite_exactement_la_charge() {
 
     let mut c = Cur::at(&buf, start);
     let span = c.span_of_payload(tag::STRING).unwrap();
-    assert_eq!(span, Span { start, end: start + payload.len() });
+    assert_eq!(
+        span,
+        Span {
+            start,
+            end: start + payload.len()
+        }
+    );
     assert_eq!(span.slice(&buf), &payload[..]);
     assert_eq!(span.len(), 5);
 }
@@ -183,8 +189,17 @@ fn list_header_rend_type_et_longueur() {
 #[test]
 fn une_charge_tronquee_rend_une_erreur_pour_chaque_type() {
     for t in [
-        tag::BYTE, tag::SHORT, tag::INT, tag::LONG, tag::FLOAT, tag::DOUBLE,
-        tag::BYTE_ARRAY, tag::STRING, tag::LIST, tag::COMPOUND, tag::INT_ARRAY,
+        tag::BYTE,
+        tag::SHORT,
+        tag::INT,
+        tag::LONG,
+        tag::FLOAT,
+        tag::DOUBLE,
+        tag::BYTE_ARRAY,
+        tag::STRING,
+        tag::LIST,
+        tag::COMPOUND,
+        tag::INT_ARRAY,
         tag::LONG_ARRAY,
     ] {
         let buf: [u8; 0] = [];

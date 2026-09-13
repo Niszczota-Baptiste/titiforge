@@ -53,20 +53,46 @@ opérations WorldEdit s'expriment sur la palette seule.
 
 Le chemin rapide n'est pas « itérer plus vite », c'est **ne pas itérer**.
 
-## État
+## État — phase 0
 
-Phase 0 en cours. Le prototype **ne sait que lire** : l'écriture et le
-round-trip lossless sont le premier chantier.
+`tf-nbt` et `tf-anvil` sont écrits et testés : **85 tests**, lecture et
+écriture, round-trip lossless.
+
+Le round-trip ne repose pas sur une promesse mais sur une propriété
+structurelle. Un chunk non modifié garde sa charge compressée brute, donc il
+ressort octet pour octet. Un chunk **modifié** n'est pas ré-encodé non plus :
+on note la plage d'octets de chaque `block_states` et on remplace uniquement
+celles qu'on a touchées. Heightmaps, structures, `neoforge:attachments` — le
+lecteur n'y touche pas, donc il ne peut pas les abîmer.
+
+Les tests bouclent la chaîne entre deux implémentations **indépendantes** :
+un producteur qui écrit ses octets à la main depuis la spec, et un décodeur
+gelé qui reconstruit un arbre NBT complet. Ni l'un ni l'autre ne partage une
+ligne avec `src/` — sinon le test dirait seulement « le code est d'accord avec
+lui-même ». Un troisième croisement vise un `.mca` produit par le moteur JS
+d'`ExeWorldEdit`, donc par un autre langage et une autre bibliothèque NBT :
+sur la région de 100 millions de blocs, les deux moteurs comptent
+**15 217 813** blocs remplacés, au bloc près.
+
+Reste en phase 0 : `ChunkFormat` par `DataVersion` et les chunks
+surdimensionnés (`.mcc`), aujourd'hui refusés explicitement plutôt qu'écrits
+de travers.
 
 Feuille de route complète : `docs/ROADMAP.md`.
 
 ## Rejouer les mesures
 
 ```bash
+cargo test            # les 85 tests
+cargo clippy --all-targets
+
 # ExeWorldEdit doit être cloné à côté, avec npm install fait
 node proto/fixtures/gen.mjs             # fabrique la région de référence
 node proto/fixtures/bench-js-full.mjs   # la référence JS
-cd proto && cargo run --release -- ./r.0.1.mca
+cargo run --release -p tf-proto -- ./r.0.1.mca
+
+# et le croisement avec ce producteur tiers
+TF_MCA_TIERS=./r.0.1.mca cargo test -p tf-anvil --test croisement -- --nocapture
 ```
 
 Aucune fixture binaire n'est commitée : la région se reconstruit depuis sa

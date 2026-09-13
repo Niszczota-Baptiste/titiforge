@@ -84,12 +84,32 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
   code identique.
 - Messages de commit en **français**.
 
+## Commandes
+
+```bash
+cargo test            # tous les crates (85 tests aujourd'hui)
+cargo clippy --all-targets
+cargo fmt
+
+# croisement avec un producteur TIERS (le moteur JS d'ExeWorldEdit) :
+node proto/fixtures/gen.mjs
+TF_MCA_TIERS=./r.0.1.mca cargo test -p tf-anvil --test croisement -- --nocapture
+
+# le prototype de mesure
+cargo run --release -p tf-proto -- ./r.0.1.mca
+```
+
+Le profil de test active `overflow-checks` : tout ce dépôt est de
+l'arithmétique d'indices, et un débordement silencieux y produit une corruption
+de save, pas un plantage.
+
 ## Structure visée
 
 ```
 crates/
-  tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain, SNBT
-  tf-anvil/    .mca mmap, en-tête, ChunkFormat par DataVersion
+  tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
+  tf-anvil/    .mca lecture/écriture, splice lossless  ✅ phase 0
+               (reste : ChunkFormat par DataVersion, .mcc)
   tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
   tf-world/    résidence LRU par octets, streaming, staging, undo par section
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
@@ -134,6 +154,22 @@ propres à ce dépôt.
 - **Un fil par chunk ne gagne rien — en JS.** La note d'`ExeWorldEdit` est
   exacte, mais sa cause est le `structuredClone` de l'arbre NBT, pas le calcul.
   En mémoire partagée la section redevient l'unité de travail naturelle.
+- **Ré-encoder un chunk pour changer trois blocs détruit ce qu'on n'a pas
+  compris.** `we-engine` garde la charge compressée d'un chunk NON modifié, donc
+  son round-trip est lossless — mais dès qu'un chunk est modifié, il ré-émet
+  tout son arbre NBT, et tout ce que `prismarine-nbt` a mal interprété est
+  perdu. Ici un chunk modifié n'est pas ré-encodé : on note la PLAGE d'octets de
+  chaque `block_states` (`tf_nbt::Span`) et on remplace uniquement celles qu'on
+  a touchées. Heightmaps, structures, `neoforge:attachments` : le lecteur n'y
+  touche pas, **donc il ne peut pas les abîmer**. Un test le prouve sur 256
+  octets de données de mod et une chaîne en hangeul.
+- **Une longueur NBT est un `i32` SIGNÉ.** La convertir en `usize` sans la
+  borner transforme `-1` en 18 exaoctets, et la réservation tue le processus.
+  Même chose dans l'autre sens : `i32::MAX` longs annoncés dans un fichier de
+  quatre octets. On vérifie la place AVANT de réserver, jamais après.
+- **Un débordement de pile n'est pas rattrapable en Rust.** Un `.mca` forgé
+  avec 100 000 compounds imbriqués fait récurser le lecteur jusqu'à la mort du
+  processus, sans message. D'où un plafond de profondeur explicite.
 - **Une optimisation non vérifiée est une corruption silencieuse.** Ici elle
   tombe sur la sauvegarde d'un utilisateur. Toute stratégie rapide se compare
   au résultat de la stratégie lente sur le même monde, et le compte doit être

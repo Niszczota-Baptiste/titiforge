@@ -41,7 +41,11 @@ impl<'a> Cur<'a> {
 
     #[inline]
     fn need(&self, n: usize) -> R<()> {
-        if self.p + n <= self.b.len() { Ok(()) } else { Err(Trunc) }
+        if self.p + n <= self.b.len() {
+            Ok(())
+        } else {
+            Err(Trunc)
+        }
     }
 
     #[inline]

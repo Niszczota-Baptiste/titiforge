@@ -1,1 +1,30 @@
-pub fn placeholder() {}
+//! Lecture et écriture de régions Anvil, sans perte.
+//!
+//! Deux invariants tiennent tout le crate :
+//!
+//! 1. **Un chunk non modifié ressort octet pour octet.** On garde sa charge
+//!    compressée brute ; `RawChunk::is_pristine` dit si c'est encore le cas.
+//! 2. **Un chunk modifié n'est pas ré-encodé, il est splicé.** Seuls les
+//!    octets des `block_states` qu'on a touchés sont remplacés. Ce que le
+//!    lecteur ne comprend pas — Heightmaps, structures, données de mods — ne
+//!    peut pas être abîmé, structurellement.
+
+#![forbid(unsafe_code)]
+
+pub mod chunk;
+pub mod codec;
+pub mod region;
+pub mod section;
+pub mod state;
+
+pub use chunk::{
+    decode_section, encode_section, scan, splice, ChunkScan, Edit, ScannedSection, SpliceError,
+};
+pub use codec::{deflate, inflate, CodecError};
+pub use region::{
+    chunk_of_block, floor_div, read, region_coords_from_name, region_file_name, region_of_chunk,
+    write, Compression, RawChunk, ReadError, Region, WriteError, CHUNKS, HEADER, MAX_SECTORS,
+    SECTOR,
+};
+pub use section::{bits_for, local_index, Section, MAX_PALETTE, VOL};
+pub use state::{split_key, state_key, Interner, StateId};

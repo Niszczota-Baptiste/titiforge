@@ -9,9 +9,15 @@ Workspace Cargo, `tf-nbt` (lecteur zéro-copie), `tf-anvil` en lecture **et
 écriture**, round-trip lossless vérifié par un décodeur indépendant réécrit de
 zéro, `criterion` avec les scénarios de `we-engine` sous leurs noms actuels.
 
-> **Sortie — partiellement atteinte.** Le prototype décode déjà une région
-> pleine hauteur en **48 ms** / **54,6 Mo** (cible : < 150 ms). Reste :
-> l'écriture et le round-trip lossless, que le prototype ne couvre pas.
+> **Sortie — l'essentiel est atteint.** Le prototype décode une région pleine
+> hauteur en **48 ms** / **54,6 Mo** (cible : < 150 ms). `tf-nbt` et `tf-anvil`
+> font la lecture, l'écriture et le round-trip lossless, sous **85 tests**,
+> croisés contre deux implémentations indépendantes **et** contre un `.mca`
+> produit par le moteur JS.
+>
+> Reste : `ChunkFormat` par `DataVersion` (le crate ne lit aujourd'hui que la
+> forme 1.18+) et les chunks surdimensionnés `.mcc`, actuellement refusés
+> explicitement plutôt qu'écrits de travers.
 
 ## Phase 1 — Monde résident · 3–4 semaines
 

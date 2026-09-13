@@ -9,3 +9,6 @@ description = "Lecture et écriture de régions Anvil (.mca), round-trip lossles
 [dependencies]
 tf-nbt.workspace = true
 flate2.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true

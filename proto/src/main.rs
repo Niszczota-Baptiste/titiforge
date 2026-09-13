@@ -13,6 +13,13 @@
 //! we-engine : même octets pour les deux moteurs, sinon la comparaison ne vaut
 //! rien.
 
+// Ce binaire est un ARTEFACT DE MESURE : ses chiffres sont cités dans
+// docs/RESULTATS.md, donc son code est gelé. On fait taire les conseils de
+// style plutôt que de le retoucher — une réécriture, même cosmétique, ferait
+// perdre la comparabilité avec les mesures publiées. Le code de production
+// vit dans crates/, et lui n'a aucune dérogation.
+#![allow(clippy::manual_contains, clippy::ptr_arg, dead_code)]
+
 mod nbt;
 mod section;
 
@@ -117,7 +124,12 @@ fn parse_section(c: &mut Cur) -> R<Option<RawSection>> {
         return Ok(None); // section vide : elle n'occupe RIEN
     }
     let bits = bits_for(palette.len());
-    Ok(Some(RawSection { y, palette, bits, data }))
+    Ok(Some(RawSection {
+        y,
+        palette,
+        bits,
+        data,
+    }))
 }
 
 fn parse_block_states(c: &mut Cur, palette: &mut Vec<String>, data: &mut Box<[u64]>) -> R<()> {
@@ -186,16 +198,26 @@ fn parse_palette_entry(c: &mut Cur) -> R<String> {
 
 fn rss_mb() -> f64 {
     let s = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-    let pages: f64 = s.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let pages: f64 = s
+        .split_whitespace()
+        .nth(1)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
     pages * 4096.0 / 1_048_576.0
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: tf-proto <r.X.Z.mca>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: tf-proto <r.X.Z.mca>");
     let file = std::fs::File::open(&path).expect("ouverture");
     let map = unsafe { memmap2::Mmap::map(&file) }.expect("mmap");
     let buf: &[u8] = &map;
-    println!("fichier   {}  ({:.2} Mio, mmapé)", path, buf.len() as f64 / 1_048_576.0);
+    println!(
+        "fichier   {}  ({:.2} Mio, mmapé)",
+        path,
+        buf.len() as f64 / 1_048_576.0
+    );
     println!("machine   {} cœurs\n", rayon::current_num_threads());
 
     // ── en-tête : 1024 entrées de localisation, aucune allocation ──────────
@@ -222,13 +244,17 @@ fn main() {
                 1 => {
                     let mut d = Vec::new();
                     use std::io::Read;
-                    flate2::read::GzDecoder::new(payload).read_to_end(&mut d).ok()?;
+                    flate2::read::GzDecoder::new(payload)
+                        .read_to_end(&mut d)
+                        .ok()?;
                     d
                 }
                 2 => {
                     let mut d = Vec::new();
                     use std::io::Read;
-                    flate2::read::ZlibDecoder::new(payload).read_to_end(&mut d).ok()?;
+                    flate2::read::ZlibDecoder::new(payload)
+                        .read_to_end(&mut d)
+                        .ok()?;
                     d
                 }
                 _ => payload.to_vec(),
@@ -258,9 +284,16 @@ fn main() {
                 .collect();
             let yi = (r.y as i32) + 4;
             if (0..24).contains(&yi) {
-                world[(yi as usize) * 1024 + (cz as usize) * 32 + (cx as usize)] = sections.len() as i32;
+                world[(yi as usize) * 1024 + (cz as usize) * 32 + (cx as usize)] =
+                    sections.len() as i32;
             }
-            sections.push(Section { y: r.y, palette: pal, bits: r.bits, data: r.data, unpacked: None });
+            sections.push(Section {
+                y: r.y,
+                palette: pal,
+                bits: r.bits,
+                data: r.data,
+                unpacked: None,
+            });
         }
     }
     let intern_ms = t1.elapsed().as_secs_f64() * 1000.0;
@@ -270,11 +303,20 @@ fn main() {
     println!("── 1 · décodage ──────────────────────────────────────────────");
     println!("  NBT ciblé + inflate (rayon)   {:>8.0} ms", decode_ms);
     println!("  interning des palettes        {:>8.0} ms", intern_ms);
-    println!("  TOTAL                         {:>8.0} ms   ({} sections, {} blocs)", decode_ms + intern_ms, sections.len(), blocks);
+    println!(
+        "  TOTAL                         {:>8.0} ms   ({} sections, {} blocs)",
+        decode_ms + intern_ms,
+        sections.len(),
+        blocks
+    );
     println!("  états distincts dans la région        {}", names.len());
     println!();
     println!("── 2 · empreinte ─────────────────────────────────────────────");
-    println!("  structure packée              {:>8.1} Mo   = {:.2} o/bloc", packed as f64 / 1_048_576.0, packed as f64 / blocks as f64);
+    println!(
+        "  structure packée              {:>8.1} Mo   = {:.2} o/bloc",
+        packed as f64 / 1_048_576.0,
+        packed as f64 / blocks as f64
+    );
     println!("  RSS du processus              {:>8.1} Mo", rss_mb());
     println!();
 
@@ -297,12 +339,16 @@ fn main() {
         for y in -64i32..320 {
             for z in 0i32..512 {
                 for x in 0i32..512 {
-                    let si = world[(((y >> 4) + 4) as usize) * 1024 + ((z >> 4) as usize) * 32 + ((x >> 4) as usize)];
+                    let si = world[(((y >> 4) + 4) as usize) * 1024
+                        + ((z >> 4) as usize) * 32
+                        + ((x >> 4) as usize)];
                     if si < 0 {
                         continue;
                     }
                     let s = &mut secs[si as usize];
-                    let li = (((y & 15) as usize) << 8) | (((z & 15) as usize) << 4) | ((x & 15) as usize);
+                    let li = (((y & 15) as usize) << 8)
+                        | (((z & 15) as usize) << 4)
+                        | ((x & 15) as usize);
                     let u = s.unpacked.as_mut().unwrap();
                     if s.palette[u[li] as usize] != stone {
                         continue;
@@ -320,7 +366,10 @@ fn main() {
             }
         }
         let ms = t.elapsed().as_secs_f64() * 1000.0;
-        println!("  (a) par bloc, coords monde, 1 fil   {:>8.1} ms   {} blocs", ms, changed);
+        println!(
+            "  (a) par bloc, coords monde, 1 fil   {:>8.1} ms   {} blocs",
+            ms, changed
+        );
     }
 
     // (b) PAR SECTION, en parallèle : on ne visite plus les sections absentes
@@ -355,7 +404,10 @@ fn main() {
             })
             .sum();
         let ms = t.elapsed().as_secs_f64() * 1000.0;
-        println!("  (b) par bloc, par section, rayon    {:>8.1} ms   {} blocs", ms, changed);
+        println!(
+            "  (b) par bloc, par section, rayon    {:>8.1} ms   {} blocs",
+            ms, changed
+        );
     }
 
     // (c) PAR PALETTE, cible DÉJÀ PRÉSENTE dans la palette. Sur du vrai
@@ -381,7 +433,10 @@ fn main() {
             slow = sl;
             t.elapsed().as_secs_f64() * 1000.0
         });
-        println!("  (c) par palette — cible PRÉSENTE   {:>8.1} ms   {} sections rapides, {} remappées", ms, fast, slow);
+        println!(
+            "  (c) par palette — cible PRÉSENTE   {:>8.1} ms   {} sections rapides, {} remappées",
+            ms, fast, slow
+        );
     }
 
     // (d) PAR PALETTE, cible ABSENTE de la palette — le cas où l'étage donne
@@ -408,7 +463,10 @@ fn main() {
             slow = sl;
             t.elapsed().as_secs_f64() * 1000.0
         });
-        println!("  (d) par palette — cible ABSENTE    {:>8.1} ms   {} sections rapides, {} remappées", ms, fast, slow);
+        println!(
+            "  (d) par palette — cible ABSENTE    {:>8.1} ms   {} sections rapides, {} remappées",
+            ms, fast, slow
+        );
     }
 
     // (f) PAR PALETTE SANS DÉDOUBLONNAGE — l'hypothèse à vérifier : si on
@@ -425,7 +483,10 @@ fn main() {
                 .sum();
             t.elapsed().as_secs_f64() * 1000.0
         });
-        println!("  (f) par palette SANS dédoublonnage {:>8.2} ms   {} sections", ms, touched);
+        println!(
+            "  (f) par palette SANS dédoublonnage {:>8.2} ms   {} sections",
+            ms, touched
+        );
     }
 
     // ── vérification : les quatre stratégies doivent produire le MÊME monde.
@@ -492,7 +553,11 @@ fn main() {
             secs.par_iter_mut().for_each(|s| s.set_uniform(stone));
             t.elapsed().as_secs_f64() * 1000.0
         });
-        println!("  (e) par section, rayon             {:>8.2} ms   {} sections", ms, sections.len());
+        println!(
+            "  (e) par section, rayon             {:>8.2} ms   {} sections",
+            ms,
+            sections.len()
+        );
     }
 }
 

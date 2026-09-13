@@ -1,3 +1,8 @@
 target/
 *.mca
 node_modules/
+
+# Dans un workspace, seul le Cargo.lock de la RACINE fait foi. Un lock dans un
+# membre ne verrouille rien et laisse croire le contraire.
+proto/Cargo.lock
+crates/*/Cargo.lock

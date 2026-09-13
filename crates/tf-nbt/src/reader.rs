@@ -51,7 +51,11 @@ const MAX_DEPTH: u16 = 512;
 
 impl<'a> Cur<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Cur { buf, pos: 0, depth: 0 }
+        Cur {
+            buf,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     pub fn at(buf: &'a [u8], pos: usize) -> Self {
@@ -256,7 +260,10 @@ impl<'a> Cur<'a> {
     pub fn span_of_payload(&mut self, t: TagId) -> R<Span> {
         let start = self.pos;
         self.skip_payload(t)?;
-        Ok(Span { start, end: self.pos })
+        Ok(Span {
+            start,
+            end: self.pos,
+        })
     }
 
     /// En-tête de liste : type d'élément et longueur.
