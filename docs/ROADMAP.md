@@ -15,9 +15,11 @@ zéro, `criterion` avec les scénarios de `we-engine` sous leurs noms actuels.
 > croisés contre deux implémentations indépendantes **et** contre un `.mca`
 > produit par le moteur JS.
 >
-> Reste : `ChunkFormat` par `DataVersion` (le crate ne lit aujourd'hui que la
-> forme 1.18+) et les chunks surdimensionnés `.mcc`, actuellement refusés
-> explicitement plutôt qu'écrits de travers.
+> Les deux dispositions (1.13–1.17 et 1.18+), les deux packings, et les
+> chunks surdimensionnés `.mcc` sont couverts. **109 tests.**
+>
+> Reste : le harnais `criterion`, pour que les chiffres viennent d'une mesure
+> continue et non du seul prototype.
 
 ## Phase 1 — Monde résident · 3–4 semaines
 

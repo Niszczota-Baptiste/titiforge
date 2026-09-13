@@ -10,7 +10,7 @@ use common::fixture::{self, SectionSpec};
 use tf_anvil::{
     chunk_of_block, deflate, floor_div, inflate, read, region_coords_from_name, region_file_name,
     region_of_chunk, scan, splice, write, CodecError, Compression, Edit, ReadError, SpliceError,
-    WriteError, CHUNKS, HEADER, MAX_SECTORS, SECTOR,
+    CHUNKS, HEADER, SECTOR,
 };
 use tf_nbt::Span;
 
@@ -190,31 +190,6 @@ fn une_longueur_de_chunk_incoherente_est_sautee() {
 }
 
 #[test]
-fn un_chunk_trop_gros_est_refuse_explicitement() {
-    // Au-delà de 255 secteurs, Minecraft range le chunk dans un `.mcc`
-    // externe. Écrire un en-tête tronqué le rendrait illisible pour le jeu ET
-    // pour nous : on refuse, en nommant le chunk.
-    let mut rng = fixture::Rng::new(23);
-    let secs = vec![SectionSpec::with_palette_size(0, 8, &mut rng)];
-    let src = fixture::region_file(&[(0, 0, fixture::chunk_nbt(0, 0, &secs))], 0);
-    let mut region = read(&src, 0, 0).unwrap();
-
-    // Une charge incompressible de 2 Mio : elle ne peut pas tenir en 255 secteurs.
-    let enorme: Vec<u8> = (0..2 * 1024 * 1024)
-        .map(|i| (i * 2654435761u64 % 251) as u8)
-        .collect();
-    region.get_mut(0, 0).unwrap().payload = std::borrow::Cow::Owned(enorme);
-
-    match write(&region) {
-        Err(WriteError::ChunkTooLarge { index, sectors }) => {
-            assert_eq!(index, 0);
-            assert!(sectors > MAX_SECTORS, "{sectors} secteurs");
-        }
-        other => panic!("attendu ChunkTooLarge, obtenu {other:?}"),
-    }
-}
-
-#[test]
 fn chaque_chunk_ecrit_commence_sur_une_frontiere_de_secteur() {
     let mut rng = fixture::Rng::new(24);
     let mut chunks = Vec::new();
@@ -223,7 +198,7 @@ fn chaque_chunk_ecrit_commence_sur_une_frontiere_de_secteur() {
         chunks.push((k, 0, fixture::chunk_nbt(k as i32, 0, &secs)));
     }
     let src = fixture::region_file(&chunks, 0);
-    let sortie = write(&read(&src, 0, 0).unwrap()).unwrap();
+    let sortie = write(&read(&src, 0, 0).unwrap()).unwrap().region;
 
     assert_eq!(
         sortie.len() % SECTOR,

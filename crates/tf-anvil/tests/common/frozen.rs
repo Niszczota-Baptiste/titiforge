@@ -205,6 +205,12 @@ pub fn decode_region(buf: &[u8]) -> BTreeMap<(u32, u32), FrozenChunk> {
         }
         let len = u32::from_be_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
         let comp = buf[off + 4];
+        // Bit 0x80 : la charge vit dans un `c.X.Z.mcc` à côté. Ce décodeur ne
+        // voit que le `.mca`, donc il ne peut rien en dire — il saute, plutôt
+        // que d'inflater un talon vide et de faire croire à un chunk cassé.
+        if comp & 0x80 != 0 {
+            continue;
+        }
         let payload = &buf[off + 5..off + 4 + len];
         let mut inflated = Vec::new();
         match comp {

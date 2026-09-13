@@ -205,7 +205,7 @@ fn un_chunk_ancien_se_relit_avec_les_memes_blocs() {
         let src = region_ancienne(straddle);
         let avant = frozen::census(&src);
         assert!(!avant.is_empty());
-        let sortie = write(&read(&src, 0, 0).unwrap()).unwrap();
+        let sortie = write(&read(&src, 0, 0).unwrap()).unwrap().region;
         assert_eq!(frozen::census(&sortie), avant, "straddle = {straddle}");
     }
 }
@@ -240,7 +240,7 @@ fn editer_ancien(
     }
     let neuf = splice(&inflated, &mut edits).unwrap();
     region.get_mut(lx, lz).unwrap().payload = Cow::Owned(deflate(&neuf, compression).unwrap());
-    write(&region).unwrap()
+    write(&region).unwrap().region
 }
 
 #[test]

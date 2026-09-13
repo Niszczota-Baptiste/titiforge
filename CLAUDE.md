@@ -87,7 +87,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (85 tests aujourd'hui)
+cargo test            # tous les crates (109 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -108,8 +108,7 @@ de save, pas un plantage.
 ```
 crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
-  tf-anvil/    .mca lecture/écriture, splice lossless  ✅ phase 0
-               (reste : ChunkFormat par DataVersion, .mcc)
+  tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
   tf-world/    résidence LRU par octets, streaming, staging, undo par section
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
@@ -170,6 +169,16 @@ propres à ce dépôt.
 - **Un débordement de pile n'est pas rattrapable en Rust.** Un `.mca` forgé
   avec 100 000 compounds imbriqués fait récurser le lecteur jusqu'à la mort du
   processus, sans message. D'où un plafond de profondeur explicite.
+- **Le packing est une propriété du CHUNK, pas de la section.** Une section
+  homogène n'a aucun tableau d'indices, donc rien à mesurer. Lui donner le
+  packing moderne par défaut écrirait du 1.16+ dans un fichier 1.15 le jour où
+  elle cesse d'être homogène — et c'est le seul cas que personne ne pense à
+  tester. Les sections muettes héritent du packing qu'une section voisine a
+  permis de mesurer ; quand aucune ne le permet, et seulement là, le
+  `DataVersion` départage.
+- **Le bit 0x80 de l'octet de compression n'est pas une compression.** Il
+  signale une charge déportée en `c.X.Z.mcc`. Sans le masquer, `2 | 0x80` = 130
+  se lit comme une compression inconnue et le chunk devient illisible.
 - **Une optimisation non vérifiée est une corruption silencieuse.** Ici elle
   tombe sur la sauvegarde d'un utilisateur. Toute stratégie rapide se compare
   au résultat de la stratégie lente sur le même monde, et le compte doit être

@@ -55,8 +55,8 @@ Le chemin rapide n'est pas « itérer plus vite », c'est **ne pas itérer**.
 
 ## État — phase 0
 
-`tf-nbt` et `tf-anvil` sont écrits et testés : **85 tests**, lecture et
-écriture, round-trip lossless.
+`tf-nbt` et `tf-anvil` sont écrits et testés : **109 tests**, lecture et
+écriture, round-trip lossless, formats 1.13 → 1.21 et chunks déportés `.mcc`.
 
 Le round-trip ne repose pas sur une promesse mais sur une propriété
 structurelle. Un chunk non modifié garde sa charge compressée brute, donc il
@@ -74,16 +74,22 @@ d'`ExeWorldEdit`, donc par un autre langage et une autre bibliothèque NBT :
 sur la région de 100 millions de blocs, les deux moteurs comptent
 **15 217 813** blocs remplacés, au bloc près.
 
-Reste en phase 0 : `ChunkFormat` par `DataVersion` et les chunks
-surdimensionnés (`.mcc`), aujourd'hui refusés explicitement plutôt qu'écrits
-de travers.
+Les formats anciens sont détectés sur la **structure**, jamais sur le
+`DataVersion` : une save réelle mélange des chunks de plusieurs versions, parce
+que le jeu ne réécrit un chunk que lorsqu'un joueur le visite. Le packing
+1.13–1.15 (indices à cheval sur deux longs) se distingue du 1.16+ par la
+**longueur** du tableau — les deux ne coïncident qu'aux largeurs où elles
+produisent les mêmes octets.
+
+Reste en phase 0 : le harnais `criterion`, pour que les chiffres viennent
+d'une mesure continue et non du seul prototype.
 
 Feuille de route complète : `docs/ROADMAP.md`.
 
 ## Rejouer les mesures
 
 ```bash
-cargo test            # les 85 tests
+cargo test            # les 109 tests
 cargo clippy --all-targets
 
 # ExeWorldEdit doit être cloné à côté, avec npm install fait

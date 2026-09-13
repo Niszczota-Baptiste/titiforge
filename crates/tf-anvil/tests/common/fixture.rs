@@ -442,3 +442,36 @@ pub fn legacy_chunk_nbt(
     n.end(); // racine
     n.b
 }
+
+// ── charges déportées : les chunks surdimensionnés ──────────────────────────
+
+/// Un `.mca` contenant un TALON de chunk déporté à `(lx, lz)`.
+///
+/// Le talon est ce que Minecraft écrit quand la charge part dans un `.mcc` :
+/// longueur 1 — l'octet de compression et rien derrière — et le bit 0x80 posé
+/// sur cet octet.
+pub fn region_file_with_stub(lx: u32, lz: u32, compression: u8) -> Vec<u8> {
+    const SECTOR: usize = 4096;
+    let mut locations = vec![0u8; 4096];
+    let mut timestamps = vec![0u8; 4096];
+    let mut body = vec![0u8; SECTOR];
+
+    body[0..4].copy_from_slice(&1u32.to_be_bytes()); // longueur = 1
+    body[4] = compression | 0x80; // le drapeau « déporté »
+
+    let i = (lx + lz * 32) as usize;
+    let loc = (2u32 << 8) | 1;
+    locations[i * 4..i * 4 + 4].copy_from_slice(&loc.to_be_bytes());
+    timestamps[i * 4..i * 4 + 4].copy_from_slice(&42u32.to_be_bytes());
+
+    let mut out = Vec::with_capacity(8192 + body.len());
+    out.extend_from_slice(&locations);
+    out.extend_from_slice(&timestamps);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Compresse en zlib — le format qu'un `.mcc` porte, comme un chunk en ligne.
+pub fn zlib_bytes(bytes: &[u8]) -> Vec<u8> {
+    zlib(bytes)
+}

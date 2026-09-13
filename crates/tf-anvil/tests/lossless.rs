@@ -73,7 +73,7 @@ fn editer_chunk(
     let neuf = splice(&inflated, &mut edits).unwrap();
     let payload = deflate(&neuf, compression).unwrap();
     region.get_mut(lx, lz).unwrap().payload = Cow::Owned(payload);
-    write(&region).unwrap()
+    write(&region).unwrap().region
 }
 
 // ── 1. sans modification ────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ fn lire_puis_reecrire_sans_rien_toucher_preserve_chaque_charge_octet_pour_octet(
         "aucune charge ne doit être possédée"
     );
 
-    let sortie = write(&region).unwrap();
+    let sortie = write(&region).unwrap().region;
     let relu = read(&sortie, 0, 0).unwrap();
 
     assert_eq!(relu.count(), region.count());
@@ -114,15 +114,15 @@ fn l_ecriture_est_idempotente() {
     // ce qu'on vient d'écrire doit rendre exactement les mêmes octets, sinon
     // une sauvegarde ferait grossir le fichier à chaque fois.
     let src = petite_region();
-    let un = write(&read(&src, 0, 0).unwrap()).unwrap();
-    let deux = write(&read(&un, 0, 0).unwrap()).unwrap();
+    let un = write(&read(&src, 0, 0).unwrap()).unwrap().region;
+    let deux = write(&read(&un, 0, 0).unwrap()).unwrap().region;
     assert_eq!(un, deux, "write ∘ read doit être un point fixe");
 }
 
 #[test]
 fn le_contenu_survit_a_un_aller_retour_complet() {
     let src = petite_region();
-    let sortie = write(&read(&src, 0, 0).unwrap()).unwrap();
+    let sortie = write(&read(&src, 0, 0).unwrap()).unwrap().region;
     assert_eq!(
         frozen::census(&src),
         frozen::census(&sortie),
@@ -411,7 +411,7 @@ fn un_chunk_absent_reste_absent() {
     assert!(region.get(7, 9).is_some());
     assert!(region.get(0, 0).is_none());
 
-    let sortie = write(&region).unwrap();
+    let sortie = write(&region).unwrap().region;
     let relu = read(&sortie, 0, 0).unwrap();
     assert_eq!(relu.count(), 1);
     assert!(
@@ -458,7 +458,7 @@ fn une_section_sans_block_states_est_ignoree_sans_etre_detruite() {
         .is_none());
 
     // Et la SkyLight est intacte après un aller-retour.
-    let sortie = write(&region).unwrap();
+    let sortie = write(&region).unwrap().region;
     let chunks = frozen::decode_region(&sortie);
     let sl = chunks[&(0, 0)]
         .root

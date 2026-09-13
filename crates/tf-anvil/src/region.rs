@@ -17,7 +17,23 @@ pub const CHUNKS: usize = 1024;
 pub const HEADER: usize = 2 * CHUNKS * 4;
 
 /// Un chunk ne peut occuper que 255 secteurs : le compte tient sur un octet.
+/// Au-delà, sa charge part dans un fichier `c.X.Z.mcc` à côté de la région.
 pub const MAX_SECTORS: usize = 255;
+
+/// L'offset d'un chunk tient sur 3 octets, en secteurs.
+pub const MAX_SECTOR_OFFSET: u32 = 0x00FF_FFFF;
+
+/// Bit de l'octet de compression qui signale une charge DÉPORTÉE.
+///
+/// Minecraft range alors la charge dans `c.<chunkX>.<chunkZ>.mcc`, et ne
+/// laisse dans le `.mca` qu'un talon : longueur 1, c'est-à-dire l'octet de
+/// compression et rien derrière.
+pub const EXTERNAL_FLAG: u8 = 0x80;
+
+/// Nom du fichier de charge déportée d'un chunk, en coordonnées MONDE.
+pub fn external_file_name(chunk_x: i32, chunk_z: i32) -> String {
+    format!("c.{chunk_x}.{chunk_z}.mcc")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
@@ -62,6 +78,13 @@ pub struct RawChunk<'a> {
     pub timestamp: u32,
     pub compression: Compression,
     pub payload: Payload<'a>,
+    /// Vraie si la charge vit dans un `.mcc` à côté du fichier de région.
+    ///
+    /// À la LECTURE, `payload` est alors VIDE : ce crate ne touche pas au
+    /// disque, c'est à l'appelant d'aller chercher le fichier et de la
+    /// remplir. Un chunk déporté dont on oublierait de résoudre la charge
+    /// serait vu comme un chunk vide — d'où `needs_external`, qui le dit.
+    pub external: bool,
 }
 
 impl RawChunk<'_> {
@@ -75,6 +98,39 @@ impl RawChunk<'_> {
     pub fn is_pristine(&self) -> bool {
         matches!(self.payload, Cow::Borrowed(_))
     }
+
+    /// Vraie pour un chunk déporté dont la charge n'a pas encore été fournie.
+    /// Le décoder en l'état donnerait un chunk vide, sans erreur.
+    pub fn needs_external(&self) -> bool {
+        self.external && self.payload.is_empty()
+    }
+
+    /// Fournit la charge d'un chunk déporté, lue depuis son `.mcc`.
+    pub fn resolve_external(&mut self, bytes: Vec<u8>) {
+        self.payload = Cow::Owned(bytes);
+    }
+}
+
+/// Un fichier de charge déportée que l'appelant doit écrire à côté du `.mca`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalFile {
+    /// `c.<chunkX>.<chunkZ>.mcc`, en coordonnées MONDE.
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Ce que produit une écriture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteOutput {
+    pub region: Vec<u8>,
+    /// Charges déportées à écrire à côté du `.mca`.
+    pub external: Vec<ExternalFile>,
+    /// Fichiers `.mcc` devenus inutiles : le chunk tient de nouveau en ligne.
+    ///
+    /// Les laisser ne casserait rien pour le jeu — il ne lit un `.mcc` que si
+    /// le talon le désigne — mais ils occuperaient le disque pour toujours, et
+    /// une save qui grossit sans raison finit par être signalée comme un bug.
+    pub removed_external: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,20 +149,20 @@ pub enum ReadError {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum WriteError {
-    /// Un chunk dépasse 255 secteurs (≈ 1 Mio compressé). Minecraft le range
-    /// alors dans un fichier externe `c.X.Z.mcc` — pas encore géré. On refuse
-    /// plutôt que d'écrire un en-tête tronqué qui rendrait le chunk illisible
-    /// pour le jeu ET pour nous.
-    ChunkTooLarge { index: u16, sectors: usize },
+    /// La région dépasse ce qu'un offset de 3 octets peut désigner : 16 777 215
+    /// secteurs, soit 64 Gio. Physiquement impossible avec des chunks qui
+    /// partent en `.mcc` au-delà de 1 Mio, mais l'en-tête ne peut pas le dire,
+    /// et un offset tronqué désignerait un autre chunk.
+    RegionTooLarge { sectors: u32 },
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::ChunkTooLarge { index, sectors } => write!(
+            WriteError::RegionTooLarge { sectors } => write!(
                 f,
-                "le chunk {index} demande {sectors} secteurs (maximum {MAX_SECTORS}) : \
-                 les chunks surdimensionnés (.mcc) ne sont pas encore gérés"
+                "la région occuperait {sectors} secteurs, au-delà des {MAX_SECTOR_OFFSET} \
+                 qu'un offset de 3 octets peut désigner"
             ),
         }
     }
@@ -161,11 +217,22 @@ pub fn read<'a>(buf: &'a [u8], region_x: i32, region_z: i32) -> Result<Region<'a
                 .unwrap(),
         );
 
+        // Le bit de poids fort de l'octet de compression signale une charge
+        // DÉPORTÉE. Le masquer est obligatoire : sans ça, `2 | 0x80` = 130 est
+        // lu comme une compression inconnue, et le chunk devient illisible.
+        let comp_byte = buf[off + 4];
+        let external = comp_byte & EXTERNAL_FLAG != 0;
         slots[i] = Some(RawChunk {
             index: i as u16,
             timestamp,
-            compression: Compression::from_byte(buf[off + 4]),
-            payload: Cow::Borrowed(&buf[off + 5..off + 4 + len]),
+            compression: Compression::from_byte(comp_byte & !EXTERNAL_FLAG),
+            // Un talon ne porte rien : la charge est dans le `.mcc`.
+            payload: if external {
+                Cow::Borrowed(&[])
+            } else {
+                Cow::Borrowed(&buf[off + 5..off + 4 + len])
+            },
+            external,
         });
     }
 
@@ -184,32 +251,53 @@ pub fn read<'a>(buf: &'a [u8], region_x: i32, region_z: i32) -> Result<Region<'a
 /// fichier venu du jeu peut être fragmenté différemment ; ce qui est garanti
 /// dans tous les cas, c'est que la CHARGE de chaque chunk non modifié est
 /// recopiée octet pour octet.
-pub fn write(region: &Region<'_>) -> Result<Vec<u8>, WriteError> {
+pub fn write(region: &Region<'_>) -> Result<WriteOutput, WriteError> {
     let mut body: Vec<u8> = Vec::new();
     let mut locations = vec![0u8; CHUNKS * 4];
     let mut timestamps = vec![0u8; CHUNKS * 4];
+    let mut external: Vec<ExternalFile> = Vec::new();
+    let mut removed_external: Vec<String> = Vec::new();
     let mut next_sector = (HEADER / SECTOR) as u32; // 2
 
     for i in 0..CHUNKS {
         let Some(chunk) = region.slots.get(i).and_then(|s| s.as_ref()) else {
             continue;
         };
+        let (cx, cz) = region.chunk_coords(chunk);
 
-        let len = chunk.payload.len() + 1; // + l'octet de compression
+        let inline_len = chunk.payload.len() + 1; // + l'octet de compression
+        let deporte = (4 + inline_len).div_ceil(SECTOR) > MAX_SECTORS;
+
+        let (len, comp_byte) = if deporte {
+            // Talon : longueur 1, donc l'octet de compression et rien derrière.
+            external.push(ExternalFile {
+                name: external_file_name(cx, cz),
+                bytes: chunk.payload.to_vec(),
+            });
+            (1usize, chunk.compression.to_byte() | EXTERNAL_FLAG)
+        } else {
+            if chunk.external {
+                // Il tenait dans un `.mcc` et tient de nouveau en ligne : son
+                // ancien fichier n'a plus de raison d'être.
+                removed_external.push(external_file_name(cx, cz));
+            }
+            (inline_len, chunk.compression.to_byte())
+        };
+
         let total = 4 + len;
         let sectors = total.div_ceil(SECTOR);
-        if sectors > MAX_SECTORS {
-            return Err(WriteError::ChunkTooLarge {
-                index: i as u16,
-                sectors,
-            });
-        }
-
         body.extend_from_slice(&(len as u32).to_be_bytes());
-        body.push(chunk.compression.to_byte());
-        body.extend_from_slice(&chunk.payload);
+        body.push(comp_byte);
+        if !deporte {
+            body.extend_from_slice(&chunk.payload);
+        }
         body.resize(body.len() + (sectors * SECTOR - total), 0);
 
+        if next_sector > MAX_SECTOR_OFFSET {
+            return Err(WriteError::RegionTooLarge {
+                sectors: next_sector,
+            });
+        }
         let loc = (next_sector << 8) | (sectors as u32);
         locations[i * 4..i * 4 + 4].copy_from_slice(&loc.to_be_bytes());
         timestamps[i * 4..i * 4 + 4].copy_from_slice(&chunk.timestamp.to_be_bytes());
@@ -220,7 +308,11 @@ pub fn write(region: &Region<'_>) -> Result<Vec<u8>, WriteError> {
     out.extend_from_slice(&locations);
     out.extend_from_slice(&timestamps);
     out.extend_from_slice(&body);
-    Ok(out)
+    Ok(WriteOutput {
+        region: out,
+        external,
+        removed_external,
+    })
 }
 
 impl<'a> Region<'a> {

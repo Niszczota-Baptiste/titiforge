@@ -46,7 +46,7 @@ fn un_mca_produit_par_we_engine_fait_l_aller_retour_sans_perte() {
     assert!(region.iter().all(|c| c.is_pristine()));
     println!("  {} chunks lus depuis un fichier tiers", region.count());
 
-    let sortie = write(&region).unwrap();
+    let sortie = write(&region).unwrap().region;
     assert_eq!(
         frozen::census(&src),
         frozen::census(&sortie),
@@ -127,7 +127,7 @@ fn un_replace_sur_un_mca_tiers_donne_le_bon_recensement() {
     );
     println!("  {touches} chunks modifiés, {n_de} blocs de pierre remplacés");
 
-    let apres = frozen::census(&write(&region).unwrap());
+    let apres = frozen::census(&write(&region).unwrap().region);
     assert_eq!(apres.get(de), None, "plus une seule pierre");
     assert_eq!(*apres.get(vers).unwrap(), n_de + n_vers);
     let total = |m: &std::collections::BTreeMap<String, usize>| m.values().sum::<usize>();
