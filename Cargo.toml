@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = ["crates/tf-nbt", "crates/tf-anvil", "proto"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+tf-nbt = { path = "crates/tf-nbt" }
+tf-anvil = { path = "crates/tf-anvil" }
+flate2 = "1"
+rayon = "1"
+memmap2 = "0.9"
+
+# Le profil de mesure. `lto = "fat"` et `codegen-units = 1` changent les
+# chiffres d'un facteur qui n'est pas négligeable : un bench compilé autrement
+# ne se compare pas à bench/RESULTATS.md.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# Les tests tournent en debug, donc avec les débordements d'entiers vérifiés.
+# C'est voulu : tout ce dépôt est de l'arithmétique d'indices, et un
+# débordement silencieux y produit une corruption de save, pas un plantage.
+[profile.test]
+opt-level = 1
+# Explicites plutôt qu'hérités : si un jour quelqu'un ajoute un [profile.dev]
+# qui les coupe, les tests cesseraient de vérifier les débordements sans que
+# rien ne le signale.
+debug-assertions = true
+overflow-checks = true
