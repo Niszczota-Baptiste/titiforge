@@ -370,3 +370,35 @@ fn merge_from_est_idempotent() {
     assert_eq!(un, deux, "refondre deux fois donne la même table");
     assert_eq!(a.len(), apres, "et n'ajoute rien de plus");
 }
+
+#[test]
+fn un_indice_hors_palette_ne_tue_pas_le_compactage() {
+    // `bits` se DÉDUIT de la longueur de palette : deux entrées se lisent sur
+    // quatre bits, donc seize valeurs sont représentables pour deux valides. Un
+    // `.mca` corrompu, tronqué ou forgé en porte — et un moteur qui panique
+    // dessus panique sur la sauvegarde de quelqu'un.
+    //
+    // Le compactage ne peut pas conserver un tel indice : il renumérote la
+    // palette. Mais il doit rendre un résultat LISIBLE plutôt que mourir.
+    let mut s = section_de(2, &[0; VOL]);
+    // Une palette au-delà du plafond, pour forcer le compactage.
+    for _ in 0..MAX_PALETTE + 10 {
+        s.palette.push(42);
+    }
+    let mut idx = vec![0u16; VOL];
+    idx[7] = 60_000; // très au-delà de tout
+    idx[9] = 3;
+    s.repack(&idx);
+
+    assert!(
+        s.palette.len() <= MAX_PALETTE,
+        "la palette doit être compactée"
+    );
+    let relu = s.unpack();
+    for (i, &v) in relu.iter().enumerate() {
+        assert!(
+            (v as usize) < s.palette.len(),
+            "case {i} : l'indice {v} sort encore de la palette"
+        );
+    }
+}

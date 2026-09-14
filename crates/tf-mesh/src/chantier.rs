@@ -124,7 +124,18 @@ impl Grille {
                     let y = (i / 256) as i32;
                     let z = ((i / 16) % 16) as i32;
                     let x = (i % 16) as i32;
-                    v.set(x, y, z, s.palette[idx[i] as usize]);
+                    // Un indice que la palette ne contient pas vient d'un
+                    // `.mca` corrompu ou forgé : `bits` se DÉDUIT de la
+                    // longueur de palette, donc deux entrées se lisent sur
+                    // quatre bits et seize valeurs sont représentables. Le
+                    // mailleur ne doit pas mourir dessus — on ne DESSINE pas ce
+                    // qu'on ne comprend pas, on rend de l'air.
+                    v.set(
+                        x,
+                        y,
+                        z,
+                        s.palette.get(idx[i] as usize).copied().unwrap_or(0),
+                    );
                 }
             }
             None => {

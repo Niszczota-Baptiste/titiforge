@@ -31,7 +31,7 @@ use tf_anvil::chunk::{decode_section, scan, section_edits, splice, EncodeError};
 use tf_anvil::codec::{deflate, inflate, CodecError};
 use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
 use tf_anvil::Interner;
-use tf_world::coords::{BBox, RegionPos, SectionPos};
+use tf_world::coords::{BBox, ChunkPos, RegionPos, SectionPos};
 use tf_world::journal::{ChunkPatch, Cible};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
@@ -107,6 +107,24 @@ impl std::fmt::Display for Erreur {
     }
 }
 
+/// Les chunks d'UNE région que la sélection touche.
+///
+/// **Coupé avant d'itérer, jamais filtré après.** Parcourir tous les chunks de
+/// la sélection puis jeter ceux des autres régions rend le tout quadratique :
+/// une sélection de dix régions sur dix en contient 102 400, et les filtrer
+/// cent fois fait dix millions d'itérations pour cent mille chunks utiles. Sur
+/// un monde Minefield la sélection peut faire des milliers de régions ; c'est
+/// le genre de coût qui ne se voit pas sur une fixture et qui rend l'outil
+/// inutilisable chez l'utilisateur.
+fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
+    let (a, b) = (sel.min.chunk(), sel.max.chunk());
+    let x0 = a.x.max(pos.x * 32);
+    let x1 = b.x.min(pos.x * 32 + 31);
+    let z0 = a.z.max(pos.z * 32);
+    let z1 = b.z.min(pos.z * 32 + 31);
+    (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| ChunkPos::new(x, z)))
+}
+
 /// Applique un plan à une sélection, sur UNE région, à travers le staging.
 ///
 /// Rend les correctifs à pousser dans le journal. Ne les pousse pas lui-même :
@@ -132,12 +150,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     let mut rap = RapportRegion::default();
     let mut compte = plan.compter.then_some(0u64);
 
-    for cpos in sel.chunks() {
-        if tf_anvil::region::floor_div(cpos.x, 32) != pos.x
-            || tf_anvil::region::floor_div(cpos.z, 32) != pos.z
-        {
-            continue;
-        }
+    for cpos in chunks_de(sel, pos) {
         let (lx, lz) = (cpos.x.rem_euclid(32), cpos.z.rem_euclid(32));
         let Some(brut) = region.get_mut(lx, lz) else {
             continue;
@@ -268,4 +281,81 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
     }
     total.blocs = compte;
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tf_world::coords::BlockPos;
+
+    fn boite(a: (i32, i32), b: (i32, i32)) -> BBox {
+        BBox::new(
+            BlockPos {
+                x: a.0,
+                y: 0,
+                z: a.1,
+            },
+            BlockPos {
+                x: b.0,
+                y: 0,
+                z: b.1,
+            },
+        )
+    }
+
+    #[test]
+    fn les_chunks_d_une_region_sont_coupes_pas_filtres() {
+        // Une sélection de 3 × 3 régions. Chaque région ne doit voir QUE ses
+        // chunks, et la somme doit faire exactement ceux de la sélection : ni
+        // trou, ni doublon.
+        let sel = boite((-600, -600), (1100, 1100));
+        let mut total = 0usize;
+        let mut vus = std::collections::BTreeSet::new();
+        for pos in sel.regions() {
+            let mut n = 0;
+            for c in chunks_de(&sel, pos) {
+                assert_eq!(c.region(), pos, "{c:?} n'est pas dans {pos:?}");
+                assert!(vus.insert((c.x, c.z)), "{c:?} vu deux fois");
+                n += 1;
+            }
+            assert!(n > 0, "aucune région de la sélection n'est vide");
+            total += n;
+        }
+        assert_eq!(
+            total,
+            sel.chunks().count(),
+            "la somme des régions doit couvrir la sélection, exactement"
+        );
+    }
+
+    #[test]
+    fn une_selection_hors_region_ne_rend_aucun_chunk() {
+        let sel = boite((0, 0), (15, 15));
+        assert_eq!(chunks_de(&sel, RegionPos { x: 5, z: 5 }).count(), 0);
+        // Et le bloc −1 est dans la région −1, pas la région 0.
+        let sel = boite((-1, -1), (-1, -1));
+        assert_eq!(chunks_de(&sel, RegionPos { x: 0, z: 0 }).count(), 0);
+        assert_eq!(chunks_de(&sel, RegionPos { x: -1, z: -1 }).count(), 1);
+    }
+
+    #[test]
+    fn les_coordonnees_negatives_tombent_dans_la_bonne_region() {
+        // Le piège le mieux documenté du dépôt : une division entière naïve
+        // charge la mauvaise moitié du monde sans rien signaler.
+        let sel = boite((-1, -1), (0, 0));
+        let mut par_region: std::collections::BTreeMap<(i32, i32), Vec<(i32, i32)>> =
+            Default::default();
+        for pos in sel.regions() {
+            for c in chunks_de(&sel, pos) {
+                par_region
+                    .entry((pos.x, pos.z))
+                    .or_default()
+                    .push((c.x, c.z));
+            }
+        }
+        assert_eq!(par_region[&(-1, -1)], vec![(-1, -1)]);
+        assert_eq!(par_region[&(0, -1)], vec![(0, -1)]);
+        assert_eq!(par_region[&(-1, 0)], vec![(-1, 0)]);
+        assert_eq!(par_region[&(0, 0)], vec![(0, 0)]);
+    }
 }

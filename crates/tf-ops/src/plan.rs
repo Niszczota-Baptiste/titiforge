@@ -233,7 +233,20 @@ impl Plan {
             for z in zone.z0..=zone.z1 {
                 for x in zone.x0..=zone.x1 {
                     let i = (y << 8) | (z << 4) | x;
-                    if !table[idx[i] as usize] {
+                    // **Un indice que la palette ne contient pas ne fait pas
+                    // paniquer.** `bits` se DÉDUIT de la longueur de palette :
+                    // deux entrées se lisent sur quatre bits, donc seize
+                    // valeurs sont représentables pour deux valides. Un `.mca`
+                    // corrompu, tronqué ou forgé en porte, et un éditeur qui
+                    // meurt dessus est un éditeur qui meurt sur la sauvegarde
+                    // de quelqu'un. On ne touche pas à ce qu'on ne comprend
+                    // pas : la case reste telle quelle, et comme `repack_brut`
+                    // réémet les indices tels qu'on les lui donne, elle ressort
+                    // à l'identique.
+                    let Some(&pris) = table.get(idx[i] as usize) else {
+                        continue;
+                    };
+                    if !pris {
                         continue;
                     }
                     let Some(k) = tirage.indice(

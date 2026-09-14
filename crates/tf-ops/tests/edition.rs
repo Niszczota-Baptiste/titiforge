@@ -399,3 +399,241 @@ fn une_region_absente_n_est_pas_une_erreur() {
     let rap = appliquer_region(&st, &SURFACE, DOSSIER, loin, &sel, &plan, &mut interner).unwrap();
     assert!(rap.est_vide());
 }
+
+#[test]
+fn un_monde_en_coordonnees_negatives_se_modifie_au_bon_endroit() {
+    // Le piège le mieux documenté du dépôt, vérifié de bout en bout : le bloc
+    // −1 est dans la région −1, pas la région 0. Une division entière naïve
+    // chargerait la mauvaise moitié du monde sans rien signaler.
+    //
+    // La même fixture, posée en région (−1, −1). Elle ne peuple que ses seize
+    // premiers chunks LOCAUX, donc les chunks monde (−32..−17), donc les blocs
+    // (−512..−257).
+    let t = Terrain::petite();
+    let brut = region(&t);
+    let src = MemorySource::new();
+    let moins = RegionPos { x: -1, z: -1 };
+    src.put_region(SURFACE, DOSSIER, moins, brut.clone());
+    let mut interner = interner_de(&brut);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+
+    // Un seul chunk : celui de coordonnées monde (−32, −32), premier chunk
+    // local de la région −1. Ses blocs vont de −512 à −497.
+    let sel = BBox::new(
+        BlockPos {
+            x: -512,
+            y: -64,
+            z: -512,
+        },
+        BlockPos {
+            x: -497,
+            y: 320,
+            z: -497,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre)).en_comptant();
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &mut interner).unwrap();
+
+    assert_eq!(
+        rap.patches.len(),
+        1,
+        "un seul chunk visé — et il est dans la région −1"
+    );
+    // Le chunk (−32, −32) est le PREMIER de la région −1 : index 0. Une
+    // division entière naïve l'aurait cherché dans la région 0.
+    assert_eq!(rap.patches[0].cible.chunk, 0);
+    assert_eq!(rap.patches[0].cible.region, moins);
+    let bornes = rap.bornes.expect("l'opération a écrit");
+    assert!(
+        bornes.min.x >= -512 && bornes.max.x <= -497,
+        "les bornes restent dans la sélection négative : {bornes:?}"
+    );
+    assert!(rap.blocs.unwrap() > 0);
+
+    // Et la région 0,0 n'existe même pas : rien n'y a été écrit.
+    assert!(
+        st.read_region(&SURFACE, DOSSIER, ZERO).is_err(),
+        "rien ne doit avoir été écrit dans la région 0"
+    );
+}
+
+#[test]
+fn une_operation_sur_plusieurs_regions_fait_une_seule_entree_de_journal() {
+    // Un Ctrl+Z qui ne défait qu'un tiers du travail est pire qu'une
+    // annulation absente.
+    let t = Terrain::petite();
+    let brut = region(&t);
+    let src = MemorySource::new();
+    for (x, z) in [(0, 0), (1, 0), (0, 1)] {
+        src.put_region(SURFACE, DOSSIER, RegionPos { x, z }, brut.clone());
+    }
+    let mut interner = interner_de(&brut);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+
+    // Une sélection qui déborde sur deux régions EN Y TROUVANT DES CHUNKS :
+    // la fixture ne peuple que ses seize premiers chunks locaux, donc les
+    // chunks monde 0..15 pour la région 0 et 32..47 pour la région 1.
+    let sel = BBox::new(
+        BlockPos { x: 0, y: -64, z: 0 },
+        BlockPos {
+            x: 527,
+            y: 320,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &mut interner).unwrap();
+
+    let regions: std::collections::BTreeSet<_> =
+        rap.patches.iter().map(|p| p.cible.region).collect();
+    assert!(
+        regions.len() >= 2,
+        "la sélection doit vraiment déborder : {regions:?}"
+    );
+
+    let mut journal = Journal::new();
+    let corrections = rap
+        .patches
+        .iter()
+        .cloned()
+        .map(tf_world::journal::Correction::Chunk)
+        .collect();
+    journal.pousser(
+        "Remplacer",
+        0,
+        Genre::Operation {
+            op: "replace".into(),
+            bounds: rap.bornes,
+            corrections,
+        },
+    );
+    assert_eq!(journal.entrees().len(), 1, "UNE entrée, pas une par région");
+    assert_eq!(
+        journal.entrees()[0].regions().len(),
+        regions.len(),
+        "et elle nomme toutes les régions touchées"
+    );
+}
+
+#[test]
+fn l_etage_section_traverse_le_splice_et_se_relit() {
+    // L'étage O(1) rend la section HOMOGÈNE : sa palette tombe à une entrée et
+    // son tableau d'indices disparaît. Le jeu n'en écrit pas pour une palette
+    // d'une entrée, et en laisser un de la mauvaise longueur casse le
+    // chargement du chunk. Le recollement doit donc retirer le CHAMP entier,
+    // pas seulement sa charge — et ça ne se vérifie qu'en relisant le fichier
+    // produit.
+    let (src, avant) = monde();
+    let mut interner = interner_de(&avant);
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+
+    let sel = BBox::new(
+        BlockPos { x: 0, y: -64, z: 0 },
+        BlockPos {
+            x: 15,
+            y: 320,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Tout, Motif::Bloc(terre)).en_comptant();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &mut interner).unwrap();
+    assert_eq!(
+        rap.etages[1],
+        rap.etages.iter().sum::<usize>() - rap.etages[0] - rap.etages[3],
+        "les sections couvertes doivent passer par l'étage SECTION"
+    );
+    assert!(rap.etages[1] > 0, "au moins une section en O(1)");
+
+    // On RELIT le fichier produit : c'est la seule preuve qui compte.
+    let apres = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let r = read(&apres, 0, 0).unwrap();
+    let c = r.get(0, 0).expect("le chunk visé");
+    let inflated = inflate(&c.payload, c.compression).unwrap();
+    let s = scan(&inflated).unwrap();
+    let mut interner2 = Interner::new();
+    let mut vues = 0;
+    for sc in &s.sections {
+        let Some(sec) = decode_section(&inflated, &s, sc, &mut interner2).unwrap() else {
+            continue;
+        };
+        // Toutes les sections du chunk sont dans la sélection : toutes doivent
+        // être homogènes et en terre.
+        assert_eq!(sec.palette.len(), 1, "section {} non homogène", sc.y);
+        assert!(sec.data.is_empty(), "section {} garde un `data`", sc.y);
+        assert_eq!(
+            interner2.resolve(sec.palette[0]),
+            Some("minecraft:dirt"),
+            "section {}",
+            sc.y
+        );
+        vues += 1;
+    }
+    assert!(vues > 0);
+}
+
+#[test]
+fn l_etage_bloc_fait_grandir_la_palette_et_se_relit() {
+    // Un mélange ajoute des états à la palette, ce qui peut faire grandir
+    // `bits`, donc allonger le tableau d'indices. Le recollement remplace une
+    // plage d'octets par une PLUS LONGUE — et tout ce qui suit dans le chunk se
+    // décale. C'est le cas que le splice doit tenir, et il ne se vérifie qu'en
+    // relisant.
+    let (src, avant) = monde();
+    let mut interner = interner_de(&avant);
+    let a = interner.intern("minecraft:titiforge_test_a");
+    let b = interner.intern("minecraft:titiforge_test_b");
+    let c = interner.intern("minecraft:titiforge_test_c");
+    let st = staging(src);
+
+    let sel = BBox::new(
+        BlockPos { x: 0, y: -64, z: 0 },
+        BlockPos {
+            x: 15,
+            y: 320,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Tout, Motif::melange(vec![(1, a), (1, b), (1, c)]))
+        .avec_seed(1234)
+        .en_comptant();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &mut interner).unwrap();
+    assert!(rap.etages[3] > 0, "le mélange doit passer par l'étage BLOC");
+    assert!(rap.blocs.unwrap() > 0);
+
+    let apres = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let r = read(&apres, 0, 0).unwrap();
+    let ch = r.get(0, 0).expect("le chunk visé");
+    let inflated = inflate(&ch.payload, ch.compression).unwrap();
+    let s = scan(&inflated).unwrap();
+    let mut interner2 = Interner::new();
+    let mut compte = [0usize; 3];
+    for sc in &s.sections {
+        let Some(sec) = decode_section(&inflated, &s, sc, &mut interner2).unwrap() else {
+            continue;
+        };
+        let idx = sec.unpack();
+        for &i in idx.iter() {
+            let nom = interner2.resolve(sec.palette[i as usize]).unwrap();
+            match nom {
+                "minecraft:titiforge_test_a" => compte[0] += 1,
+                "minecraft:titiforge_test_b" => compte[1] += 1,
+                "minecraft:titiforge_test_c" => compte[2] += 1,
+                autre => panic!("état inattendu après un mélange couvrant : {autre}"),
+            }
+        }
+    }
+    let total: usize = compte.iter().sum();
+    assert!(total > 0);
+    for (i, n) in compte.iter().enumerate() {
+        let part = *n as f64 / total as f64;
+        assert!(
+            (part - 1.0 / 3.0).abs() < 0.02,
+            "état {i} : {part:.3} au lieu d'un tiers"
+        );
+    }
+}

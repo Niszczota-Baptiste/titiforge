@@ -180,7 +180,15 @@ impl Section {
             newpal.push(self.palette.first().copied().unwrap_or(0));
         }
         self.palette = newpal;
-        idx.iter().map(|&o| lut[o as usize]).collect()
+        // Un indice que la palette ne contient pas vient d'un fichier corrompu
+        // ou forgé : `bits` se déduit de la longueur de palette, donc deux
+        // entrées se lisent sur quatre bits et seize valeurs sont
+        // représentables. On ne peut pas le conserver — la palette vient de
+        // changer de numérotation — mais on ne peut pas non plus paniquer
+        // dessus. Il retombe sur la première entrée.
+        idx.iter()
+            .map(|&o| lut.get(o as usize).copied().unwrap_or(0))
+            .collect()
     }
 
     /// État à une position locale, ou `None` hors de la section.

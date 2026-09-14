@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (368 tests aujourd'hui)
+cargo test            # tous les crates (378 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -599,3 +599,20 @@ propres à ce dépôt.
   ce que personne d'autre ne peut : la source reste intacte, un chunk hors
   sélection n'est pas touché, annuler rend le monde d'avant et refaire celui
   d'après — sur le CONTENU, pas sur un compte.
+- **Filtrer APRÈS avoir itéré rend quadratique.** `appliquer_region` parcourait
+  tous les chunks de la SÉLECTION puis jetait ceux des autres régions : une
+  sélection de dix régions sur dix en contient 102 400, filtrés cent fois, soit
+  dix millions d'itérations pour cent mille chunks utiles. Sur un monde
+  Minefield une sélection peut faire des milliers de régions. Ça ne se voit sur
+  aucune fixture — toutes tiennent dans une région — et ça rend l'outil
+  inutilisable chez l'utilisateur. On COUPE la plage avant d'itérer.
+- **Un indice hors palette tue le processus.** `bits` se DÉDUIT de la longueur
+  de palette : deux entrées se lisent sur quatre bits, donc seize valeurs sont
+  représentables pour deux valides. Un `.mca` corrompu, tronqué ou forgé en
+  porte, et `palette[indice]` panique — sur la sauvegarde de quelqu'un.
+  Trouvé à TROIS endroits : l'étage bloc des opérations, le compactage de
+  palette, et le mailleur (celui-là tuait l'application à l'AFFICHAGE, avant
+  même que l'utilisateur ait touché à quoi que ce soit). La règle : on ne
+  touche pas à ce qu'on ne comprend pas — la case reste telle quelle et
+  ressort à l'identique, ou vaut de l'air pour le mailleur. Coût mesuré de la
+  vérification : +3,4 % sur le seul chemin qui la fait par bloc.

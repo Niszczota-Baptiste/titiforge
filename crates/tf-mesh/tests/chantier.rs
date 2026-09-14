@@ -267,3 +267,33 @@ fn le_chantier_parallele_rend_exactement_le_meme_resultat() {
         assert_eq!(a.poses.poses, b.poses.poses, "section {:?}", a.adresse);
     }
 }
+
+#[test]
+fn un_indice_hors_palette_ne_tue_pas_le_mailleur() {
+    // `bits` se déduit de la longueur de palette : deux entrées se lisent sur
+    // quatre bits, donc seize valeurs sont représentables pour deux valides. Un
+    // `.mca` corrompu en porte, et un mailleur qui panique dessus fait mourir
+    // l'application à l'AFFICHAGE — avant même que l'utilisateur ait touché à
+    // quoi que ce soit.
+    let mut s = tf_anvil::Section {
+        y: 0,
+        palette: vec![0, 1],
+        bits: tf_anvil::bits_for(2),
+        data: Box::new([]),
+        packing: tf_anvil::Packing::NoStraddle,
+    };
+    let mut idx = vec![0u16; tf_anvil::VOL];
+    idx[100] = 9;
+    idx[2000] = 15;
+    s.repack(&idx);
+
+    let mut g = Grille::new();
+    g.poser(0, 0, s);
+    // Ce qui compte est de ne pas mourir ; le maillage doit rester cohérent.
+    let c = g.mailler(&table());
+    for lot in &c.lots {
+        for q in &lot.quads.quads {
+            assert!(q.aire() > 0.0, "un quad d'aire nulle");
+        }
+    }
+}

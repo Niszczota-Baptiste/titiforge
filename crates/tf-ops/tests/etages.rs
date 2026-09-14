@@ -363,3 +363,44 @@ fn une_selection_qui_manque_la_section_ne_fait_rien() {
     assert_eq!(r.bornes, None);
     assert_eq!(etats(&s), avant);
 }
+#[test]
+fn un_indice_hors_palette_ne_tue_pas_le_processus() {
+    // Un `.mca` corrompu ou forgé peut porter un indice que la palette ne
+    // contient pas : `bits` se DÉDUIT de la longueur de palette, donc une
+    // palette de deux entrées se lit sur quatre bits et seize valeurs sont
+    // représentables pour deux valides. Le moteur doit le refuser ou l'ignorer,
+    // jamais paniquer — c'est la sauvegarde de quelqu'un.
+    let mut s = section(&[0; VOL], &[PIERRE, TERRE]);
+    // On force un indice de 7 dans une palette de 2.
+    let mut idx = vec![0u16; VOL];
+    idx[100] = 7;
+    idx[4000] = 3;
+    s.repack(&idx);
+
+    // L'étage BLOC, celui qui indexe la palette directement : une sélection
+    // qui ne couvre pas la section l'y force.
+    let bordee = BBox::new(
+        BlockPos { x: 0, y: 0, z: 0 },
+        BlockPos {
+            x: 14,
+            y: 15,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Tout, Motif::Bloc(ROCHE)).en_comptant();
+    let mut a = s.clone();
+    let r = plan.appliquer(&mut a, &bordee, ORIGINE);
+    assert_eq!(r.etage, Etage::Bloc);
+
+    // Et la case incomprise ressort À L'IDENTIQUE : ne pas paniquer ne suffit
+    // pas, il ne faut pas non plus la réécrire au hasard.
+    let apres = a.unpack();
+    assert_eq!(apres[100], 7, "l'indice incompris doit survivre tel quel");
+    assert_eq!(apres[4000], 3, "et celui-là aussi");
+
+    // Et l'étage PALETTE, qui construit sa table sur la palette.
+    let plan = Plan::nouveau(Masque::Etat(TERRE), Motif::Bloc(ROCHE)).en_comptant();
+    let mut b = s.clone();
+    plan.appliquer(&mut b, &toute_la_section(), ORIGINE);
+    assert_eq!(b.unpack()[100], 7, "l'étage palette ne touche aucun indice");
+}
