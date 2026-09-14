@@ -216,6 +216,7 @@ impl Plan {
         // une entrée en plein parcours ferait grandir `bits` au milieu, et le
         // `repack` final travaillerait sur des indices de deux largeurs.
         let mut palette = std::mem::take(&mut section.palette);
+        let avant_palette = palette.len();
         let cibles: Vec<u16> = self
             .motif
             .etats()
@@ -254,6 +255,18 @@ impl Plan {
                     idx[i] = neuf;
                 }
             }
+        }
+        if n == 0 {
+            // **Rien n'a changé : on ne repacke pas.** Le repack coûte le même
+            // parcours que le dépack, et sur une sélection bordée d'un bloc,
+            // beaucoup de sections sont visitées pour rien. Il faut aussi
+            // rendre la palette telle qu'on l'a trouvée : les entrées ajoutées
+            // pour le motif ne sont référencées par aucun indice, et les
+            // laisser ferait grandir `bits` à la prochaine écriture — une
+            // section réécrite plus large sans qu'un seul bloc ait bougé.
+            palette.truncate(avant_palette);
+            section.palette = palette;
+            return 0;
         }
         section.palette = palette;
         section.repack(&idx);

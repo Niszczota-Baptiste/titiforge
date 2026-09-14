@@ -468,3 +468,24 @@ avalanche complète coûtait trois fois ce qu'il fallait.
 **La formule de tirage est FIGÉE.** Un build fait avec une graine doit se
 rejouer à l'identique : changer la façon de tirer changerait tous les mondes
 déjà construits, sans que rien ne le signale.
+
+## De l'opération au fichier
+
+`tf-ops/src/edition.rs` est la jonction : lecture par le staging, application du
+plan section par section, recollement par plages d'octets, correctif de journal,
+écriture dans la copie de travail. C'est la première fois que la pile entière
+travaille ensemble, et ce que ça vérifie ne se vérifie nulle part ailleurs :
+
+- la **source** reste octet pour octet ce qu'elle était ;
+- un chunk hors sélection n'est ni décompressé ni réécrit ;
+- un chunk modifié n'est **pas ré-encodé** — seules les plages d'octets des
+  sections touchées sont remplacées, donc heightmaps, structures et données de
+  mods ne peuvent pas être abîmées ;
+- **annuler rend le monde d'avant et refaire celui d'après**, vérifié sur le
+  contenu et pas sur un compte ;
+- une opération qui ne change rien ne salit pas la copie de travail et ne
+  remplit pas le journal d'entrées vides.
+
+Une opération qui déborde sur plusieurs régions fait **UNE** entrée de journal :
+un `Ctrl+Z` qui ne défait qu'un tiers du travail serait pire qu'une annulation
+absente.

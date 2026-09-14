@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod edition;
 pub mod hash;
 pub mod masque;
 pub mod motif;

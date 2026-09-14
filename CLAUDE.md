@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (363 tests aujourd'hui)
+cargo test            # tous les crates (368 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -224,7 +224,7 @@ crates/
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
-  tf-ops/      répartition 3 étages ✅ · masques ✅ · motifs ✅ · sélections-prédicat
+  tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅ · prédicats
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -586,3 +586,16 @@ propres à ce dépôt.
   décalages de voisinage, et les bits BAS autant que les hauts — le tirage
   prend les hauts, un test naïf prendrait les bas, et l'un passerait pendant
   que l'autre montre un damier.
+- **Un `StateId` n'a de sens que relativement à SON interner.** Deux lectures
+  indépendantes du même monde numérotent dans l'ordre où elles rencontrent les
+  états : si un seul chunk diffère, TOUTE la numérotation des chunks suivants
+  se décale. Comparer les identifiants de deux lectures, c'est comparer deux
+  systèmes de coordonnées — mesuré, toutes les valeurs décalées de 1, et une
+  heure perdue à chercher un bug qui n'existait pas. Ce qui traverse deux
+  lectures se compare par NOM, ou passe par une table partagée.
+- **La jonction est l'endroit le plus dangereux, et elle se teste à part.**
+  Le plan, le splice, le journal et la copie de travail sont justes chacun de
+  son côté ; ça ne dit rien de leur raccord. `tf-ops/tests/edition.rs` vérifie
+  ce que personne d'autre ne peut : la source reste intacte, un chunk hors
+  sélection n'est pas touché, annuler rend le monde d'avant et refaire celui
+  d'après — sur le CONTENU, pas sur un compte.
