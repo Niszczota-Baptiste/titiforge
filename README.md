@@ -30,7 +30,7 @@ hauteur de **100 663 296 blocs**.
 
 | Mesure | we-engine (JS) | prototype Rust | Gain |
 |---|---:|---:|---:|
-| Décodage d'une région pleine | 1 892 ms | **48 ms** | **× 39** |
+| Décodage d'une région pleine | 1 892 ms | **28,2 ms** | **× 67** |
 | RSS du processus | 633 Mo | **54,6 Mo** | **× 11,6** |
 | Empreinte par bloc | 6,59 o | **0,33 o** | **× 20** |
 | `//replace` sur toute la région | 11 718 ms | **0,26 ms** | **× 45 000** |

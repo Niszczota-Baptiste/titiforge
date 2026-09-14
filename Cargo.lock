@@ -447,6 +447,7 @@ dependencies = [
  "criterion",
  "flate2",
  "miniz_oxide",
+ "rayon",
  "tf-anvil",
  "tf-nbt",
 ]

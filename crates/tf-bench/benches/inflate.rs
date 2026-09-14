@@ -34,10 +34,7 @@ fn charges() -> Vec<Vec<u8>> {
 
 fn bench_backends(c: &mut Criterion) {
     let charges = charges();
-    let octets_clairs: usize = charges
-        .iter()
-        .map(|p| flate2_inflate(p).len())
-        .sum();
+    let octets_clairs: usize = charges.iter().map(|p| flate2_inflate(p).len()).sum();
 
     let mut g = c.benchmark_group("inflate_backends");
     g.sample_size(20);
@@ -140,8 +137,16 @@ fn bench_compression(c: &mut Criterion) {
     eprintln!();
     eprintln!("── taille produite, 64 chunks ──────────────────────────────────");
     eprintln!("  clair              {:>10} o", octets);
-    eprintln!("  flate2 / zlib-rs   {:>10} o   ({:.1} %)", a, 100.0 * a as f64 / octets as f64);
-    eprintln!("  miniz_oxide        {:>10} o   ({:.1} %)", b, 100.0 * b as f64 / octets as f64);
+    eprintln!(
+        "  flate2 / zlib-rs   {:>10} o   ({:.1} %)",
+        a,
+        100.0 * a as f64 / octets as f64
+    );
+    eprintln!(
+        "  miniz_oxide        {:>10} o   ({:.1} %)",
+        b,
+        100.0 * b as f64 / octets as f64
+    );
     eprintln!();
 
     // Et les deux doivent se relire l'un l'autre : un format, pas deux.

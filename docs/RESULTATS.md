@@ -287,3 +287,48 @@ décompression est parfaitement parallélisable par chunk.
 
 `benches/inflate.rs` reste dans le dépôt : c'est la preuve, et elle évite qu'on
 repropose l'échange dans six mois sur la foi de la même réputation.
+
+---
+
+# Deuxième optimisation : le parallélisme
+
+Le backend de compression épuisé, il restait les 75 % d'`inflate`. Chaque chunk
+est un flux zlib indépendant : le découpage par chunk est donc le bon grain.
+
+| Région pleine, 24 576 sections | Temps | Gain |
+|---|---:|---:|
+| Monofil | 107,45 ms | — |
+| `rayon`, 4 cœurs | **28,25 ms** | **× 3,80** |
+| `rayon`, sans la fusion des palettes | 27,19 ms | — |
+
+**95 % d'efficacité sur 4 cœurs.** Et la fusion des palettes — le coût qu'on
+pourrait craindre — ne pèse que **1,06 ms**, soit 3,9 % du total.
+
+C'est l'exact inverse de ce qu'a vécu `we-engine`, dont le `CLAUDE.md` note
+qu'« un fil par chunk ne gagne rien » : là-bas, transférer l'arbre NBT entre
+fils coûtait plus cher que de le décoder (65 ms contre 60 sur 128 chunks). La
+cause était le `structuredClone` de JavaScript, pas le problème. En mémoire
+partagée, le découpage se paie largement.
+
+## Le point de conception que la mesure met au jour
+
+L'interner est de l'**état mutable partagé**. Le mettre derrière un verrou
+sérialiserait exactement ce qu'on essaie de paralléliser. Chaque fil interne
+donc dans une table LOCALE, et la fusion se fait après — c'est ce coût de
+1,06 ms, et c'est ce que `tf-world` devra reprendre en phase 1.
+
+Le bench vérifie en plus que les deux chemins produisent le **même monde** :
+même nombre de sections, mêmes indices octet pour octet, et les mêmes
+identifiants internés dans le même ordre. Un décodage rapide qui rend autre
+chose n'est pas un décodage rapide.
+
+## Où en est le chargement
+
+| | Temps | vs `we-engine` |
+|---|---:|---:|
+| `we-engine` (JS, monofil) | 1 892 ms | — |
+| `tf-anvil` monofil | 107 ms | × 17,7 |
+| `tf-anvil` + `rayon` (4 cœurs) | **28,2 ms** | **× 67** |
+
+Sur une machine de développement à 8 ou 16 cœurs, l'efficacité mesurée laisse
+attendre 15 ms ou moins — mais ça se mesurera là-bas, pas ici.

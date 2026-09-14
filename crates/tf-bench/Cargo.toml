@@ -23,9 +23,14 @@ criterion = { version = "0.5", default-features = false }
 # Deux `cargo bench` séparés mesurent surtout la charge de la machine entre
 # les deux — vérifié : un scénario qui ne décompresse RIEN a bougé de 14 %.
 miniz_oxide = "0.9"
+rayon.workspace = true
 
 [[bench]]
 name = "inflate"
+harness = false
+
+[[bench]]
+name = "parallele"
 harness = false
 
 [[bench]]
