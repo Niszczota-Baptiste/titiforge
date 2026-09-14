@@ -189,16 +189,17 @@ fn le_catalogue_couvre_les_trois_formes_et_le_pire_cas() {
     let total = BLOCS.len();
     let modeles = par_forme[&Forme::Modele];
     let cubes = par_forme[&Forme::Cube];
-    // Le codex réel : 66,8 % de modèles, 32,0 % de cubes. On tolère 3 points.
+    // Le pack réel : 73,7 % de modèles, 25,1 % de cubes — un cube que ses
+    // TEXTURES trouent compte comme modèle. On tolère 3 points.
     let pm = 100.0 * modeles as f64 / total as f64;
     let pc = 100.0 * cubes as f64 / total as f64;
     assert!(
-        (63.8..69.8).contains(&pm),
-        "la table doit garder la forme du codex : {pm:.1} % de modèles au lieu de 66,8"
+        (70.7..76.7).contains(&pm),
+        "la table doit garder la forme du pack : {pm:.1} % de modèles au lieu de 73,7"
     );
     assert!(
-        (29.0..35.0).contains(&pc),
-        "{pc:.1} % de cubes au lieu de 32,0"
+        (22.1..28.1).contains(&pc),
+        "{pc:.1} % de cubes au lieu de 25,1"
     );
     let _ = pire;
 

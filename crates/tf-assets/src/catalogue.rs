@@ -27,6 +27,27 @@ pub enum Disposition {
 }
 
 impl Disposition {
+    /// Les chemins d'une TEXTURE, dans l'ordre. Un modèle la nomme
+    /// `minefield:block/pierre` ou simplement `block_pierre.png`, selon le
+    /// pack.
+    pub fn chemins_texture(self, nom: &str) -> Vec<String> {
+        let id = Id::parse(nom);
+        match self {
+            Disposition::Pack => vec![id.texture()],
+            Disposition::Codex => {
+                let feuille = id.chemin.rsplit('/').next().unwrap_or(&id.chemin);
+                let feuille = feuille.strip_suffix(".png").unwrap_or(feuille);
+                let nu = feuille.strip_prefix("block_").unwrap_or(feuille);
+                vec![
+                    format!("render-textures/block_{nu}.png"),
+                    format!("model-textures/block_{nu}.png"),
+                    format!("render-textures/{feuille}.png"),
+                    format!("model-textures/{feuille}.png"),
+                ]
+            }
+        }
+    }
+
     pub fn chemin_modele(self, id: &Id) -> String {
         match self {
             Disposition::Pack => id.modele(),
@@ -291,4 +312,84 @@ pub fn table_formes(
         }
     }
     t
+}
+
+/// Tous les noms de texture cités par les modèles résolus.
+///
+/// Sert à bâtir le tableau d'atlas : on ne lit que ce qui est RÉFÉRENCÉ. Un
+/// pack contient des textures d'objets, d'interface et d'entités dont aucun
+/// bloc ne se sert — les charger toutes multiplierait la mémoire de l'atlas
+/// pour rien.
+pub fn textures_citees(cat: &Catalogue) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for (nom, _) in cat.blocs() {
+        let Some(bs) = cat.blockstate(nom) else {
+            continue;
+        };
+        for var in bs.modeles() {
+            let Some(m) = cat.modele(&var.modele) else {
+                continue;
+            };
+            for e in &m.elements {
+                for fd in e.faces.values() {
+                    // Une variable non résolue n'est pas une texture : aller la
+                    // chercher produirait une « absente » qui nommerait `#side`
+                    // au lieu du vrai trou.
+                    if !fd.texture.starts_with('#') {
+                        v.push(fd.texture.clone());
+                    }
+                }
+            }
+        }
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Les blocs qui ne BOUCHENT pas leur case malgré un cuboïde qui la remplit.
+///
+/// C'est la réponse à la question qu'un pack ne pose nulle part : le verre
+/// remplit son bloc et ne doit masquer personne. Elle se DÉRIVE de l'alpha des
+/// textures, jamais d'une liste de noms — une liste ne couvrirait aucun des
+/// 1 678 blocs `minefield:*`.
+///
+/// **Mais pas de n'importe quelle texture.** « Une texture transparente
+/// quelque part » classait 864 blocs sur 2 560 comme translucides, dont
+/// `grass_block` : sa couche d'herbe est transparente sur les côtés, et le
+/// bloc serait devenu non opaque. C'est exactement le piège qui a coûté à
+/// `ExeWorldEdit` un sol méconnaissable et 1 281 appels de dessin, repris sous
+/// une autre forme.
+///
+/// Seules comptent les faces du cuboïde qui REMPLIT la case, et seulement
+/// celles qui sont à ras du bord : c'est par elles qu'on verrait au travers.
+/// Ce qui est posé par-dessus ne rend pas le bloc transparent.
+pub fn blocs_translucides(
+    cat: &Catalogue,
+    atlas: &crate::Atlas,
+) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for (nom, _) in cat.blocs() {
+        let Some(m) = cat.modele_de(nom) else {
+            continue;
+        };
+        let cub = modele::cuboides(m);
+        let Some(i) = indice_cube_plein(&cub) else {
+            // Pas un cube plein : la question ne se pose pas, il passe déjà par
+            // la passe de modèles et ne masque rien.
+            continue;
+        };
+        let e = &m.elements[i];
+        let troue = e.faces.iter().any(|(f, fd)| {
+            cub[i].au_bord(*f)
+                && atlas
+                    .couche(&fd.texture)
+                    .and_then(|c| atlas.couches.get(c as usize))
+                    .is_some_and(|c| c.transparente)
+        });
+        if troue {
+            out.insert(nom.clone());
+        }
+    }
+    out
 }

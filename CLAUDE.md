@@ -19,8 +19,9 @@ le disent (mesurés sur le codex de `titisite`) :
 | | |
 |---|---|
 | Blocs `minefield:*` | **1 678** — contre 882 vanilla, presque le double |
-| Formes non-cubes | **66,8 %** (1 121 blocs) ; cubes pleins : 32,0 % (537) |
-| Cuboïdes d'un bloc-modèle | **3,58** en moyenne, médiane 2, pire cas 82 |
+| Formes non-cubes | **73,7 %** (1 236 blocs) ; cubes pleins : 25,1 % (422) |
+| Cuboïdes d'un bloc-modèle | **3,52** en moyenne, médiane 1, pire cas 82 |
+| Textures citées par les blocs | **2 207**, dont 139 animées et 913 trouées |
 | Blocs portant un état | **54 %** (910), à transformer sous rotation |
 | Variantes avec rotation | **22 627** déclarées dans `blockstates.json` |
 | Le plus complexe | `red_pumpkin_treat_bag` : **82 cuboïdes** dans une case |
@@ -29,7 +30,7 @@ Trois conséquences qui ne sont pas négociables :
 
 1. **Le greedy meshing ne couvre qu'un tiers du CATALOGUE Minefield**, et la
    passe de modèles porte près de la moitié de la géométrie d'un build. Les deux
-   chiffres sont différents et il faut les deux : 66,8 % des blocs du catalogue
+   chiffres sont différents et il faut les deux : 73,7 % des blocs du catalogue
    sont des modèles, mais dans un bâtiment ils ne sont que 9 % des blocs POSÉS —
    un mur est fait de cubes, le décor est semé. Sauf qu'un bloc-modèle vaut 3,58
    cuboïdes : sur une région bâtie, 2,87 M de blocs-modèles portent **9,46 M de
@@ -167,7 +168,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (298 tests aujourd'hui)
+cargo test            # tous les crates (316 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -185,6 +186,9 @@ cargo run --release -p tf-mesh --example mailler_build     # la chaîne complèt
 # le pack RÉEL du serveur (rien n'est copié dans le dépôt)
 cargo run --release -p tf-assets --example recenser     -- ../titisite/public/codex
 cargo run --release -p tf-assets --example mailler_reel -- ../titisite/public/codex
+# la table de tf-bench est ENGENDRÉE par le même code que l'application :
+cargo run --release -p tf-assets --example engendrer_catalogue -- ../titisite/public/codex \
+    > crates/tf-bench/src/catalogue.rs
 TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --nocapture
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
@@ -210,7 +214,7 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
-  tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures, atlas à venir
+  tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
   tf-render/   wgpu : arène, multi-draw indirect, HZB, transparence
   tf-app/      coque winit + egui, outils, commandes
@@ -398,6 +402,37 @@ propres à ce dépôt.
 - **Un modèle nomme son parent, et un pack vient du disque d'un utilisateur.**
   `../../../etc/passwd` est un nom de parent bien formé, et `a` parent de `b`
   parent de `a` boucle jusqu'à la mort du processus. Les deux sont refusés.
+- **Un atlas est un TABLEAU de textures, pas une planche.** Le maillage est
+  glouton : un quad couvre plusieurs blocs et sa texture doit se répéter. Sur
+  une planche, `fract` sort de la tuile et mord sur la voisine — la frange
+  classique de la mauvaise texture au bord des faces. Une couche par tuile et
+  la répétition ne peut pas en sortir. Rien à border, rien à rogner.
+- **Un pack n'est pas uniformément en 16 × 16.** Mesuré : 92,7 % le sont, et
+  il y a du 32 × 32 dans le même pack. Un tableau n'a qu'une taille de couche :
+  on prend la PLUS GRANDE et on agrandit les petites au plus proche voisin —
+  réduire perdrait la moitié des pixels, et une interpolation ferait baver
+  chaque bord de bloc. Avec un plafond : un pack HD en 512 donnerait 3,7 Go.
+- **242 textures du pack sont des bandes d'animation**, jusqu'à 32 images
+  empilées. Les prendre pour une image unique écraserait trente-deux vues du
+  feu sur une face. Le codex ne contient aucun `.mcmeta` : le nombre d'images
+  se déduit de la géométrie (`hauteur / largeur`), ce que fait aussi le jeu
+  quand le mcmeta ne dit rien.
+- **Cinq types de PNG cohabitent dans un pack** — RGBA, palette, RGB, gris, et
+  du 4 bits. Ne lire que le RGBA laisserait 1 010 textures sur 3 556 au bord de
+  la route.
+- **« Une texture transparente quelque part » ne rend pas un bloc translucide.**
+  Ça classait 864 blocs sur 2 560, dont `grass_block` — sa couche d'herbe est
+  transparente sur les côtés, et tout le terrain serait devenu non opaque.
+  C'est le piège de `grass_block` repris sous une autre forme. Seules comptent
+  les faces du cuboïde qui REMPLIT la case, et seulement celles à ras du bord :
+  116 blocs, ce qui est le bon ordre (feuilles, verre teinté, cactus, glace).
+- **Deux implémentations d'une même règle divergent — troisième fois.** La
+  table de `tf-bench` était produite par un script Python qui rejouait le
+  classement de son côté : **16 désaccords sur 220 blocs**. Elle est maintenant
+  ENGENDRÉE par `tf-assets`, le même code que l'application.
+- **Un pixel totalement transparent n'a pas de couleur.** L'inclure dans la
+  moyenne d'une tuile la tirerait vers le noir d'un fond qu'on ne voit jamais,
+  et le facteur de teinte serait faux pour toutes les plantes.
 - **Une section d'air coûte 17 µs au mailleur, et il ne peut rien y faire.**
   De l'air et des plantes sont indiscernables du point de vue de l'opacité.
   C'est l'APPELANT qui le sait gratuitement — sa palette a une entrée, et c'est

@@ -12,8 +12,8 @@
 use std::time::Instant;
 
 use tf_anvil::{decode_section, inflate, read, scan, Interner, StateId};
-use tf_assets::catalogue::{table_formes, Disposition};
-use tf_assets::{Catalogue, Dossier};
+use tf_assets::catalogue::{blocs_translucides, table_formes, textures_citees, Disposition};
+use tf_assets::{Atlas, Catalogue, Dossier};
 use tf_bench::{build, Build};
 use tf_mesh::Grille;
 
@@ -35,6 +35,32 @@ fn main() {
         cat.introuvables.len(),
         t0.elapsed().as_secs_f64() * 1000.0
     );
+
+    // ── le tableau d'atlas, et ce qu'il apprend sur l'opacité
+    let ta = Instant::now();
+    let citees = textures_citees(&cat);
+    let atlas = Atlas::batir(&src, citees.iter().cloned(), &|n| {
+        Disposition::Codex.chemins_texture(n)
+    });
+    let translucides = blocs_translucides(&cat, &atlas);
+    println!(
+        "atlas : {} couches de {} × {} ({:.1} Mo), {} manquantes, {:.0} ms",
+        atlas.len(),
+        atlas.cote,
+        atlas.cote,
+        atlas.octets() as f64 / 1e6,
+        atlas.manquantes.len(),
+        ta.elapsed().as_secs_f64() * 1000.0
+    );
+    println!(
+        "        {} couches animées · {} couches transparentes · {} BLOCS translucides",
+        atlas.couches.iter().filter(|c| c.images > 1).count(),
+        atlas.transparentes().len(),
+        translucides.len()
+    );
+    for n in atlas.manquantes.iter().take(4) {
+        println!("        manquante : {n}");
+    }
 
     for (etiquette, b) in [
         ("décor 20 %", Build::petit().avec_decor(20)),
@@ -74,7 +100,7 @@ fn main() {
                 !nom.ends_with("air") && cat.blockstate(nom).is_none()
             })
             .count();
-        let table = table_formes(&cat, cles.iter().cloned(), &|_| false);
+        let table = table_formes(&cat, cles.iter().cloned(), &|n| translucides.contains(n));
         let t_table = t2.elapsed();
 
         // ── mailler
