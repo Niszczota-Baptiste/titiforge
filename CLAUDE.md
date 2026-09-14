@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (342 tests aujourd'hui)
+cargo test            # tous les crates (343 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -530,3 +530,28 @@ propres à ce dépôt.
   s'accumulent par bloc et ne sont publiés qu'à la fin, quand on sait ce que la
   composition a rattrapé. Annoncer un trou qui n'existe plus est aussi trompeur
   que d'en taire un vrai — et noie les 78 vrais dans 471 lignes.
+- **Les lois du groupe ne savent pas voir une règle FAUSSE.** Elles disent
+  qu'une règle est cohérente avec elle-même : une règle qui tournerait tout
+  d'un quart de trop les passerait toutes, et zéro faute sur 33 844 états ne
+  prouvait donc rien. Le contrôle qui décide compare le SOLIDE de l'état
+  d'arrivée à celui de la source transformée — il a trouvé **3 431 couples
+  faux sur 132 380** pendant que les lois du groupe étaient au vert. Toute
+  règle dérivée a besoin d'un contrôle qui ne relit pas le raisonnement qui
+  l'a produite.
+- **La géométrie ARBITRE, les angles départagent.** L'arithmétique d'angles
+  suppose que la transformation du monde se ramène à un décalage de `y` :
+  vrai pour une rotation, vrai d'un miroir seulement si le modèle est
+  lui-même symétrique. Sur un escalier en coin elle désigne l'escalier TOURNÉ
+  au lieu du réfléchi — et comme la géométrie d'un coin est ambiguë (deux
+  écritures pour le même dessin), le repli sur les angles avait le dernier
+  mot. C'étaient tous les escaliers en coin et toutes les portes ouvertes du
+  pack. On ne garde des angles que ce qui a la bonne forme ; quand le pack ne
+  déclare la forme transformée NULLE PART, les angles redeviennent seuls
+  juges — et le résultat est annoncé comme approché.
+- **« Approché » et « faux » ne sont pas la même chose, et doivent se
+  distinguer.** Une bougie n'a aucun champ qui oriente : elle ne tournera pas,
+  et c'est une limite du bloc. Un escalier qui rend sa version tournée au lieu
+  de la réfléchie, c'est un bug. Les deux se lisent pareil sur une capture
+  d'écran. `Manque::FormeApprochee` nomme le premier, un `debug_assert` refuse
+  le second — et un test exige que le compte annoncé soit EXACTEMENT celui que
+  le contrôle indépendant trouve, ni plus ni moins.

@@ -354,13 +354,45 @@ Ces lois ne sont pas vérifiées après coup, elles sont **construites** —
 `rot180`/`rot270` sont `rot90` composée, `miroirZ` est `miroirX` suivi du
 demi-tour.
 
+## Le contrôle qui compte, et que les lois du groupe ne savent pas faire
+
+Les lois du groupe disent qu'une règle est cohérente **avec elle-même**. Elles
+ne disent pas qu'elle est juste : une règle qui tournerait tout d'un quart de
+trop les passerait toutes. Le contrôle qui décide compare donc, pour chaque
+couple (état, transformation), le **solide** de l'état d'arrivée à celui de la
+source transformée — la seule question qui compte pour l'utilisateur.
+
+Il a trouvé **3 431 couples faux sur 132 380** là où les lois du groupe
+n'annonçaient aucune faute : tous les escaliers en coin et toutes les portes
+ouvertes du pack rendaient leur version TOURNÉE au lieu de la réfléchie. La
+cause : l'arithmétique d'angles suppose que la transformation se ramène à un
+décalage de `y`, ce qui est vrai d'une rotation mais d'un miroir seulement si
+le modèle est lui-même symétrique.
+
+Aujourd'hui, sur le pack du serveur :
+
+| | |
+|---|---:|
+| couples vérifiés | 132 380 |
+| formes qui ne suivent pas exactement | 1 351 |
+| **dont annoncées par la dérivation elle-même** | **1 351** |
+
+Le contrôle indépendant ne trouve donc **rien que la table ne dise déjà**, et
+l'assertion de débogage — « une forme approchée n'arrive jamais quand le pack
+déclarait la bonne » — ne saute sur aucun des 1 254 blocs. Les 1 351 restants
+sont deux limites du PACK, pas de la dérivation : une bougie n'a aucun champ
+qui oriente, un bloc chiral sans jumeau déclaré n'a pas de réfléchi à rendre.
+Dans les deux cas l'état rendu est le plus proche possible, et c'est DIT.
+
 ## Ce qui reste, et pourquoi
 
-Les 471 manques signalés se lisent en deux tas très différents :
+Les 746 manques signalés se lisent en trois tas très différents, et les
+confondre donnerait une image fausse dans les deux sens :
 
 | | | |
 |---|---:|---|
-| `non décomposable` | 393 | **la règle exacte est juste** ; seule la forme compacte est appauvrie |
+| `non décomposable` | 395 | **la règle exacte est juste** ; seule la forme compacte est appauvrie |
+| `forme approchée` | 273 | le pack ne déclare pas la forme transformée ; l'état rendu est le plus proche |
 | `non représentable` | 78 | un vrai trou, refusé plutôt que deviné |
 
 Les vrais trous sont deux familles, toutes deux des asymétries du pack :

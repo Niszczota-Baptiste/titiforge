@@ -117,6 +117,22 @@ pub enum Manque {
         propriete: String,
         transfo: Transfo,
     },
+    /// La forme transformée n'est déclarée NULLE PART dans le pack : l'état
+    /// rendu ne suivra pas exactement la transformation.
+    ///
+    /// Deux causes, une seule conséquence. Une bougie n'a aucun champ qui
+    /// oriente, donc la règle est l'identité et la bougie ne tournera pas. Un
+    /// bloc CHIRAL sans jumeau — une marche gauche dont le pack ne déclare pas
+    /// la droite — rendra sa version tournée au lieu de sa réfléchie.
+    ///
+    /// Ce n'est pas un échec de dérivation, c'est une limite du pack. Mais
+    /// elle doit se VOIR : c'est la seule chose qui distingue « ce bloc ne peut
+    /// pas tourner » de « ce bloc tourne de travers ».
+    FormeApprochee {
+        bloc: String,
+        transfo: Transfo,
+        etats: usize,
+    },
     /// La règle dérivée viole une loi du groupe. On la JETTE : une
     /// transformation qui ne se défait pas est pire qu'une transformation
     /// absente.
@@ -136,6 +152,7 @@ impl Manque {
             | Manque::NonBijectif { bloc, .. }
             | Manque::NonRepresentable { bloc, .. }
             | Manque::NonDecomposable { bloc, .. }
+            | Manque::FormeApprochee { bloc, .. }
             | Manque::LoiViolee { bloc, .. } => bloc,
         }
     }
@@ -148,6 +165,7 @@ impl Manque {
             | Manque::NonBijectif { transfo, .. }
             | Manque::NonRepresentable { transfo, .. }
             | Manque::NonDecomposable { transfo, .. }
+            | Manque::FormeApprochee { transfo, .. }
             | Manque::LoiViolee { transfo, .. } => *transfo,
         }
     }
@@ -160,6 +178,7 @@ impl Manque {
             Manque::NonBijectif { .. } => "non bijectif",
             Manque::NonRepresentable { .. } => "non représentable",
             Manque::NonDecomposable { .. } => "non décomposable",
+            Manque::FormeApprochee { .. } => "forme approchée",
             Manque::LoiViolee { .. } => "loi du groupe",
         }
     }
@@ -207,6 +226,16 @@ impl std::fmt::Display for Manque {
                 f,
                 "{bloc} · {} : {propriete} ne se résume pas à une permutation — \
                  la règle exacte reste juste, le repli l'ignore",
+                transfo.nom()
+            ),
+            Manque::FormeApprochee {
+                bloc,
+                transfo,
+                etats,
+            } => write!(
+                f,
+                "{bloc} · {} : la forme transformée n'est pas déclarée — {etats} \
+                 états rendront une apparence approchée",
                 transfo.nom()
             ),
             Manque::LoiViolee { bloc, transfo, loi } => {
@@ -584,6 +613,20 @@ impl Table {
                         && candidats[i].iter().any(|&j| j != i)
                 });
                 if !angles_parlent && !geometrie_parle {
+                    // L'identité est la seule fonction totale ici. Si une
+                    // forme AURAIT bougé, le contrôle de forme commun, plus
+                    // bas, le dira — il n'y a pas deux endroits qui comptent
+                    // la même chose.
+                    let approchees = (0..etats.len())
+                        .filter(|&i| images_geo[i].is_some() && images_geo[i] != droites[i])
+                        .count();
+                    if approchees > 0 {
+                        manques.push(Manque::FormeApprochee {
+                            bloc: nom.clone(),
+                            transfo: t,
+                            etats: approchees,
+                        });
+                    }
                     exacts[t.indice()] = Some((0..etats.len() as u32).collect());
                     regles[t.indice()] = Some(ReglesBloc::default());
                     continue;
@@ -624,6 +667,42 @@ impl Table {
                             .get(&geo_visee_avec(g, t, p))
                             .cloned()
                             .unwrap_or_default()
+                    })
+                    .collect();
+
+                // **La géométrie ARBITRE, les angles départagent.**
+                //
+                // L'arithmétique d'angles suppose que la transformation du
+                // monde se ramène à un décalage de `y`. C'est vrai pour une
+                // rotation ; pour un MIROIR, ça ne l'est que si le modèle est
+                // lui-même symétrique. Sur un escalier en coin, elle désigne
+                // l'escalier TOURNÉ au lieu du réfléchi — et comme la géométrie
+                // d'un coin est ambiguë (deux écritures pour le même dessin),
+                // le repli sur les angles avait le dernier mot. Mesuré par le
+                // contrôle indépendant : 3 431 couples sur 132 380 rendaient
+                // une forme fausse, soit tous les escaliers en coin et toutes
+                // les portes ouvertes du pack.
+                //
+                // On ne garde donc des angles que ce qui a la BONNE forme.
+                // Quand aucune géométrie n'est calculable, les angles restent
+                // seuls juges — c'est leur domaine, pas un repli.
+                let cand_ang: Vec<Vec<usize>> = cand_ang
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ang)| {
+                        if images_geo[i].is_none() || candidats[i].is_empty() {
+                            // Aucune géométrie calculable, ou la forme
+                            // transformée n'est DÉCLARÉE nulle part : la
+                            // géométrie ne départage pas, elle se tait. Les
+                            // angles restent seuls juges — et le contrôle de
+                            // forme, plus bas, dira que le résultat est
+                            // approché.
+                            ang
+                        } else {
+                            ang.into_iter()
+                                .filter(|j| candidats[i].contains(j))
+                                .collect()
+                        }
                     })
                     .collect();
 
@@ -923,6 +1002,39 @@ impl Table {
                     continue;
                 };
 
+                // ── Le contrôle de FORME, sur le résultat.
+                //
+                // Les lois du groupe disent qu'une règle est cohérente avec
+                // elle-même ; elles ne disent pas qu'elle est juste. Une règle qui
+                // tournerait tout d'un quart de trop les passerait toutes. Ici on
+                // compare le solide de l'état d'arrivée à celui de la source
+                // TRANSFORMÉE — la seule question qui compte pour l'utilisateur.
+                //
+                // Un écart n'est pas forcément une faute : il l'est quand le pack
+                // déclarait la bonne forme et qu'on ne l'a pas prise, il ne l'est
+                // pas quand le pack ne la déclare nulle part. Le premier cas est un
+                // bug et se voit ici en développement ; le second est une limite du
+                // pack, et se dit à l'appelant.
+                let approchees = (0..etats.len())
+                    .filter(|&i| images_geo[i].is_some() && droites[exact[i]] != images_geo[i])
+                    .count();
+                if approchees > 0 {
+                    debug_assert!(
+                        (0..etats.len()).all(|i| {
+                            images_geo[i].is_none()
+                                || droites[exact[i]] == images_geo[i]
+                                || candidats[i].is_empty()
+                        }),
+                        "{nom} · {} : la bonne forme était déclarée et on ne l'a pas prise",
+                        t.nom()
+                    );
+                    manques.push(Manque::FormeApprochee {
+                        bloc: nom.clone(),
+                        transfo: t,
+                        etats: approchees,
+                    });
+                }
+
                 exacts[t.indice()] = Some(exact.iter().map(|&j| j as u32).collect());
                 regles[t.indice()] = Some(r);
             }
@@ -1006,10 +1118,12 @@ impl Table {
             }
 
             table.manques.extend(manques.into_iter().filter(|m| {
-                // `NonDecomposable` reste vrai même quand l'exacte existe :
-                // c'est justement ce qu'il dit.
-                matches!(m, Manque::NonDecomposable { .. })
-                    || exacts[m.transfo().indice()].is_none()
+                // `NonDecomposable` et `FormeApprochee` restent vrais même quand
+                // l'exacte existe : c'est justement ce qu'ils disent.
+                matches!(
+                    m,
+                    Manque::NonDecomposable { .. } | Manque::FormeApprochee { .. }
+                ) || exacts[m.transfo().indice()].is_none()
             }));
 
             if exacts.iter().any(|p| p.is_some()) {

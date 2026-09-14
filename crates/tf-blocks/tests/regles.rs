@@ -618,3 +618,82 @@ fn les_deux_miroirs_sont_liees_par_le_demi_tour() {
         );
     }
 }
+
+#[test]
+fn toute_regle_rend_la_bonne_forme_ou_le_dit() {
+    // Le contrôle qui ne relit RIEN du raisonnement qui a produit la règle :
+    // on prend l'état d'arrivée et on compare son SOLIDE à celui de la source
+    // transformée. Les lois du groupe ne savent pas voir ça — une règle qui
+    // tournerait tout d'un quart de trop les passerait toutes.
+    //
+    // Un écart est tolérable quand le pack ne déclare la bonne forme nulle
+    // part (un bloc chiral sans jumeau, une bougie). Il ne l'est JAMAIS quand
+    // elle est là et qu'on ne l'a pas prise : c'est le bug qui a fait rendre à
+    // tous les escaliers en coin et à toutes les portes ouvertes du pack du
+    // serveur leur version TOURNÉE au lieu de la réfléchie, et les lois du
+    // groupe n'y voyaient rien. Alors la table doit l'ANNONCER, faute de quoi
+    // l'utilisateur n'a aucun moyen de distinguer « ce bloc ne peut pas
+    // tourner » de « ce bloc tourne de travers ».
+    let d = pack();
+    let src = Dossier::ouvrir(d.path()).unwrap();
+    let mut cat = Catalogue::new(Disposition::Codex);
+    cat.charger_codex(&src).unwrap();
+    cat.resoudre_modeles(&src);
+    let t = Table::deriver(&cat);
+
+    let mut fausses = 0usize;
+    let mut annoncees = 0usize;
+    for (nom, bs) in cat.blocs() {
+        let tf_assets::Blockstate::Variants(variants) = bs else {
+            continue;
+        };
+        let geo: std::collections::BTreeMap<String, (tf_assets::Id, u16, u16)> = variants
+            .iter()
+            .filter_map(|(cle, v)| {
+                v.first()
+                    .map(|v| (norm(cle), (v.modele.clone(), v.x % 360, v.y % 360)))
+            })
+            .collect();
+        for tr in TOUTES {
+            for cle in geo.keys() {
+                let etat = format!("{nom}|{cle}");
+                let Some(arrivee) = t.transformer(&etat, tr) else {
+                    continue;
+                };
+                let apres = norm(arrivee.split_once('|').map_or("", |(_, p)| p));
+                let (Some(depart), Some(cible)) = (geo.get(cle), geo.get(&apres)) else {
+                    continue;
+                };
+                let attendu =
+                    tf_blocks::geometrie::empreinte(&cat, &depart.0, depart.1, depart.2, Some(tr));
+                let obtenu =
+                    tf_blocks::geometrie::empreinte(&cat, &cible.0, cible.1, cible.2, None);
+                if attendu.is_some() && attendu != obtenu {
+                    fausses += 1;
+                    assert!(
+                        t.manques.iter().any(|m| matches!(
+                            m,
+                            tf_blocks::Manque::FormeApprochee { bloc, transfo, .. }
+                                if bloc == nom && transfo == &tr
+                        )),
+                        "{etat} · {} → {arrivee} rend une autre forme, sans que la table le dise",
+                        tr.nom()
+                    );
+                }
+            }
+        }
+    }
+    for m in &t.manques {
+        if let tf_blocks::Manque::FormeApprochee { etats, .. } = m {
+            annoncees += etats;
+        }
+    }
+    // Le pack de test CONTIENT des cas approchés (la marche chirale sans son
+    // jumeau, les bougies) : zéro ici voudrait dire que le contrôle ne
+    // contrôle rien.
+    assert!(fausses > 0, "le pack de test doit exercer le cas approché");
+    assert_eq!(
+        fausses, annoncees,
+        "la table doit annoncer exactement les formes approchées, ni plus ni moins"
+    );
+}

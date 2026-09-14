@@ -146,6 +146,101 @@ fn main() {
     }
     println!("\nlois du groupe vérifiées sur {verifies} états : {fautes} fautes");
 
+    // ── Le contrôle INDÉPENDANT : la règle rend-elle la bonne FORME ?
+    //
+    // Les lois du groupe disent qu'une règle est cohérente avec elle-même ;
+    // elles ne disent pas qu'elle est juste. Une règle qui tournerait tout
+    // d'un quart de trop les passerait toutes. Ici on ne relit rien du
+    // raisonnement qui a produit la règle : on prend l'état d'arrivée et on
+    // compare son SOLIDE à celui de la source transformée. Si les deux
+    // diffèrent, l'utilisateur verrait un bloc de travers.
+    let mut controles = 0usize;
+    let mut formes_fausses = 0usize;
+    let mut fausses_par_bloc: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    for (nom, bs) in cat.blocs() {
+        let tf_assets::Blockstate::Variants(variants) = bs else {
+            continue;
+        };
+        let geo: BTreeMap<String, (tf_assets::Id, u16, u16)> = variants
+            .iter()
+            .filter_map(|(cle, v)| {
+                v.first()
+                    .map(|v| (normaliser(cle), (v.modele.clone(), v.x % 360, v.y % 360)))
+            })
+            .collect();
+        for t in TOUTES {
+            for cle in geo.keys() {
+                let etat = format!("{nom}|{cle}");
+                let Some(arrivee) = table.transformer(&etat, t) else {
+                    continue;
+                };
+                let apres = normaliser(arrivee.split_once('|').map_or("", |(_, p)| p));
+                let (Some(depart), Some(cible)) = (geo.get(cle), geo.get(&apres)) else {
+                    continue;
+                };
+                let attendu =
+                    tf_blocks::geometrie::empreinte(&cat, &depart.0, depart.1, depart.2, Some(t));
+                let obtenu =
+                    tf_blocks::geometrie::empreinte(&cat, &cible.0, cible.1, cible.2, None);
+                if attendu.is_none() {
+                    continue;
+                }
+                controles += 1;
+                if attendu != obtenu {
+                    formes_fausses += 1;
+                    let e = fausses_par_bloc
+                        .entry(nom.clone())
+                        .or_insert((0usize, String::new()));
+                    e.0 += 1;
+                    if e.1.is_empty() {
+                        e.1 = format!("{} : {etat} → {arrivee}", t.nom());
+                    }
+                }
+            }
+        }
+    }
+    // Ce que la dérivation a ELLE-MÊME annoncé comme approché.
+    let annoncees: usize = table
+        .manques
+        .iter()
+        .filter_map(|m| match m {
+            tf_blocks::Manque::FormeApprochee { etats, .. } => Some(*etats),
+            _ => None,
+        })
+        .sum();
+    println!("formes vérifiées sur {controles} couples : {formes_fausses} fausses");
+    println!(
+        "   dont annoncées par la dérivation : {annoncees}{}",
+        if annoncees == formes_fausses {
+            "  ← le contrôle indépendant ne trouve RIEN que la table ne dise déjà"
+        } else {
+            "  ← ÉCART : une forme fausse n'est pas annoncée"
+        }
+    );
+    println!("   {} blocs touchés", fausses_par_bloc.len());
+    let mut classe: BTreeMap<&str, usize> = BTreeMap::new();
+    for (nom, (n, _)) in &fausses_par_bloc {
+        let famille = [
+            "door",
+            "candle",
+            "stairs",
+            "trapdoor",
+            "fence_gate",
+            "bed",
+            "slab",
+        ]
+        .into_iter()
+        .find(|f| nom.contains(f))
+        .unwrap_or("autre");
+        *classe.entry(famille).or_default() += n;
+    }
+    for (f, n) in &classe {
+        println!("   {f:12} {n:5}");
+    }
+    for (nom, (n, ex)) in fausses_par_bloc.iter().take(6) {
+        println!("   · {nom} ({n}) — {ex}");
+    }
+
     // ── un exemple lisible
     for exemple in [
         "minefield:dark_oak_ladder|facing=north",
