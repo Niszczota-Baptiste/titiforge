@@ -1,0 +1,13 @@
+[package]
+name = "tf-mesh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Maillage : passe gloutonne, passe de modèles, occlusion ambiante"
+
+[dependencies]
+tf-anvil.workspace = true
+
+[dev-dependencies]
+tf-bench = { path = "../tf-bench" }

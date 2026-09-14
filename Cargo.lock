@@ -453,6 +453,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-mesh"
+version = "0.1.0"
+dependencies = [
+ "tf-anvil",
+ "tf-bench",
+]
+
+[[package]]
 name = "tf-nbt"
 version = "0.1.0"
 
