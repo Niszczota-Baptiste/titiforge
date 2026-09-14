@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tf-nbt", "crates/tf-anvil", "crates/tf-bench", "proto"]
+members = ["crates/tf-nbt", "crates/tf-anvil", "crates/tf-world", "crates/tf-bench", "proto"]
 
 [workspace.package]
 edition = "2021"
@@ -10,6 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 tf-nbt = { path = "crates/tf-nbt" }
 tf-anvil = { path = "crates/tf-anvil" }
+tf-world = { path = "crates/tf-world" }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 rayon = "1"
 memmap2 = "0.9"

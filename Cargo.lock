@@ -466,6 +466,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-world"
+version = "0.1.0"
+dependencies = [
+ "tf-anvil",
+ "tf-nbt",
+]
+
+[[package]]
 name = "tinytemplate"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

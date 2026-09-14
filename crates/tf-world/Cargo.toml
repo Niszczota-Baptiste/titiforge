@@ -1,0 +1,16 @@
+[package]
+name = "tf-world"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Monde résident : adressage, streaming plafonné en octets, staging, annulation"
+
+[dependencies]
+tf-anvil.workspace = true
+tf-nbt.workspace = true
+
+# tf-anvil est déjà une dépendance, mais un test d'intégration est un crate
+# à part : il ne voit que l'API publique du crate testé et ses dev-dependencies.
+[dev-dependencies]
+tf-anvil.workspace = true
