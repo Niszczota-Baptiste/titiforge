@@ -10,13 +10,20 @@ use tf_anvil::StateId;
 
 /// Un cuboïde d'un modèle, en **seizièmes de bloc**.
 ///
-/// Minecraft autorise `-16` à `32` — le dossier d'une chaise Minefield monte à
-/// 20. Cadrer sur `0..16` rognerait le modèle, ce qui se voit tout de suite sur
-/// une icône et jamais dans un test qui n'utiliserait que des cubes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Minecraft autorise `-16` à `32` — mesuré sur le pack du serveur, les bornes
+/// réelles vont de −16 à 29. Cadrer sur `0..16` rognerait le modèle, ce qui se
+/// voit tout de suite sur une icône et jamais dans un test qui n'utiliserait
+/// que des cubes.
+///
+/// En **flottants**, et c'est mesuré : sur les 125 382 coordonnées du pack
+/// Minefield, **17,2 % ne sont pas entières** — surtout des demis (16 571),
+/// mais aussi des dixièmes (`.6`, `.2`, `.4`, `.3`, `.9`) qu'aucune fraction
+/// binaire ne représente. Les arrondir au seizième re-quantifierait un
+/// cinquième de la géométrie du serveur, et une chaise sortirait de travers.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cuboide {
-    pub min: [i8; 3],
-    pub max: [i8; 3],
+    pub min: [f32; 3],
+    pub max: [f32; 3],
     /// Masque des faces DÉCLARÉES par le modèle, bit par face (voir `Face`).
     /// Un modèle qui ne déclare pas une face ne la dessine pas.
     pub faces: u8,
@@ -28,8 +35,8 @@ pub struct Cuboide {
 impl Cuboide {
     /// Le cube plein, toutes faces déclarées et toutes cullables.
     pub const PLEIN: Cuboide = Cuboide {
-        min: [0, 0, 0],
-        max: [16, 16, 16],
+        min: [0.0, 0.0, 0.0],
+        max: [16.0, 16.0, 16.0],
         faces: 0x3F,
         cull: 0x3F,
     };
@@ -38,27 +45,27 @@ impl Cuboide {
     /// porte sur la GÉOMÉTRIE — « un seul cuboïde » n'est pas le bon critère :
     /// `grass_block` en déclare deux (le cube, puis la couche d'herbe teintée)
     /// et se retrouverait classé « modèle ».
-    pub const fn remplit(&self) -> bool {
-        self.min[0] == 0
-            && self.min[1] == 0
-            && self.min[2] == 0
-            && self.max[0] == 16
-            && self.max[1] == 16
-            && self.max[2] == 16
+    pub fn remplit(&self) -> bool {
+        self.min[0] <= 0.0
+            && self.min[1] <= 0.0
+            && self.min[2] <= 0.0
+            && self.max[0] >= 16.0
+            && self.max[1] >= 16.0
+            && self.max[2] >= 16.0
     }
 
     /// Vrai si la face `f` de ce cuboïde est à RAS du bord du bloc.
     ///
     /// Seules celles-là peuvent être masquées par un voisin : une face au
     /// milieu du bloc reste visible quoi qu'il y ait à côté.
-    pub const fn au_bord(&self, f: Face) -> bool {
+    pub fn au_bord(&self, f: Face) -> bool {
         match f {
-            Face::MoinsX => self.min[0] == 0,
-            Face::PlusX => self.max[0] == 16,
-            Face::MoinsY => self.min[1] == 0,
-            Face::PlusY => self.max[1] == 16,
-            Face::MoinsZ => self.min[2] == 0,
-            Face::PlusZ => self.max[2] == 16,
+            Face::MoinsX => self.min[0] <= 0.0,
+            Face::PlusX => self.max[0] >= 16.0,
+            Face::MoinsY => self.min[1] <= 0.0,
+            Face::PlusY => self.max[1] >= 16.0,
+            Face::MoinsZ => self.min[2] <= 0.0,
+            Face::PlusZ => self.max[2] >= 16.0,
         }
     }
 }

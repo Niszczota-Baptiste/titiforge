@@ -23,8 +23,8 @@ fn table() -> TableFormes {
         false,
         false,
         vec![Cuboide {
-            min: [0, 0, 0],
-            max: [16, 8, 16],
+            min: [0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0],
             faces: 0x3F,
             cull: Face::MoinsY.bit(), // seule la face du bas porte cullface
         }],
@@ -36,14 +36,14 @@ fn table() -> TableFormes {
             // Deux quads croisés, comme une plante. Plats sur un axe, donc
             // deux de leurs faces sont d'aire nulle.
             Cuboide {
-                min: [0, 0, 8],
-                max: [16, 16, 8],
+                min: [0.0, 0.0, 8.0],
+                max: [16.0, 16.0, 8.0],
                 faces: Face::MoinsZ.bit() | Face::PlusZ.bit(),
                 cull: 0,
             },
             Cuboide {
-                min: [8, 0, 0],
-                max: [8, 16, 16],
+                min: [8.0, 0.0, 0.0],
+                max: [8.0, 16.0, 16.0],
                 faces: Face::MoinsX.bit() | Face::PlusX.bit(),
                 cull: 0,
             },
@@ -79,13 +79,13 @@ fn l_ordre_des_faces_est_celui_que_le_mailleur_produit() {
     assert_eq!(m.quads.len(), 6, "un cube isolé montre ses six faces");
 
     // Chaque face doit être du BON côté du bloc.
-    let attendu: [(Face, [i16; 3]); 6] = [
-        (Face::MoinsX, [5 * 16, 5 * 16, 5 * 16]),
-        (Face::PlusX, [6 * 16, 5 * 16, 5 * 16]),
-        (Face::MoinsY, [5 * 16, 5 * 16, 5 * 16]),
-        (Face::PlusY, [5 * 16, 6 * 16, 5 * 16]),
-        (Face::MoinsZ, [5 * 16, 5 * 16, 5 * 16]),
-        (Face::PlusZ, [5 * 16, 5 * 16, 6 * 16]),
+    let attendu: [(Face, [f32; 3]); 6] = [
+        (Face::MoinsX, [5.0 * 16.0, 5.0 * 16.0, 5.0 * 16.0]),
+        (Face::PlusX, [6.0 * 16.0, 5.0 * 16.0, 5.0 * 16.0]),
+        (Face::MoinsY, [5.0 * 16.0, 5.0 * 16.0, 5.0 * 16.0]),
+        (Face::PlusY, [5.0 * 16.0, 6.0 * 16.0, 5.0 * 16.0]),
+        (Face::MoinsZ, [5.0 * 16.0, 5.0 * 16.0, 5.0 * 16.0]),
+        (Face::PlusZ, [5.0 * 16.0, 5.0 * 16.0, 6.0 * 16.0]),
     ];
     for (face, min) in attendu {
         let q = m
@@ -94,7 +94,7 @@ fn l_ordre_des_faces_est_celui_que_le_mailleur_produit() {
             .find(|q| q.face == face)
             .unwrap_or_else(|| panic!("{face:?} absente"));
         assert_eq!(q.min, min, "{face:?} du mauvais côté du bloc");
-        assert_eq!(q.taille, [16, 16], "{face:?}");
+        assert_eq!(q.taille, [16.0, 16.0], "{face:?}");
     }
 
     // Et l'ordre déclaré est bien celui de production.
@@ -123,7 +123,7 @@ fn une_face_et_son_opposee_ne_sortent_pas_au_meme_endroit() {
             neg.min[axe], pos.min[axe],
             "axe {axe} : les deux faces d'un même bloc sortiraient superposées"
         );
-        assert_eq!(pos.min[axe] - neg.min[axe], 16);
+        assert_eq!(pos.min[axe] - neg.min[axe], 16.0);
     }
 }
 
@@ -152,20 +152,24 @@ fn un_mur_plein_sort_en_un_quad_par_face() {
     );
 
     let grand = m.quads.iter().find(|q| q.face == Face::PlusZ).unwrap();
-    assert_eq!(grand.taille, [16 * 16, 16 * 16], "16 × 16 blocs en un quad");
+    assert_eq!(
+        grand.taille,
+        [16.0 * 16.0, 16.0 * 16.0],
+        "16 × 16 blocs en un quad"
+    );
     // Une tranche fait 16 blocs de long sur UN d'épaisseur. Lire la taille
     // dans l'autre ordre donnerait un quad de 1 × 16 — invisible sur un mur
     // carré, faux partout ailleurs.
     let tranche = m.quads.iter().find(|q| q.face == Face::PlusY).unwrap();
     assert_eq!(
         tranche.taille,
-        [16 * 16, 16],
+        [16.0 * 16.0, 16.0],
         "le plan de ±Y est (X, Z) dans cet ordre : 16 blocs en X, 1 en Z"
     );
     let flanc = m.quads.iter().find(|q| q.face == Face::MoinsX).unwrap();
     assert_eq!(
         flanc.taille,
-        [16 * 16, 16],
+        [16.0 * 16.0, 16.0],
         "le plan de ±X est (Y, Z) : 16 blocs en Y, 1 en Z"
     );
 }
@@ -184,8 +188,8 @@ fn deux_etats_distincts_ne_fusionnent_pas() {
         2,
         "fusionner deux états donnerait un quad qui porte la texture d'un seul"
     );
-    assert_eq!(dessus[0].taille, [8 * 16, 16]);
-    assert_eq!(dessus[1].taille, [8 * 16, 16]);
+    assert_eq!(dessus[0].taille, [8.0 * 16.0, 16.0]);
+    assert_eq!(dessus[1].taille, [8.0 * 16.0, 16.0]);
 }
 
 #[test]
@@ -205,7 +209,10 @@ fn un_cube_plein_de_section_ne_montre_que_sa_peau() {
         6,
         "4 096 blocs, 24 576 faces, 6 quads : c'est tout l'intérêt du glouton"
     );
-    assert!(m.quads.iter().all(|q| q.taille == [16 * 16, 16 * 16]));
+    assert!(m
+        .quads
+        .iter()
+        .all(|q| q.taille == [16.0 * 16.0, 16.0 * 16.0]));
 }
 
 #[test]
@@ -251,9 +258,9 @@ fn la_fusion_ne_perd_ni_n_invente_de_surface() {
 }
 
 /// Compte la surface face par face, sans aucune fusion.
-fn aire_naive(v: &Voisinage, t: &dyn Formes) -> i64 {
+fn aire_naive(v: &Voisinage, t: &dyn Formes) -> f64 {
     let n = COTE as i32;
-    let mut aire = 0i64;
+    let mut aire = 0f64;
     for y in 0..n {
         for z in 0..n {
             for x in 0..n {
@@ -263,7 +270,7 @@ fn aire_naive(v: &Voisinage, t: &dyn Formes) -> i64 {
                 for f in FACES {
                     let p = f.pas();
                     if !t.opaque(v.get(x + p[0], y + p[1], z + p[2])) {
-                        aire += 16 * 16;
+                        aire += 16.0 * 16.0;
                     }
                 }
             }
@@ -287,11 +294,15 @@ fn une_dalle_montre_ses_faces_et_pas_celles_d_un_cube() {
     let dessus = m.quads.iter().find(|q| q.face == Face::PlusY).unwrap();
     assert_eq!(
         dessus.min[1],
-        3 * 16 + 8,
+        3.0 * 16.0 + 8.0,
         "le dessus d'une dalle basse est à mi-hauteur, pas au sommet du bloc"
     );
     let cote = m.quads.iter().find(|q| q.face == Face::PlusX).unwrap();
-    assert_eq!(cote.taille, [8, 16], "haute de 8 seizièmes, large de 16");
+    assert_eq!(
+        cote.taille,
+        [8.0, 16.0],
+        "haute de 8 seizièmes, large de 16"
+    );
 }
 
 #[test]
@@ -379,7 +390,7 @@ fn un_cuboide_plat_n_emet_pas_de_quad_d_aire_nulle() {
     v.set(5, 5, 5, FLEUR);
     let m = quads_de(&v, &t);
     assert!(
-        m.quads.iter().all(|q| q.aire() > 0),
+        m.quads.iter().all(|q| q.aire() > 0.0),
         "un quad d'aire nulle est invisible et facturé"
     );
     assert_eq!(m.quads_modele, 4, "deux quads croisés, deux faces chacun");

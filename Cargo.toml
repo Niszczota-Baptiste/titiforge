@@ -5,6 +5,7 @@ members = [
     "crates/tf-anvil",
     "crates/tf-world",
     "crates/tf-mesh",
+    "crates/tf-assets",
     "crates/tf-bench",
     "proto",
 ]
@@ -19,6 +20,7 @@ tf-nbt = { path = "crates/tf-nbt" }
 tf-anvil = { path = "crates/tf-anvil" }
 tf-world = { path = "crates/tf-world" }
 tf-mesh = { path = "crates/tf-mesh" }
+tf-assets = { path = "crates/tf-assets" }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 rayon = "1"
 memmap2 = "0.9"

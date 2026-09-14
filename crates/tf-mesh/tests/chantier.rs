@@ -16,8 +16,8 @@ fn table() -> TableFormes {
         false,
         false,
         vec![Cuboide {
-            min: [0, 0, 0],
-            max: [16, 8, 16],
+            min: [0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0],
             faces: 0x3F,
             cull: 0x3F,
         }],

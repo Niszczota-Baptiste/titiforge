@@ -59,29 +59,26 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, f: &F, op: &Opacite, out:
                         let axe = face.axe();
                         let (au, av) = axes_du_plan(axe);
                         let profondeur = if face.positif() {
-                            c.max[axe] as i32
+                            c.max[axe]
                         } else {
-                            c.min[axe] as i32
+                            c.min[axe]
                         };
-                        let mut min = [0i32; 3];
+                        let mut min = [0.0f32; 3];
                         min[axe] = profondeur;
-                        min[au] = c.min[au] as i32;
-                        min[av] = c.min[av] as i32;
-                        let taille = [
-                            (c.max[au] - c.min[au]) as i16,
-                            (c.max[av] - c.min[av]) as i16,
-                        ];
+                        min[au] = c.min[au];
+                        min[av] = c.min[av];
+                        let taille = [c.max[au] - c.min[au], c.max[av] - c.min[av]];
                         // Un cuboïde plat sur cet axe n'a pas de face à
                         // montrer : l'émettre donnerait un quad d'aire nulle,
                         // invisible et facturé.
-                        if taille[0] == 0 || taille[1] == 0 {
+                        if taille[0] == 0.0 || taille[1] == 0.0 {
                             continue;
                         }
                         out.quads.push(Quad {
                             min: [
-                                (x * 16 + min[0]) as i16,
-                                (y * 16 + min[1]) as i16,
-                                (z * 16 + min[2]) as i16,
+                                x as f32 * 16.0 + min[0],
+                                y as f32 * 16.0 + min[1],
+                                z as f32 * 16.0 + min[2],
                             ],
                             taille,
                             face,

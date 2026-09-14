@@ -36,11 +36,11 @@ fn table() -> (TableFormes, Vec<StateId>) {
         let cub: Vec<Cuboide> = (0..*n)
             .map(|k| {
                 let t = (*n).max(1) as i32;
-                let bas = (k as i32 * 16 / t) as i8;
-                let haut = ((k as i32 + 1) * 16 / t).max(bas as i32 + 1).min(16) as i8;
+                let bas = (k as i32 * 16 / t) as f32;
+                let haut = (((k as i32 + 1) * 16 / t).max(bas as i32 + 1).min(16)) as f32;
                 Cuboide {
-                    min: [0, bas, 0],
-                    max: [16, haut, 16],
+                    min: [0.0, bas, 0.0],
+                    max: [16.0, haut, 16.0],
                     faces: 0x3F,
                     cull: 0x3F,
                 }
@@ -215,11 +215,12 @@ fn charger(octets: &[u8], b: &Build) -> (tf_mesh::Grille, TableFormes) {
                     (0..*n)
                         .map(|k| {
                             let tt = (*n).max(1) as i32;
-                            let bas = (k as i32 * 16 / tt) as i8;
-                            let haut = ((k as i32 + 1) * 16 / tt).max(bas as i32 + 1).min(16) as i8;
+                            let bas = (k as i32 * 16 / tt) as f32;
+                            let haut =
+                                (((k as i32 + 1) * 16 / tt).max(bas as i32 + 1).min(16)) as f32;
                             Cuboide {
-                                min: [0, bas, 0],
-                                max: [16, haut, 16],
+                                min: [0.0, bas, 0.0],
+                                max: [16.0, haut, 16.0],
                                 faces: 0x3F,
                                 cull: 0x3F,
                             }

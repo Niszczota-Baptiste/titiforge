@@ -1,0 +1,15 @@
+[package]
+name = "tf-assets"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Packs de ressources : blockstates → modèles → textures, sans jamais rien redistribuer"
+
+[dependencies]
+tf-anvil.workspace = true
+tf-mesh.workspace = true
+serde_json = "1"
+
+[dev-dependencies]
+tf-bench = { path = "../tf-bench" }

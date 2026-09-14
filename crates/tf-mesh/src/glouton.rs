@@ -175,8 +175,12 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
                     // fonctions se répondent, et un test le vérifie.
                     let min = compose(axe, profondeur, iu, iv);
                     out.quads.push(Quad {
-                        min: [min[0] as i16 * 16, min[1] as i16 * 16, min[2] as i16 * 16],
-                        taille: [(w * 16) as i16, (h * 16) as i16],
+                        min: [
+                            min[0] as f32 * 16.0,
+                            min[1] as f32 * 16.0,
+                            min[2] as f32 * 16.0,
+                        ],
+                        taille: [(w * 16) as f32, (h * 16) as f32],
                         face,
                         id: (marque - 1) as StateId,
                     });

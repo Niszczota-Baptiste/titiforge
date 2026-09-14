@@ -441,6 +441,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-assets"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tf-anvil",
+ "tf-bench",
+ "tf-mesh",
+]
+
+[[package]]
 name = "tf-bench"
 version = "0.1.0"
 dependencies = [

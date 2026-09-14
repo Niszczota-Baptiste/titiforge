@@ -21,11 +21,11 @@ use tf_mesh::{mailler, mailler_pour_gpu, TableFormes, Voisinage};
 fn cuboide(k: u8, total: u8) -> Cuboide {
     let t = total.max(1) as i32;
     let k = k as i32;
-    let bas = (k * 16 / t) as i8;
-    let haut = (((k + 1) * 16 / t).max(k * 16 / t + 1)) as i8;
+    let bas = (k * 16 / t) as f32;
+    let haut = (((k + 1) * 16 / t).max(k * 16 / t + 1)) as f32;
     Cuboide {
-        min: [0, bas, 0],
-        max: [16, haut.min(16), 16],
+        min: [0.0, bas, 0.0],
+        max: [16.0, haut.min(16.0), 16.0],
         faces: 0x3F,
         // Seules les faces à ras portent `cullface`, comme dans un vrai modèle.
         cull: 0x3F,

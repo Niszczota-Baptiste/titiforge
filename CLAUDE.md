@@ -167,7 +167,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (264 tests aujourd'hui)
+cargo test            # tous les crates (298 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -181,6 +181,11 @@ cargo run --release -p tf-bench --example profil_build     # ce que la fixture d
 cargo run --release -p tf-bench --example poids_editions   # ce qu'une opération fait réécrire
 cargo bench -p tf-mesh                                     # le maillage, passe par passe
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
+
+# le pack RÉEL du serveur (rien n'est copié dans le dépôt)
+cargo run --release -p tf-assets --example recenser     -- ../titisite/public/codex
+cargo run --release -p tf-assets --example mailler_reel -- ../titisite/public/codex
+TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --nocapture
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -205,7 +210,7 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
-  tf-assets/   jars de mods, packs, blockstates→models→textures, atlas
+  tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures, atlas à venir
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
   tf-render/   wgpu : arène, multi-draw indirect, HZB, transparence
   tf-app/      coque winit + egui, outils, commandes
@@ -371,6 +376,28 @@ propres à ce dépôt.
   93 Mo de quads remplacés par 2,8 Mo de poses. Contrepartie : le masquage des
   faces se déplace dans le shader, puisqu'il n'y a plus de faces à supprimer
   ici.
+- **Un cuboïde en seizièmes ENTIERS re-quantifie le pack.** Mesuré sur les
+  125 382 coordonnées de modèle du serveur : **17,2 % ne sont pas entières** —
+  surtout des demis, mais aussi des dixièmes (`.6`, `.2`, `.4`) qu'aucune
+  fraction binaire ne représente. Les arrondir déplacerait un cinquième de la
+  géométrie, et une chaise sortirait de travers. Les cuboïdes et les quads sont
+  en flottants ; ceux de la passe gloutonne tombent sur des multiples de 16,
+  donc exacts et comparables sans tolérance.
+- **`uv` absent n'est pas `[0,0,0,0]`, et ce n'est pas un cas limite.** Mesuré :
+  **26 à 32 % des faces** du pack n'en déclarent pas. Les uv se DÉDUISENT des
+  bornes du cuboïde — c'est ce qui fait qu'une dalle montre la moitié basse de
+  sa texture au lieu de la texture entière écrasée sur huit seizièmes.
+- **`cull` ne porte que les faces qui déclarent `cullface`**, pas toutes celles
+  qui sont à ras. Une dalle a son dessus à ras et sans `cullface` : un bloc
+  posé dessus ne doit pas le faire disparaître.
+- **Une variable de texture renvoie souvent à une autre.** `#top` → `#all` →
+  `block/stone`. Sans suivre la chaîne, la face porte le nom d'une variable et
+  aucune texture n'est trouvée. Et une variable qu'on ne résout pas RESTE
+  nommée : la remplacer par du vide ferait dire « texture absente : » sans
+  nommer la fautive.
+- **Un modèle nomme son parent, et un pack vient du disque d'un utilisateur.**
+  `../../../etc/passwd` est un nom de parent bien formé, et `a` parent de `b`
+  parent de `a` boucle jusqu'à la mort du processus. Les deux sont refusés.
 - **Une section d'air coûte 17 µs au mailleur, et il ne peut rien y faire.**
   De l'air et des plantes sont indiscernables du point de vue de l'opacité.
   C'est l'APPELANT qui le sait gratuitement — sa palette a une entrée, et c'est
