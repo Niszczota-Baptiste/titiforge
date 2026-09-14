@@ -14,6 +14,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod build;
+pub mod catalogue;
+
+pub use build::Build;
+pub use catalogue::{Forme, BLOCS};
+
 use std::io::Write;
 
 use tf_anvil::{Packing, SECTOR};
