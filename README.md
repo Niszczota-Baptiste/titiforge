@@ -53,6 +53,14 @@ opérations WorldEdit s'expriment sur la palette seule.
 
 Le chemin rapide n'est pas « itérer plus vite », c'est **ne pas itérer**.
 
+## Où va ce projet
+
+Pas « un MCEdit moderne » : les fondations d'un **écosystème de création de
+contenu Minecraft**, dont la première mission et le cœur permanent est d'être
+le meilleur éditeur de mondes possible. PNJ, quêtes, outils cinématiques,
+génération procédurale viendront par greffons — et aucun ne doit dégrader le
+cœur. Les contraintes techniques que ça impose : **`docs/VISION.md`**.
+
 ## État — phase 0
 
 `tf-nbt` et `tf-anvil` sont écrits et testés : **125 tests**, lecture et

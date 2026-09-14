@@ -15,6 +15,33 @@ blocs, son packing Litematica et ses 44 pièges sont du savoir payé cher.
 Cible : Minecraft Java récent, Fabric / Forge / NeoForge, blocs moddés. Gros
 builds pour le serveur Minefield.
 
+## Où va ce projet
+
+Pas « un MCEdit moderne » : les fondations d'un **écosystème de création de
+contenu Minecraft**, dont la première mission — et le cœur permanent — est
+d'être le meilleur éditeur de mondes possible. PNJ, quêtes, routes, outils
+cinématiques, génération procédurale, rendu shaders viendront par **greffons**,
+jamais dans le cœur.
+
+Priorités, dans cet ordre et sans ambiguïté : **performances à grande échelle,
+stabilité, maintenabilité, extensibilité.** Et la règle qui tranche tout le
+reste : *aucune évolution future ne doit dégrader le cœur*.
+
+Les six contraintes techniques que ça impose sont dans **`docs/VISION.md`**. Les
+deux qui se cassent le plus facilement par inadvertance :
+
+- **Le greffon DÉCRIT, le cœur exécute.** Une API qui laisserait un greffon
+  appeler `set_block(x, y, z)` ferait retomber toute opération de greffon à
+  l'étage bloc — × 95 perdus, mesuré. Masques, motifs et formes sont des
+  DONNÉES que le cœur compile en plan d'exécution.
+- **Le journal d'annulation n'est pas un journal de blocs.** Un PNJ posé par un
+  greffon doit s'annuler avec le même Ctrl+Z qu'un `//set`. Le journal est une
+  suite d'entrées réversibles TYPÉES ; l'instantané de section n'en est qu'une.
+
+Ce qui se pose aujourd'hui, ce sont les **coutures** — registres plutôt
+qu'`enum` figés, journal typé, document de projet extensible. Le runtime de
+greffons ne se construit pas avant que le cœur soit fini.
+
 ## L'idée centrale
 
 Une section Anvil porte **une palette et 4 096 indices**. Presque toutes les
@@ -209,6 +236,16 @@ propres à ce dépôt.
   340 µs pour une section à grosse palette. Une table indexée sur la palette,
   construite une fois, ramène ça à O(palette + 4096). Même famille que le
   `findIndex` de `we-engine`, sous une autre forme.
+- **Une couture qu'on ne pose pas au départ devient une refonte.** Le journal
+  d'annulation a failli être conçu comme « des instantanés de section
+  compressés ». Correct pour les blocs, et impossible à étendre à ce qu'un
+  greffon pose — donc une refonte de toute la pile d'undo, et de tout ce qui
+  l'utilise. Coût de la version typée dès le départ : quelques heures.
+- **Ce qui est ancré dans le monde doit suivre les blocs qui le portent.** Un
+  PNJ posé à (120, 64, −300) bouge si l'utilisateur translate la région. C'est
+  le même piège que `we-engine` a payé sur les block entities — « un build
+  pivoté abandonne ses coffres » — et il reviendra à chaque nouveau type de
+  donnée ancrée.
 - **Une optimisation non vérifiée est une corruption silencieuse.** Ici elle
   tombe sur la sauvegarde d'un utilisateur. Toute stratégie rapide se compare
   au résultat de la stratégie lente sur le même monde, et le compte doit être

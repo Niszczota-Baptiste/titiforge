@@ -28,9 +28,18 @@ zéro, `criterion` avec les scénarios de `we-engine` sous leurs noms actuels.
 ## Phase 1 — Monde résident · 3–4 semaines
 
 `tf-world` : cache LRU plafonné en **octets**, streaming piloté par la caméra,
-copie de staging, journal d'undo **par section** en zstd (chaîne de révisions
-façon MCEdit2, mais à la section et non au chunk), `probeWorldLock`, sauvegarde
-zip horodatée avant toute écriture.
+copie de staging, `probeWorldLock`, sauvegarde zip horodatée avant toute
+écriture.
+
+Le **journal d'annulation** est une suite d'entrées réversibles **typées** —
+instantané de sections en zstd, avant/après d'un document de projet, charge de
+défaisage d'un greffon — et non un journal de blocs. Voir `docs/VISION.md` :
+c'est une couture, et la retrofiter coûterait une refonte de toute la pile
+d'undo.
+
+Le **document de projet** est extensible dès le départ, avec identité stable et
+version : c'est là que vivront les PNJ, les quêtes et les routes, et leur
+ancrage doit suivre les blocs qui les portent.
 
 > **Sortie.** Monde de 800 régions ouvert ; RAM bornée au budget déclaré ;
 > aucune pause > 8 ms sur le fil principal.
@@ -40,6 +49,11 @@ zip horodatée avant toute écriture.
 `tf-mesh` parallèle (portage du greedy meshing + occlusion ambiante), arène
 GPU sous-allouée par section, `multi_draw_indirect`, frustum en compute shader,
 atlas en texture-tableau construit depuis le pack de l'utilisateur.
+
+Le rendu s'organise en **graphe de passes nommées**, pas en pipeline figé :
+c'est ce qui permettra à un greffon d'insérer une passe, et au rendu hors ligne
+(captures haute qualité, shaders) d'être un autre graphe plutôt qu'un mode
+dégradé du premier.
 
 > **Sortie.** 60 FPS soutenus, rayon 512 blocs, sur un vrai monde Minefield.
 > < 5 appels de dessin (référence : 1 281).
