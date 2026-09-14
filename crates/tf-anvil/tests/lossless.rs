@@ -19,8 +19,8 @@ use common::frozen;
 
 use std::borrow::Cow;
 use tf_anvil::{
-    decode_section, deflate, inflate, read, scan, section_edits, splice, write, Edit, Interner,
-    Section, VOL,
+    decode_section, deflate, inflate, inverse_edits, read, scan, section_edits, splice, write,
+    Edit, Interner, Section, SpliceError, VOL,
 };
 
 // ── outils du test ──────────────────────────────────────────────────────────
@@ -66,7 +66,9 @@ fn editer_chunk(
             continue;
         };
         if f(&mut section, &interner) {
-            edits.extend(section_edits(&section, sc, &interner).expect("palette résoluble"));
+            edits.extend(
+                section_edits(&inflated, &section, sc, &interner).expect("palette résoluble"),
+            );
         }
     }
 
@@ -521,4 +523,309 @@ fn les_proprietes_sont_triees_dans_la_cle_quel_que_soit_l_ordre_du_fichier() {
     ];
     assert_eq!(state_key("x:y", &mut a), state_key("x:y", &mut b));
     assert_eq!(state_key("x:y", &mut a), "x:y|facing=north,half=top");
+}
+
+// ── l'inverse d'un splice ───────────────────────────────────────────────────
+
+fn ed(start: usize, end: usize, bytes: &[u8]) -> Edit {
+    Edit {
+        span: tf_nbt::Span { start, end },
+        bytes: bytes.to_vec(),
+    }
+}
+
+#[test]
+fn l_inverse_d_un_splice_rend_l_original() {
+    let avant = b"0123456789ABCDEF".to_vec();
+    let mut edits = vec![
+        ed(2, 4, b"xx"),   // même longueur
+        ed(6, 7, b"LONG"), // plus long
+        ed(10, 14, b"c"),  // plus court
+    ];
+    let apres = splice(&avant, &mut edits).unwrap();
+
+    let mut inv = inverse_edits(&avant, &edits).unwrap();
+    assert_eq!(splice(&apres, &mut inv).unwrap(), avant);
+}
+
+#[test]
+fn l_inverse_tient_quel_que_soit_l_ordre_du_vecteur() {
+    let avant = b"0123456789ABCDEF".to_vec();
+    let desordre = vec![ed(10, 14, b"c"), ed(2, 4, b"xx"), ed(6, 7, b"LONG")];
+
+    // `splice` trie en place ; `inverse_edits` reçoit ici la version NON triée.
+    let mut pour_splice = desordre.clone();
+    let apres = splice(&avant, &mut pour_splice).unwrap();
+
+    let mut inv = inverse_edits(&avant, &desordre).unwrap();
+    assert_eq!(
+        splice(&apres, &mut inv).unwrap(),
+        avant,
+        "trier est à la charge de la fonction : un appelant qui l'oublie \
+         viserait le milieu du chunk et le corromprait sans rien signaler"
+    );
+}
+
+#[test]
+fn une_insertion_et_une_suppression_s_inversent_aussi() {
+    let avant = b"abcdef".to_vec();
+    let mut edits = vec![
+        ed(3, 3, b"[insere]"), // insertion pure
+        ed(4, 6, b""),         // suppression pure
+    ];
+    let apres = splice(&avant, &mut edits).unwrap();
+    assert_eq!(apres, b"abc[insere]d".to_vec());
+
+    let mut inv = inverse_edits(&avant, &edits).unwrap();
+    assert_eq!(splice(&apres, &mut inv).unwrap(), avant);
+}
+
+#[test]
+fn inverser_deux_fois_redonne_les_editions_de_depart() {
+    // C'est la propriété dont dépend le REFAIRE : annuler puis refaire doit
+    // reposer exactement les mêmes octets.
+    let avant = b"0123456789ABCDEF".to_vec();
+    let mut edits = vec![ed(2, 4, b"xx"), ed(6, 7, b"LONG"), ed(10, 14, b"c")];
+    let apres = splice(&avant, &mut edits).unwrap();
+
+    let inv = inverse_edits(&avant, &edits).unwrap();
+    let mut refaire = inverse_edits(&apres, &inv).unwrap();
+
+    let mut rendu = inv.clone();
+    let revenu = splice(&apres, &mut rendu).unwrap();
+    assert_eq!(revenu, avant);
+    assert_eq!(splice(&revenu, &mut refaire).unwrap(), apres);
+}
+
+#[test]
+fn inverser_un_ensemble_vide_ne_fait_rien() {
+    let avant = b"abc".to_vec();
+    assert!(inverse_edits(&avant, &[]).unwrap().is_empty());
+}
+
+#[test]
+fn inverser_des_plages_qui_se_chevauchent_est_refuse() {
+    let avant = b"0123456789".to_vec();
+    assert_eq!(
+        inverse_edits(&avant, &[ed(2, 6, b"x"), ed(4, 8, b"y")]),
+        Err(SpliceError::Overlap),
+        "un chevauchement n'a pas d'inverse : le même octet aurait deux \
+         valeurs d'origine"
+    );
+    assert_eq!(
+        inverse_edits(&avant, &[ed(8, 20, b"x")]),
+        Err(SpliceError::OutOfBounds)
+    );
+}
+
+#[test]
+fn l_inverse_d_un_vrai_chunk_le_restaure_octet_pour_octet() {
+    // Le cas qui compte : une opération de PALETTE sur un vrai chunk, avec ses
+    // champs moddés et ses sections de largeurs de bits différentes.
+    let src = petite_region();
+    let region = read(&src, 0, 0).unwrap();
+    let raw = region.get(0, 0).unwrap();
+    let avant = inflate(&raw.payload, raw.compression).unwrap();
+
+    let scanned = scan(&avant).unwrap();
+    let mut interner = Interner::new();
+    let mut edits: Vec<Edit> = Vec::new();
+    for sc in &scanned.sections {
+        let Some(mut section) = decode_section(&avant, &scanned, sc, &mut interner).unwrap() else {
+            continue;
+        };
+        let Some(cible) = interner.get("minecraft:bloc_5") else {
+            continue;
+        };
+        let remplacant = interner.intern("minecraft:deepslate");
+        if section.replace_state(cible, remplacant) > 0 {
+            edits.extend(section_edits(&avant, &section, sc, &interner).unwrap());
+        }
+    }
+    assert!(!edits.is_empty(), "l'opération doit avoir mordu");
+
+    let apres = splice(&avant, &mut edits).unwrap();
+    assert_ne!(apres, avant);
+
+    let poids: usize = edits.iter().map(|e| e.bytes.len()).sum();
+    eprintln!(
+        "palette seule : {poids} octets réécrits sur {}",
+        avant.len()
+    );
+    assert!(
+        poids < avant.len() / 50,
+        "une opération de palette ne réécrit que la palette : {poids} octets \
+         contre un chunk de {} — c'est ce qui rend l'annulation proportionnelle \
+         à ce qui a été ÉCRIT, et non à ce qui a été survolé",
+        avant.len()
+    );
+
+    let mut inv = inverse_edits(&avant, &edits).unwrap();
+    let poids_inv: usize = inv.iter().map(|e| e.bytes.len()).sum();
+    assert!(poids_inv < avant.len() / 50, "l'annulation aussi");
+
+    assert_eq!(
+        splice(&apres, &mut inv).unwrap(),
+        avant,
+        "octet pour octet, champs moddés compris"
+    );
+}
+
+// ── éditions minimales ──────────────────────────────────────────────────────
+
+/// Les éditions produites pour UN chunk, sans les appliquer.
+fn editions_de(src: &[u8], f: impl Fn(&mut Section, &Interner) -> bool) -> (Vec<Edit>, Vec<u8>) {
+    let region = read(src, 0, 0).unwrap();
+    let raw = region.get(0, 0).unwrap();
+    let inflated = inflate(&raw.payload, raw.compression).unwrap();
+    let scanned = scan(&inflated).unwrap();
+    let mut interner = Interner::new();
+    let mut edits = Vec::new();
+    for sc in &scanned.sections {
+        let Some(mut section) = decode_section(&inflated, &scanned, sc, &mut interner).unwrap()
+        else {
+            continue;
+        };
+        if f(&mut section, &interner) {
+            edits.extend(section_edits(&inflated, &section, sc, &interner).unwrap());
+        }
+    }
+    (edits, inflated)
+}
+
+#[test]
+fn une_operation_qui_ne_change_rien_ne_produit_aucune_edition() {
+    // Une section décodée puis ré-encodée sans modification doit donner les
+    // MÊMES octets — sinon le round-trip lossless ne tiendrait que par chance.
+    let (edits, _) = editions_de(&petite_region(), |_, _| true);
+    assert!(
+        edits.is_empty(),
+        "sinon chaque opération salirait tous les chunks qu'elle survole, et \
+         le journal d'annulation se remplirait d'entrées vides : {edits:?}"
+    );
+}
+
+#[test]
+fn remplir_une_section_fait_disparaitre_son_tableau_d_indices() {
+    // `//set` : la palette tombe à une entrée. 1.18+ n'écrit alors PAS de
+    // `data` — en laisser un de la mauvaise longueur casse le chargement du
+    // chunk côté jeu.
+    let src = petite_region();
+    let neuf = editer_chunk(&src, 0, 0, |s, _| {
+        if s.y != -1 {
+            return false;
+        }
+        let mut i = Interner::new();
+        // On repasse par l'interner de la section : `set_uniform` prend un id
+        // déjà présent dans sa palette.
+        let _ = &mut i;
+        let premier = s.palette[0];
+        s.set_uniform(premier);
+        true
+    });
+
+    // Relu par le décodeur INDÉPENDANT : c'est lui qui dit si le fichier est
+    // encore un fichier Minecraft.
+    let region = frozen::decode_region(&neuf);
+    let chunk = region.get(&(0, 0)).expect("chunk présent");
+    let etats = frozen::chunk_states(chunk);
+    let blocs = etats.get(&-1).expect("section présente");
+    assert_eq!(blocs.len(), 4096);
+    assert!(
+        blocs.iter().all(|b| *b == blocs[0]),
+        "tous les blocs sont le même"
+    );
+
+    // Et le champ `data` a vraiment DISPARU du fichier.
+    let section = chunk
+        .root
+        .get("sections")
+        .and_then(|t| t.as_list())
+        .expect("liste de sections")
+        .iter()
+        .find(|s| s.get("Y").and_then(|y| y.as_i8()) == Some(-1))
+        .expect("section -1");
+    let bs = section.get("block_states").expect("block_states");
+    assert_eq!(
+        bs.get("palette").and_then(|p| p.as_list()).unwrap().len(),
+        1
+    );
+    assert!(
+        bs.get("data").is_none(),
+        "1.18+ n'écrit pas de `data` pour une palette d'une entrée ; en \
+         laisser un de la mauvaise longueur casse le chargement du chunk"
+    );
+}
+
+#[test]
+fn une_edition_est_resserree_sur_ce_qui_change_vraiment() {
+    let src = petite_region();
+    let (edits, inflated) = editions_de(&src, |s, i| {
+        let Some(cible) = i.get("minecraft:bloc_5") else {
+            return false;
+        };
+        // Un nom de MÊME longueur : rien ne se décale, seul le texte change.
+        let Some(remplacant) = i.get("minecraft:bloc_9") else {
+            return false;
+        };
+        s.replace_state(cible, remplacant) > 0
+    });
+    assert!(!edits.is_empty());
+
+    let poids: usize = edits.iter().map(|e| e.bytes.len()).sum();
+    assert!(
+        poids <= 8 * edits.len(),
+        "changer un chiffre dans un nom doit réécrire une poignée d'octets, \
+         pas la liste de palette : {poids} octets pour {} éditions",
+        edits.len()
+    );
+
+    // Et le résultat reste exact.
+    let mut e = edits.clone();
+    let apres = splice(&inflated, &mut e).unwrap();
+    let mut inv = inverse_edits(&inflated, &edits).unwrap();
+    assert_eq!(splice(&apres, &mut inv).unwrap(), inflated);
+}
+
+#[test]
+fn un_nom_plus_court_se_resserre_malgre_le_decalage() {
+    // Le suffixe commun se compare depuis la FIN des deux tampons : il tient
+    // donc même quand le nouveau nom raccourcit tout ce qui le suit.
+    let src = petite_region();
+    let (edits, inflated) = editions_de(&src, |s, i| {
+        let Some(cible) = i.get("minecraft:bloc_11") else {
+            return false;
+        };
+        let mut n = 0;
+        for e in s.palette.iter() {
+            if *e == cible {
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return false;
+        }
+        // « minecraft:air » est plus court de 5 caractères.
+        let court = i.get("minecraft:air").unwrap_or(cible);
+        s.replace_state(cible, court) > 0
+    });
+
+    if edits.is_empty() {
+        return; // la palette de cette fixture ne portait pas ce bloc
+    }
+    let poids: usize = edits.iter().map(|e| e.bytes.len()).sum();
+    assert!(
+        poids < 64,
+        "un nom raccourci décale la suite, mais le suffixe commun se compare \
+         depuis la fin : {poids} octets"
+    );
+
+    let mut e = edits.clone();
+    let apres = splice(&inflated, &mut e).unwrap();
+    let mut inv = inverse_edits(&inflated, &edits).unwrap();
+    assert_eq!(
+        splice(&apres, &mut inv).unwrap(),
+        inflated,
+        "et l'aller-retour reste exact"
+    );
 }

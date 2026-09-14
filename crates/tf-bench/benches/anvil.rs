@@ -283,7 +283,7 @@ fn bench_ecriture(c: &mut Criterion) {
             let mut edits: Vec<Edit> = Vec::new();
             for (sc, sec) in scanned.sections.iter().zip(secs.iter()) {
                 if let Some(sec) = sec {
-                    edits.extend(section_edits(sec, sc, &interner).unwrap());
+                    edits.extend(section_edits(&inflated, sec, sc, &interner).unwrap());
                 }
             }
             let neuf = splice(black_box(&inflated), &mut edits).unwrap();

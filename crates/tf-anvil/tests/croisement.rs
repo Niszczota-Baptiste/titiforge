@@ -108,7 +108,7 @@ fn un_replace_sur_un_mca_tiers_donne_le_bon_recensement() {
             for (sc, section) in scanned.sections.iter().zip(sections.iter_mut()) {
                 let Some(section) = section else { continue };
                 if section.replace_state(a, b) > 0 {
-                    edits.extend(section_edits(section, sc, &interner).unwrap());
+                    edits.extend(section_edits(&inflated, section, sc, &interner).unwrap());
                 }
             }
             if edits.is_empty() {

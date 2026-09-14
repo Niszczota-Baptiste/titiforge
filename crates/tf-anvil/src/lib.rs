@@ -19,8 +19,8 @@ pub mod section;
 pub mod state;
 
 pub use chunk::{
-    decode_section, encode_section, scan, section_edits, splice, ChunkScan, Edit, EncodeError,
-    ScannedSection, SectionSpans, SpliceError,
+    decode_section, encode_section, inverse_edits, scan, section_edits, splice, ChunkScan, Edit,
+    EncodeError, ScannedSection, SectionSpans, SpliceError,
 };
 pub use codec::{deflate, inflate, CodecError};
 pub use format::{

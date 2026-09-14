@@ -252,7 +252,7 @@ fn une_palette_ancienne_qui_grandit_se_splice_sans_abimer_ses_voisins() {
         "20 → 30 entrées tient toujours en 5 bits"
     );
 
-    let mut edits = section_edits(&sec, sc, &interner).unwrap();
+    let mut edits = section_edits(&inflated, &sec, sc, &interner).unwrap();
     assert_eq!(edits.len(), 2, "Palette et BlockStates, deux champs frères");
     let neuf = splice(&inflated, &mut edits).unwrap();
     assert!(neuf.len() > inflated.len(), "la charge a grossi");

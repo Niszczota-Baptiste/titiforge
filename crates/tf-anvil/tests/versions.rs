@@ -234,7 +234,7 @@ fn editer_ancien(
         };
         if f(&mut section, &mut interner) {
             edits.extend(
-                section_edits(&section, sc, &interner)
+                section_edits(&inflated, &section, sc, &interner)
                     .expect("la palette doit se résoudre dans CET interner"),
             );
         }
@@ -481,14 +481,14 @@ fn section_edits_refuse_une_palette_qui_vient_d_un_autre_interner() {
         .unwrap()
         .unwrap();
     assert!(
-        section_edits(&section, sc, &vrai).is_ok(),
+        section_edits(&inflated, &section, sc, &vrai).is_ok(),
         "avec le bon interner"
     );
 
     // Un identifiant qui n'existe pas dans cet interner.
     section.palette[0] = vrai.len() as u32 + 500;
     assert_eq!(
-        section_edits(&section, sc, &vrai).unwrap_err(),
+        section_edits(&inflated, &section, sc, &vrai).unwrap_err(),
         EncodeError::UnknownState(section.palette[0]),
         "un état non résoluble doit refuser l'écriture en DISANT pourquoi"
     );

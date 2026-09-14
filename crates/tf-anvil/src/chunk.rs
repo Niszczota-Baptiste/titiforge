@@ -60,8 +60,24 @@ impl Default for ChunkScan {
 /// Où vivent les octets de blocs d'une section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionSpans {
-    /// 1.18+ : un seul compound `block_states` contenant `palette` et `data`.
-    Flat { states: Span },
+    /// 1.18+ : `palette` et `data` sont deux champs d'un compound
+    /// `block_states`.
+    ///
+    /// Les deux sont relevés SÉPARÉMENT, et ce n'est pas du détail : un
+    /// `//replace` ne change que des noms. Réécrire le compound entier
+    /// traînerait les 4096 indices derrière chaque changement de palette —
+    /// mesuré sur un chunk réel, 21 922 octets réécrits au lieu de 1 536, et
+    /// autant à stocker dans le journal d'annulation.
+    ///
+    /// `data` est la plage du CHAMP entier — type, nom et charge — pour qu'une
+    /// section qui redevient homogène puisse le faire disparaître : 1.18+
+    /// n'écrit pas de `data` pour une palette d'une entrée, et en laisser un
+    /// de la mauvaise longueur casse le chargement du chunk.
+    Flat {
+        palette: Span,
+        data: Option<Span>,
+        insert_at: usize,
+    },
     /// 1.13 – 1.17 : deux champs FRÈRES du compound de section. `blocks` est
     /// absent quand la section est homogène — il faut alors l'insérer, d'où
     /// `insert_at`, qui pointe sur le `TAG_End` de la section.
@@ -182,39 +198,66 @@ fn scan_section_list(c: &mut Cur, layout: Layout) -> R<Vec<ScannedSection>> {
 
 fn scan_flat_section(c: &mut Cur) -> R<ScannedSection> {
     let mut y: i8 = 0;
-    let mut states = None;
+    let mut spans = None;
     let mut palette_len = 0;
     let mut data_len = 0;
     while let Some((t, key)) = c.next_field()? {
         match (t, key) {
             (tag::BYTE, "Y") => y = c.i8()?,
             (tag::COMPOUND, "block_states") => {
-                let span = c.span_of_payload(t)?;
+                let bloc = c.span_of_payload(t)?;
                 // Relecture des deux SEULS en-têtes, sans rien matérialiser :
                 // le curseur est déjà sorti du compound, on y repasse au vol.
-                let mut p = Cur::at(c.buf(), span.start);
-                while let Some((ft, fk)) = p.next_field()? {
+                let mut p = Cur::at(c.buf(), bloc.start);
+                let mut palette = None;
+                let mut data = None;
+                let fin;
+                loop {
+                    // La position AVANT l'en-tête : si c'est le `TAG_End` du
+                    // compound, c'est là qu'il faudra insérer un `data` absent.
+                    let avant = p.pos();
+                    let Some((ft, fk)) = p.next_field()? else {
+                        fin = avant;
+                        break;
+                    };
                     match (ft, fk) {
                         (tag::LIST, "palette") => {
+                            let debut = p.pos();
                             let (_, n) = p.list_header()?;
                             palette_len = n;
                             p.skip_list_body(tag::COMPOUND, n)?;
+                            palette = Some(Span {
+                                start: debut,
+                                end: p.pos(),
+                            });
                         }
                         (tag::LONG_ARRAY, "data") => {
                             data_len = p.array_len()?;
                             p.skip(data_len * 8)?;
+                            // Le CHAMP, pas la charge : `avant` pointe sur
+                            // l'octet de type.
+                            data = Some(Span {
+                                start: avant,
+                                end: p.pos(),
+                            });
                         }
                         _ => p.skip_payload(ft)?,
                     }
                 }
-                states = Some(span);
+                // Un `block_states` sans `palette` n'est pas une section de
+                // blocs : ne rien réécrire vaut mieux qu'écrire à l'aveugle.
+                spans = palette.map(|palette| SectionSpans::Flat {
+                    palette,
+                    data,
+                    insert_at: fin,
+                });
             }
             _ => c.skip_payload(t)?,
         }
     }
     Ok(ScannedSection {
         y,
-        spans: states.map(|states| SectionSpans::Flat { states }),
+        spans,
         palette_len,
         data_len,
     })
@@ -281,18 +324,33 @@ pub fn decode_section(
     let Some(spans) = scanned.spans else {
         return Ok(None);
     };
+    // Les deux dispositions se lisent pareil : la palette est une liste de
+    // compounds, les indices un tableau de longs. Seul l'emplacement change, et
+    // le balayage l'a déjà relevé.
     let (palette, data) = match spans {
-        SectionSpans::Flat { states } => decode_flat(inflated, states, interner)?,
+        SectionSpans::Flat { palette, data, .. } => {
+            let pal = read_palette_list(&mut Cur::at(inflated, palette.start), interner)?;
+            // `data` est le CHAMP : on repasse son en-tête pour atteindre la
+            // charge.
+            let idx = match data {
+                Some(f) => {
+                    let mut c = Cur::at(inflated, f.start);
+                    c.next_field()?.ok_or(Trunc)?;
+                    c.long_array()?
+                }
+                None => Vec::new(),
+            };
+            (pal, idx)
+        }
         SectionSpans::Legacy {
             palette, blocks, ..
         } => {
-            let mut pc = Cur::at(inflated, palette.start);
-            let pal = read_palette_list(&mut pc, interner)?;
-            let data = match blocks {
+            let pal = read_palette_list(&mut Cur::at(inflated, palette.start), interner)?;
+            let idx = match blocks {
                 Some(b) => Cur::at(inflated, b.start).long_array()?,
                 None => Vec::new(),
             };
-            (pal, data)
+            (pal, idx)
         }
     };
 
@@ -325,27 +383,6 @@ pub fn decode_section(
         data: data.into_boxed_slice(),
         packing,
     }))
-}
-
-fn decode_flat(
-    inflated: &[u8],
-    states: Span,
-    interner: &mut Interner,
-) -> R<(Vec<StateId>, Vec<u64>)> {
-    let mut c = Cur::at(inflated, states.start);
-    let mut palette = Vec::new();
-    let mut data = Vec::new();
-    while let Some((t, key)) = c.next_field()? {
-        if c.pos() > states.end {
-            return Err(Trunc);
-        }
-        match (t, key) {
-            (tag::LIST, "palette") => palette = read_palette_list(&mut c, interner)?,
-            (tag::LONG_ARRAY, "data") => data = c.long_array()?,
-            _ => c.skip_payload(t)?,
-        }
-    }
-    Ok((palette, data))
 }
 
 /// Lit une liste de compounds de palette, le curseur étant sur son EN-TÊTE.
@@ -393,7 +430,7 @@ fn read_palette_entry(c: &mut Cur, interner: &mut Interner) -> R<StateId> {
 /// Une plage de longueur nulle est une INSERTION à cette position — c'est ce
 /// qui permet d'ajouter un `BlockStates` à une section 1.13–1.17 qui était
 /// homogène et ne devient plus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
     pub span: Span,
     pub bytes: Vec<u8>,
@@ -437,7 +474,15 @@ impl std::error::Error for EncodeError {}
 
 /// Compose les éditions qui réécrivent une section, dans sa disposition
 /// d'origine.
+///
+/// Une édition dont les octets sont DÉJÀ ceux du chunk n'est pas produite. Ce
+/// n'est pas une micro-optimisation : c'est ce qui fait qu'une opération de
+/// palette ne traîne pas les 4 096 indices derrière elle, et qu'une opération
+/// qui ne change rien ne salit pas le chunk — donc ne remplit pas le journal
+/// d'annulation d'entrées vides. La comparaison porte sur les OCTETS, pas sur
+/// un drapeau : un drapeau finit par mentir.
 pub fn section_edits(
+    inflated: &[u8],
     section: &Section,
     scanned: &ScannedSection,
     interner: &Interner,
@@ -452,11 +497,41 @@ pub fn section_edits(
         .map(|(n, p)| tf_nbt::PaletteEntryRef { name: n, props: p })
         .collect();
 
-    Ok(match spans {
-        SectionSpans::Flat { states } => vec![Edit {
-            span: states,
-            bytes: tf_nbt::block_states_payload(&refs, &section.data),
-        }],
+    let mut out = match spans {
+        SectionSpans::Flat {
+            palette,
+            data,
+            insert_at,
+        } => {
+            let mut out = vec![Edit {
+                span: palette,
+                bytes: tf_nbt::palette_list_payload(&refs),
+            }];
+            // 1.18+ n'écrit pas de `data` pour une palette d'une entrée.
+            let voulu = if section.palette.len() > 1 && !section.data.is_empty() {
+                Some(tf_nbt::named_long_array("data", &section.data))
+            } else {
+                None
+            };
+            match (data, voulu) {
+                (Some(span), Some(bytes)) => out.push(Edit { span, bytes }),
+                // La section redevient homogène : le champ DISPARAÎT. En
+                // laisser un de la mauvaise longueur casse le chargement.
+                (Some(span), None) => out.push(Edit {
+                    span,
+                    bytes: Vec::new(),
+                }),
+                (None, Some(bytes)) => out.push(Edit {
+                    span: Span {
+                        start: insert_at,
+                        end: insert_at,
+                    },
+                    bytes,
+                }),
+                (None, None) => {}
+            }
+            out
+        }
         SectionSpans::Legacy {
             palette,
             blocks,
@@ -485,7 +560,50 @@ pub fn section_edits(
             }
             out
         }
-    })
+    };
+    // Chaque édition est RESSERRÉE sur ce qui change vraiment, et celles qui
+    // ne changent rien disparaissent.
+    out.retain_mut(|e| trim_edit(inflated, e));
+    Ok(out)
+}
+
+/// Resserre une édition sur la partie qui diffère réellement. Rend `false` si
+/// elle ne change rien.
+///
+/// C'est du diff d'octets, sans une ligne de connaissance NBT — et c'est ce qui
+/// le rend juste partout. Un `//replace pierre terre` ne change qu'un nom au
+/// milieu d'une liste de palette : le préfixe commun s'arrête à ce nom, et le
+/// SUFFIXE commun se compare depuis la fin des deux tampons, donc il tient même
+/// si le nouveau nom est plus court et décale tout ce qui suit. Mesuré sur un
+/// chunk réel à grosse palette : 11 840 octets réécrits sans, 180 avec.
+///
+/// L'enjeu n'est pas le splice, qui recopie de toute façon : c'est le JOURNAL.
+/// Il stocke les octets d'avant ET d'après ; les resserrer divise sa taille par
+/// le même facteur, et une annulation se paie alors pour ce qu'une opération a
+/// écrit, pas pour ce qu'elle a survolé.
+fn trim_edit(inflated: &[u8], e: &mut Edit) -> bool {
+    let ancien = &inflated[e.span.start..e.span.end];
+    if ancien == e.bytes.as_slice() {
+        return false;
+    }
+    let plafond = ancien.len().min(e.bytes.len());
+
+    let mut p = 0;
+    while p < plafond && ancien[p] == e.bytes[p] {
+        p += 1;
+    }
+    let mut s = 0;
+    while s < plafond - p && ancien[ancien.len() - 1 - s] == e.bytes[e.bytes.len() - 1 - s] {
+        s += 1;
+    }
+
+    e.bytes.truncate(e.bytes.len() - s);
+    e.bytes.drain(..p);
+    e.span = Span {
+        start: e.span.start + p,
+        end: e.span.end - s,
+    };
+    true
 }
 
 /// Recompose la charge d'un `block_states` (1.18+) depuis une section.
@@ -576,3 +694,50 @@ impl std::fmt::Display for SpliceError {
 }
 
 impl std::error::Error for SpliceError {}
+
+/// Les éditions qui ANNULENT `edits`.
+///
+/// C'est ce qui rend l'annulation proportionnelle à ce qu'une opération a
+/// vraiment écrit, et non à ce qu'elle a survolé. Un `//replace pierre terre`
+/// sur 100 millions de blocs ne réécrit que des entrées de palette : son
+/// annulation pèse quelques centaines d'octets par chunk, pas 26 Mo. Copier
+/// le chunk d'avant marcherait aussi et coûterait 260 fois plus.
+///
+/// `avant` est l'état sur lequel `edits` a été appliqué ; le résultat
+/// s'applique au RÉSULTAT de ce splice. Les plages se décalent donc du cumul
+/// des changements de longueur qui les précèdent — les oublier viserait le
+/// milieu du chunk et le corromprait sans rien signaler.
+///
+/// `edits` doit avoir été trié par `splice`, qui le fait en place : les passer
+/// dans le désordre décrirait un autre résultat. Le tri est donc refait ici,
+/// sur une copie, pour que la fonction reste juste quel que soit l'appelant.
+pub fn inverse_edits(avant: &[u8], edits: &[Edit]) -> Result<Vec<Edit>, SpliceError> {
+    let mut tries: Vec<&Edit> = edits.iter().collect();
+    tries.sort_by_key(|e| (e.span.start, e.span.len()));
+
+    let mut prev_end = 0usize;
+    for e in tries.iter() {
+        if e.span.start < prev_end {
+            return Err(SpliceError::Overlap);
+        }
+        if e.span.end > avant.len() || e.span.start > e.span.end {
+            return Err(SpliceError::OutOfBounds);
+        }
+        prev_end = e.span.end;
+    }
+
+    let mut out = Vec::with_capacity(tries.len());
+    let mut decalage: isize = 0;
+    for e in tries {
+        let debut = (e.span.start as isize + decalage) as usize;
+        out.push(Edit {
+            span: Span {
+                start: debut,
+                end: debut + e.bytes.len(),
+            },
+            bytes: avant[e.span.start..e.span.end].to_vec(),
+        });
+        decalage += e.bytes.len() as isize - e.span.len() as isize;
+    }
+    Ok(out)
+}
