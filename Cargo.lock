@@ -1198,6 +1198,16 @@ name = "tf-nbt"
 version = "0.1.0"
 
 [[package]]
+name = "tf-ops"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "tf-anvil",
+ "tf-bench",
+ "tf-world",
+]
+
+[[package]]
 name = "tf-proto"
 version = "0.1.0"
 dependencies = [

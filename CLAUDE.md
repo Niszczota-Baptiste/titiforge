@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (343 tests aujourd'hui)
+cargo test            # tous les crates (363 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -184,6 +184,7 @@ cargo bench -p tf-bench
 cargo run --release -p tf-bench --example profil_build     # ce que la fixture de BUILD produit
 cargo run --release -p tf-bench --example poids_editions   # ce qu'une opération fait réécrire
 cargo bench -p tf-mesh                                     # le maillage, passe par passe
+cargo bench -p tf-ops                                      # les trois étages, avec leurs COMPTES
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
 
 # le pack RÉEL du serveur (rien n'est copié dans le dépôt)
@@ -223,7 +224,7 @@ crates/
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
-  tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
+  tf-ops/      répartition 3 étages ✅ · masques ✅ · motifs ✅ · sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -555,3 +556,33 @@ propres à ce dépôt.
   d'écran. `Manque::FormeApprochee` nomme le premier, un `debug_assert` refuse
   le second — et un test exige que le compte annoncé soit EXACTEMENT celui que
   le contrôle indépendant trouve, ni plus ni moins.
+- **Dépacker APRÈS avoir pris la palette écrase la section entière.** `unpack`
+  consulte la palette pour savoir si la section est homogène. Lui retirer la
+  palette d'abord la faisait répondre « homogène », donc rendre 4 096 zéros,
+  donc réécrire toute la section avec sa première entrée. Un mur entier changé
+  de bloc, sans la moindre erreur — attrapé dès la première exécution par le
+  croisement avec le chemin lent, et par rien d'autre. C'est très exactement
+  l'invariant « toute stratégie rapide se compare au résultat de la stratégie
+  lente », et il a payé son écriture le jour même.
+- **Compter les blocs modifiés coûte 31 × l'opération.** À l'étage palette,
+  c'est le parcours qu'on vient d'éviter : 1,35 ms sans, 50,1 ms avec, sur une
+  région pleine. Le comptage exact est donc une OPTION, jamais un service rendu
+  d'office — et un rapport qui rend `None` est plus honnête qu'un chiffre qui a
+  coûté trente fois le travail.
+- **Une sélection bordée d'un bloc coûte × 21.** Décalée d'un seul bloc, elle
+  fait tomber 2 892 sections sur 24 576 à l'étage bloc : 1,35 ms deviennent
+  28,9. Et une sélection d'utilisateur ne s'aligne presque jamais sur 16. C'est
+  là qu'ira la prochaine optimisation, pas ailleurs.
+- **Un tirage par bloc se fait dévorer par sa plomberie.** 18,6 ns par bloc
+  contre 2,4 pour la même boucle sans tirage. La somme des poids se recalculait
+  à CHAQUE bloc et le modulo était une division 64 bits, qui ne se pipeline
+  pas ; et hacher chaque axe avec une avalanche complète coûtait trois fois ce
+  qu'il fallait. Tirage compilé hors boucle, `(h × total) >> 64` au lieu du
+  modulo, une seule avalanche : **−35 %**.
+- **Un hachage bon marché se vérifie par PLAN, pas par moyenne.** Une
+  proportion globale juste à 50 % ne prouve rien : le défaut qui se voit à
+  l'écran est une tranche entière à 0 % ou 100 %, et une corrélation entre
+  cases voisines. On vérifie donc chaque tranche de chaque axe, les quatre
+  décalages de voisinage, et les bits BAS autant que les hauts — le tirage
+  prend les hauts, un test naïf prendrait les bas, et l'un passerait pendant
+  que l'autre montre un damier.

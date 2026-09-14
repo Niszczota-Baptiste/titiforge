@@ -416,3 +416,55 @@ La forme par propriété reste, mais comme **repli** pour un état que le pack n
 déclare pas — un monde plus récent que le pack en contient. Elle coûte une
 indexation de tableau en moins à l'exécution, et elle dit ce qu'elle ne peut
 pas porter au lieu de se taire.
+
+# La répartition à trois étages, mesurée dans `tf-ops`
+
+Le prototype avait prouvé les chiffres ; `tf-ops` les tient dans du code de
+production, avec une API que le cœur peut compiler. Mesuré sur une **région
+pleine** (100 663 296 blocs, 24 576 sections), monofil :
+
+| Opération | Étages déclenchés | Temps |
+|---|---|---:|
+| cible absente de la palette | 24 576 `rien` | 2,1 ms |
+| `//set` | 24 576 `section` | 2,2 ms |
+| `//replace` | 9 216 `palette`, 15 360 `rien` | **1,35 ms** |
+| `//replace`, sélection bordée d'un bloc | 6 324 `palette` + 2 892 `bloc` | 28,9 ms |
+| mélange pondéré (dépend de la position) | 24 576 `bloc` | 1,23 s |
+
+Les **comptes d'étages sont imprimés avec les temps**, et ce n'est pas
+décoratif : le prototype a annoncé une fois un chemin rapide que la mesure a
+démenti — « 0 sections rapides sur 9 216 ». Un bench qui ne compte pas les
+étages ne prouve pas que la répartition se déclenche.
+
+## Trois chiffres qui changent la conception
+
+**Compter coûte 31 × l'opération.** À l'étage palette, compter les blocs
+modifiés est exactement le parcours qu'on vient d'éviter : 1,35 ms sans,
+50,1 ms avec. Le comptage exact est donc une OPTION (`Plan::en_comptant`), pas
+un service rendu d'office. Une interface qui affiche « 12 345 blocs » le paie
+sciemment ; un script qui enchaîne vingt opérations ne le paie pas.
+
+**Une sélection bordée d'un bloc coûte × 21.** Décaler la sélection d'un seul
+bloc fait tomber 2 892 sections à l'étage bloc, et l'opération passe de 1,35 ms
+à 28,9. Or une sélection d'utilisateur ne s'aligne presque jamais sur 16. C'est
+le chiffre qui dit où ira la prochaine optimisation : une section partiellement
+couverte dont la partie couverte est uniforme peut encore éviter le parcours.
+
+**Le tirage par bloc était dominé par sa propre plomberie.** 18,6 ns par bloc au
+départ, contre 2,4 ns pour la même boucle sans tirage. Deux causes, mesurées
+séparément :
+
+| | Temps sur la région |
+|---|---:|
+| version d'origine | 1,877 s |
+| tirage compilé hors de la boucle (plus de somme ni de `%` par bloc) | 1,516 s |
+| une seule avalanche au lieu de trois | **1,228 s** |
+
+Soit **−35 %**. La somme des poids se recalculait à chaque bloc et le modulo
+était une division 64 bits, qui ne se pipeline pas ; le `(h × total) >> 64` de
+Lemire la remplace au prix d'un biais de 10⁻¹⁸. Et hacher chaque axe avec une
+avalanche complète coûtait trois fois ce qu'il fallait.
+
+**La formule de tirage est FIGÉE.** Un build fait avec une graine doit se
+rejouer à l'identique : changer la façon de tirer changerait tous les mondes
+déjà construits, sans que rien ne le signale.
