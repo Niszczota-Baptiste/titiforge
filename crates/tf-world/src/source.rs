@@ -58,6 +58,27 @@ impl Folder {
     }
 
     pub const ALL: [Folder; 3] = [Folder::Region, Folder::Entities, Folder::Poi];
+
+    /// Code STABLE pour les formats persistés. Le discriminant de l'`enum` ne
+    /// l'est pas : insérer une variante décalerait tout ce qui est déjà sur le
+    /// disque d'un utilisateur, et ses annulations viseraient le mauvais
+    /// dossier.
+    pub const fn code(self) -> u8 {
+        match self {
+            Folder::Region => 0,
+            Folder::Entities => 1,
+            Folder::Poi => 2,
+        }
+    }
+
+    pub const fn depuis_code(c: u8) -> Option<Folder> {
+        match c {
+            0 => Some(Folder::Region),
+            1 => Some(Folder::Entities),
+            2 => Some(Folder::Poi),
+            _ => None,
+        }
+    }
 }
 
 impl Dimension {

@@ -14,3 +14,7 @@ tf-nbt.workspace = true
 # à part : il ne voit que l'API publique du crate testé et ses dev-dependencies.
 [dev-dependencies]
 tf-anvil.workspace = true
+# Le générateur de régions, pour boucler la chaîne complète dans un test :
+# opérer sur un vrai `.mca`, enregistrer, annuler, comparer octet pour octet.
+# `tf-bench` ne dépend pas de `tf-world` — pas de cycle.
+tf-bench = { path = "../tf-bench" }

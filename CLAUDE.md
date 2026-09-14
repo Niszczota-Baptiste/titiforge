@@ -154,7 +154,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (179 tests aujourd'hui)
+cargo test            # tous les crates (240 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -185,7 +185,7 @@ crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
-  tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging, journal typé
+  tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   jars de mods, packs, blockstates→models→textures, atlas
@@ -290,3 +290,34 @@ propres à ce dépôt.
   tombe sur la sauvegarde d'un utilisateur. Toute stratégie rapide se compare
   au résultat de la stratégie lente sur le même monde, et le compte doit être
   exact au bloc près — pas « du même ordre ».
+- **Une plage de réécriture trop large coûte autant que le journal.**
+  `block_states` (1.18+) était relevé comme UN bloc : changer un nom de palette
+  traînait les 4 096 indices derrière lui. Mesuré sur une région pleine,
+  30 799 872 octets réécrits pour un `//replace` qui ne touche que des noms.
+  Les plages sont séparées, et chaque édition est RESSERRÉE sur ce qui diffère
+  vraiment (`trim_edit`) : **175 104 octets**, × 176. Le suffixe commun se
+  compare depuis la FIN des deux tampons, donc il tient même quand le nouveau
+  nom est plus court et décale tout ce qui suit. L'enjeu n'est pas le splice,
+  qui recopie de toute façon : c'est l'annulation, qui stocke les octets des
+  deux sens.
+- **Un drapeau de propreté finit par mentir ; des octets, non.** `section_edits`
+  compare ce qu'il va écrire à ce qui est DÉJÀ là. Une opération qui ne change
+  rien ne salit donc aucun chunk — et ne remplit pas le journal d'entrées
+  vides.
+- **Une section 1.18+ qui redevient homogène doit PERDRE son `data`.** Le jeu
+  n'en écrit pas pour une palette d'une entrée, et en laisser un de la mauvaise
+  longueur casse le chargement du chunk. C'est pour ça que la plage relevée est
+  celle du CHAMP entier et pas de sa seule charge.
+- **Le sens « refaire » ne se déduit pas du sens « annuler ».** Le reconstruire
+  après coup demanderait les octets d'après, qui ont justement disparu. Le
+  journal stocke les deux — ce qui n'est bon marché que parce que les éditions
+  sont resserrées.
+- **Un journal réécrit à chaque action perd tout à la première coupure.** Le
+  fichier est en AJOUT SEUL : annuler, refaire, abandonner une branche
+  n'écrivent que quelques octets à la fin. Un enregistrement coupé en plein vol
+  est repéré par sa longueur et son empreinte, et la lecture s'arrête là —
+  perdre la dernière action vaut mieux que perdre l'historique.
+- **Le discriminant d'un `enum` n'est pas un format de fichier.** Insérer une
+  variante décalerait tout ce qui est déjà sur le disque d'un utilisateur, et
+  ses annulations viseraient le mauvais dossier. `Folder::code()` est la
+  correspondance stable, écrite à la main.

@@ -470,6 +470,7 @@ name = "tf-world"
 version = "0.1.0"
 dependencies = [
  "tf-anvil",
+ "tf-bench",
  "tf-nbt",
 ]
 

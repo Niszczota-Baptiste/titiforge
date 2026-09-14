@@ -59,17 +59,32 @@ pub fn inflate(payload: &[u8], compression: Compression) -> Result<Vec<u8>, Code
 /// région n'est PAS un cache : il part sur le disque de l'utilisateur et y
 /// reste. C'est l'inverse du raisonnement qui met l'aperçu en niveau 1.
 pub fn deflate(bytes: &[u8], compression: Compression) -> Result<Vec<u8>, CodecError> {
+    deflate_level(bytes, compression, 6)
+}
+
+/// Recompresse à un niveau choisi.
+///
+/// Le niveau n'est pas un réglage de confort : mesuré dans `we-engine`, un
+/// cache d'aperçu passait 457 ms dans gzip pour gagner 350 ko sur un fichier
+/// régénérable. Au niveau 1 : 67 ms. Ce qui se régénère s'optimise pour le
+/// TEMPS ; ce qui part sur le disque de l'utilisateur pour la place.
+pub fn deflate_level(
+    bytes: &[u8],
+    compression: Compression,
+    level: u32,
+) -> Result<Vec<u8>, CodecError> {
     use std::io::Write;
     match compression {
         Compression::None => Ok(bytes.to_vec()),
         Compression::Other(b) => Err(CodecError::Unsupported(b)),
         Compression::Zlib => {
-            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+            let mut e =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(level));
             e.write_all(bytes).map_err(|_| CodecError::Corrupt)?;
             e.finish().map_err(|_| CodecError::Corrupt)
         }
         Compression::Gzip => {
-            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(level));
             e.write_all(bytes).map_err(|_| CodecError::Corrupt)?;
             e.finish().map_err(|_| CodecError::Corrupt)
         }

@@ -41,6 +41,28 @@ Le **document de projet** est extensible dès le départ, avec identité stable 
 version : c'est là que vivront les PNJ, les quêtes et les routes, et leur
 ancrage doit suivre les blocs qui les portent.
 
+> **En cours.** Cinq des six morceaux sont là, sous **240 tests** :
+>
+> | Morceau | État |
+> |---|---|
+> | Adressage (`coords.rs`) | ✅ division plancher partout, `BBox` → sections/chunks/régions |
+> | Résidence (`residency.rs`) | ✅ LRU plafonnée en OCTETS, épinglage, garde d'édition |
+> | Contrat de source (`source.rs`) | ✅ suite de contrat jouée contre deux implémentations |
+> | Dossier de save (`fs_source.rs`) | ✅ écriture atomique, sonde de verrou honnête |
+> | Staging (`staging.rs`) | ✅ composition source + couche, pierres tombales, ordre du commit imposé par la signature |
+> | Journal typé (`journal.rs`) | ✅ persistant, ajout seul, points de reprise nommés, budget + compactage |
+> | Streaming piloté par la caméra | ⬜ demande le viewport (phase 2) |
+> | Document de projet | ⬜ |
+>
+> **Ce que le journal pèse, mesuré.** Une région pleine (100 663 296 blocs),
+> un `//replace` de palette : **175 ko** d'éditions dans un sens — contre
+> 30,8 Mo si l'on réécrivait les blocs de champs entiers, et 26 Mo si l'on
+> copiait la région. L'annulation se paie pour ce qu'une opération a ÉCRIT.
+>
+> Le bout à bout est bouclé par un test : opérer sur un vrai `.mca`,
+> enregistrer, sérialiser le journal, le relire depuis ses OCTETS, annuler —
+> et retrouver le fichier de départ octet pour octet.
+
 > **Sortie.** Monde de 800 régions ouvert ; RAM bornée au budget déclaré ;
 > aucune pause > 8 ms sur le fil principal.
 
