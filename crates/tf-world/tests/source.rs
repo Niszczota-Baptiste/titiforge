@@ -174,13 +174,40 @@ fn contrat(nom: &str, s: &dyn RegionSource) {
         Err(SourceError::NotFound),
         "{nom}"
     );
+
+    // Les lister, sinon on ne peut les atteindre qu'en devinant : 1024 essais
+    // par région pour trouver les zéro à deux qui existent.
+    assert_eq!(
+        s.external_names(&Dimension::Overworld, Folder::Region)
+            .unwrap(),
+        vec![MCC.to_string()],
+        "{nom}"
+    );
+    assert!(
+        s.external_names(&Dimension::Nether, Folder::Region)
+            .unwrap()
+            .is_empty(),
+        "{nom} : une autre dimension n'hérite pas des charges déportées"
+    );
+    assert!(
+        s.external_names(&Dimension::Overworld, Folder::Entities)
+            .unwrap()
+            .is_empty(),
+        "{nom} : un autre dossier non plus"
+    );
+    assert!(
+        s.external_names(&Dimension::End, Folder::Poi)
+            .unwrap()
+            .is_empty(),
+        "{nom} : un dossier absent rend une liste vide, PAS une erreur"
+    );
 }
 
 // ── les deux implémentations ────────────────────────────────────────────────
 
 #[test]
 fn la_source_en_memoire_tient_le_contrat() {
-    let mut m = MemorySource::new();
+    let m = MemorySource::new();
     for (d, f, p, b) in jeu() {
         m.put_region(d, f, p, b);
     }
@@ -504,4 +531,44 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn seul_un_nom_de_charge_deportee_canonique_est_liste() {
+    let d = TempDir::new("noms-mcc");
+    fs::write(d.path().join("level.dat"), b"faux").unwrap();
+    let dir = d.path().join(Dimension::Overworld.dir(Folder::Region));
+    fs::create_dir_all(&dir).unwrap();
+
+    for nom in [
+        "c.3.-4.mcc",     // canonique
+        "c.03.-4.mcc",    // zéro en tête : Minecraft ne le relira jamais
+        "c.3.-4.mcc.bak", // copie de sauvegarde d'un utilisateur
+        "c.3..mcc",       // tronqué
+        "c.a.b.mcc",      // pas des nombres
+        "c.mcc",          // rien entre les points
+        "r.0.0.mca",      // une région, pas une charge
+        "notes.txt",
+    ] {
+        fs::write(dir.join(nom), b"x").unwrap();
+    }
+
+    let s = FsSource::open(d.path()).unwrap();
+    assert_eq!(
+        s.external_names(&Dimension::Overworld, Folder::Region)
+            .unwrap(),
+        vec!["c.3.-4.mcc".to_string()],
+        "un nom approchant n'est pas un nom : l'écrire produirait un fichier \
+         que le jeu ne relierait jamais à son chunk"
+    );
+
+    // Et la carte des régions ne se laisse pas polluer par tout ça non plus.
+    assert!(
+        s.overview(&Dimension::Overworld, Folder::Region)
+            .unwrap()
+            .regions
+            .iter()
+            .all(|r| r.pos == RegionPos::new(0, 0)),
+        "seul r.0.0.mca est une région"
+    );
 }

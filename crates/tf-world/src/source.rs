@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::RwLock;
 
 use crate::coords::RegionPos;
 
@@ -199,6 +200,14 @@ pub trait RegionSource: Send + Sync {
 
     /// Charge déportée d'un chunk surdimensionné (`c.X.Z.mcc`).
     fn read_external(&self, dim: &Dimension, folder: Folder, name: &str) -> Result<Vec<u8>>;
+
+    /// Noms des charges déportées présentes, triés.
+    ///
+    /// Sans ça, on ne peut les atteindre qu'en devinant leur nom : une région
+    /// porte 1024 chunks, donc 1024 essais par région pour trouver les zéro à
+    /// deux `.mcc` qui existent vraiment. C'est aussi ce qui permet de rouvrir
+    /// un staging sans perdre les charges déportées déjà écrites.
+    fn external_names(&self, dim: &Dimension, folder: Folder) -> Result<Vec<String>>;
 }
 
 /// Écriture. Séparée de la lecture : une source d'archive, ou une save montée
@@ -261,11 +270,19 @@ impl LockProbe {
 /// Source en mémoire. Sert aux tests, et prouve que la frontière en est
 /// vraiment une : si le contrat ne tenait que pour un système de fichiers, ce
 /// ne serait pas un contrat.
+///
+/// Les tampons sont derrière un verrou pour qu'elle puisse aussi être un
+/// PUITS : `RegionSink` écrit à travers `&self`, comme un système de fichiers.
+/// Sans ça, la moitié écriture du contrat n'aurait qu'une implémentation —
+/// donc ne serait pas un contrat.
+type CleRegion = (Dimension, Folder, RegionPos);
+type CleExterne = (Dimension, Folder, String);
+
 #[derive(Debug, Default)]
 pub struct MemorySource {
-    regions: BTreeMap<(Dimension, Folder, i32, i32), Vec<u8>>,
-    externals: BTreeMap<(Dimension, Folder, String), Vec<u8>>,
-    pub read_only: bool,
+    regions: RwLock<BTreeMap<CleRegion, Vec<u8>>>,
+    externals: RwLock<BTreeMap<CleExterne, Vec<u8>>>,
+    read_only: bool,
 }
 
 impl MemorySource {
@@ -273,19 +290,51 @@ impl MemorySource {
         Self::default()
     }
 
-    pub fn put_region(&mut self, dim: Dimension, folder: Folder, pos: RegionPos, bytes: Vec<u8>) {
-        self.regions.insert((dim, folder, pos.x, pos.z), bytes);
+    /// Une source en lecture seule : toute écriture répond `ReadOnly`.
+    pub fn en_lecture_seule() -> Self {
+        MemorySource {
+            read_only: true,
+            ..Default::default()
+        }
     }
 
-    pub fn put_external(&mut self, dim: Dimension, folder: Folder, name: &str, bytes: Vec<u8>) {
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn put_region(&self, dim: Dimension, folder: Folder, pos: RegionPos, bytes: Vec<u8>) {
+        self.regions
+            .write()
+            .unwrap()
+            .insert((dim, folder, pos), bytes);
+    }
+
+    pub fn put_external(&self, dim: Dimension, folder: Folder, name: &str, bytes: Vec<u8>) {
         self.externals
+            .write()
+            .unwrap()
             .insert((dim, folder, name.to_string()), bytes);
     }
 }
 
 impl RegionSource for MemorySource {
     fn dimensions(&self) -> Result<Vec<Dimension>> {
-        let mut v: Vec<Dimension> = self.regions.keys().map(|(d, ..)| d.clone()).collect();
+        // Les charges déportées comptent : une dimension qui n'a qu'un `.mcc`
+        // existe quand même, et l'oublier la rendrait invisible à la reprise.
+        let mut v: Vec<Dimension> = self
+            .regions
+            .read()
+            .unwrap()
+            .keys()
+            .map(|(d, ..)| d.clone())
+            .collect();
+        v.extend(
+            self.externals
+                .read()
+                .unwrap()
+                .keys()
+                .map(|(d, ..)| d.clone()),
+        );
         v.sort();
         v.dedup();
         Ok(v)
@@ -295,10 +344,12 @@ impl RegionSource for MemorySource {
         Ok(Overview {
             regions: self
                 .regions
+                .read()
+                .unwrap()
                 .iter()
-                .filter(|((d, f, ..), _)| d == dim && *f == folder)
-                .map(|((_, _, x, z), b)| RegionInfo {
-                    pos: RegionPos::new(*x, *z),
+                .filter(|((d, f, _), _)| d == dim && *f == folder)
+                .map(|((_, _, pos), b)| RegionInfo {
+                    pos: *pos,
                     bytes: b.len() as u64,
                 })
                 .collect(),
@@ -307,15 +358,73 @@ impl RegionSource for MemorySource {
 
     fn read_region(&self, dim: &Dimension, folder: Folder, pos: RegionPos) -> Result<Vec<u8>> {
         self.regions
-            .get(&(dim.clone(), folder, pos.x, pos.z))
+            .read()
+            .unwrap()
+            .get(&(dim.clone(), folder, pos))
             .cloned()
             .ok_or(SourceError::NotFound)
     }
 
     fn read_external(&self, dim: &Dimension, folder: Folder, name: &str) -> Result<Vec<u8>> {
         self.externals
+            .read()
+            .unwrap()
             .get(&(dim.clone(), folder, name.to_string()))
             .cloned()
             .ok_or(SourceError::NotFound)
+    }
+
+    fn external_names(&self, dim: &Dimension, folder: Folder) -> Result<Vec<String>> {
+        Ok(self
+            .externals
+            .read()
+            .unwrap()
+            .keys()
+            .filter(|(d, f, _)| d == dim && *f == folder)
+            .map(|(_, _, n)| n.clone())
+            .collect())
+    }
+}
+
+impl RegionSink for MemorySource {
+    fn write_region(
+        &self,
+        dim: &Dimension,
+        folder: Folder,
+        pos: RegionPos,
+        bytes: &[u8],
+    ) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.put_region(dim.clone(), folder, pos, bytes.to_vec());
+        Ok(())
+    }
+
+    fn write_external(
+        &self,
+        dim: &Dimension,
+        folder: Folder,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.put_external(dim.clone(), folder, name, bytes.to_vec());
+        Ok(())
+    }
+
+    /// Supprimer ce qui n'est pas là RÉUSSIT — c'est le cas normal : un chunk
+    /// qui rétrécit sous le seuil n'avait peut-être jamais débordé.
+    fn remove_external(&self, dim: &Dimension, folder: Folder, name: &str) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.externals
+            .write()
+            .unwrap()
+            .remove(&(dim.clone(), folder, name.to_string()));
+        Ok(())
     }
 }

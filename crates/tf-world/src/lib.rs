@@ -11,6 +11,7 @@ pub mod coords;
 pub mod fs_source;
 pub mod residency;
 pub mod source;
+pub mod staging;
 
 pub use coords::{
     floor_div, floor_mod, BBox, BlockPos, ChunkPos, Height, LocalBox, RegionPos, SectionPos,
@@ -21,3 +22,4 @@ pub use source::{
     Dimension, Folder, LockProbe, MemorySource, Overview, RegionInfo, RegionSink, RegionSource,
     SourceError,
 };
+pub use staging::{CommitError, CommitReport, RegionStore, Staging};

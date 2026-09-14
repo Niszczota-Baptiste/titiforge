@@ -194,6 +194,39 @@ impl RegionSource for FsSource {
             Err(e) => Err(io(e)),
         }
     }
+
+    fn external_names(&self, dim: &Dimension, folder: Folder) -> Result<Vec<String>> {
+        let dir = self.dir(dim, folder);
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for e in fs::read_dir(&dir).map_err(io)? {
+            let e = e.map_err(io)?;
+            let Some(nom) = e.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            // Le NOM est le critère, et il est reconstruit depuis les
+            // coordonnées qu'on en lit : `c.3.-4.mcc` passe, `c.03.-4.mcc` non.
+            // Accepter un nom approchant ferait écrire un fichier que Minecraft
+            // ne relirait jamais.
+            let Some((x, z)) = external_coords_from_name(&nom) else {
+                continue;
+            };
+            if tf_anvil::external_file_name(x, z) == nom {
+                out.push(nom);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+}
+
+/// `c.X.Z.mcc` → `(X, Z)`. `None` pour tout le reste.
+fn external_coords_from_name(nom: &str) -> Option<(i32, i32)> {
+    let reste = nom.strip_prefix("c.")?.strip_suffix(".mcc")?;
+    let (x, z) = reste.split_once('.')?;
+    Some((x.parse().ok()?, z.parse().ok()?))
 }
 
 impl RegionSink for FsSource {
