@@ -2,20 +2,26 @@
 //!
 //! Elle ne sait traiter que les blocs qui BOUCHENT leur case, parce qu'elle
 //! travaille sur une grille d'identifiants et qu'un identifiant n'a pas de
-//! forme. Sur du terrain vanilla c'est l'écrasante majorité des blocs ; sur la
-//! cible Minefield, c'est 32 % du catalogue — d'où la passe de modèles à côté,
-//! qui n'est pas un repli.
+//! forme. Sur la cible Minefield c'est 32 % du catalogue — d'où la passe de
+//! modèles à côté, qui n'est pas un repli.
 //!
 //! Le principe : pour chacune des six faces, balayer les 16 tranches
 //! perpendiculaires. Dans chaque tranche, marquer les cases dont la face est
-//! visible (le voisin de ce côté n'est pas opaque), puis fusionner les
-//! rectangles de même identifiant. Une muraille de 64 × 40 blocs sort en un
-//! quad au lieu de 2 560.
+//! visible, puis fusionner les rectangles de même identifiant. Une muraille de
+//! 64 × 40 blocs sort en un quad au lieu de 2 560.
+//!
+//! La marque ne se fait PAS case par case. Une rangée de seize cases tient dans
+//! un `u32`, et « visible de ce côté » est une opération de bits sur la rangée
+//! entière (`Opacite`). Il ne reste qu'à visiter les bits posés — exactement
+//! les faces à dessiner. Mesuré : une section pleine, qui rend six quads, est
+//! passée de 94 µs à quelques microsecondes, parce que le coût suit enfin la
+//! SORTIE et non le volume.
 
 use tf_anvil::StateId;
 
 use crate::forme::{Formes, FACES};
 use crate::maillage::{Maillage, Quad};
+use crate::opacite::Opacite;
 use crate::voisinage::{Voisinage, COTE};
 
 /// Les deux axes du plan d'une face, dans l'ordre croissant.
@@ -43,43 +49,89 @@ const fn compose(axe: usize, d: i32, u: i32, v: i32) -> [i32; 3] {
 }
 
 /// Ajoute au maillage les quads gloutons du voisinage.
-pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
+pub fn mailler<F: Formes + ?Sized>(v: &Voisinage, f: &F, out: &mut Maillage) {
+    mailler_avec(v, f, &Opacite::relever(v, f), out)
+}
+
+/// La même passe, avec une carte d'opacité déjà relevée.
+///
+/// Elle coûte un balayage du voisinage, et les deux passes en ont besoin :
+/// la partager évite de la payer deux fois.
+pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out: &mut Maillage) {
+    // Deux sorties immédiates, et elles couvrent les deux moitiés d'un monde :
+    // le ciel et la roche. Sans elles, une section sans aucune face visible se
+    // paie quand même en entier.
+    if op.vide || op.bouchee {
+        return;
+    }
     let n = COTE as i32;
-    // Un seul masque réutilisé pour les 96 tranches : 256 entrées, alloué une
-    // fois. Le réallouer par tranche coûterait plus que le maillage lui-même.
+    // Le masque est nettoyé UNE fois. La fusion remet à zéro chaque case
+    // qu'elle consomme, et elle les consomme toutes : il ressort propre. Le
+    // reblanchir à chaque tranche coûterait 24 576 écritures par section —
+    // exactement le coût qu'on vient de retirer.
     let mut masque = [0u32; COTE * COTE];
+    // Les rangées visibles d'une face sur X, relevées une fois : une rangée
+    // court le long de X, donc elle TRAVERSE les seize tranches. La recalculer
+    // par tranche la referait seize fois.
+    let mut vis_x = [0u32; COTE * COTE];
 
     for face in FACES {
         let axe = face.axe();
-        let pas = face.pas()[axe];
+        let positif = face.positif();
 
-        for d in 0..n {
-            // ── 1. marquer les faces visibles de cette tranche
-            let mut vide = true;
+        if axe == 0 {
             for iv in 0..n {
                 for iu in 0..n {
-                    let p = compose(axe, d, iu, iv);
-                    let id = v.get(p[0], p[1], p[2]);
-                    // Seuls les cubes pleins opaques passent ici. Tout le reste
-                    // est le travail de la passe de modèles — et l'oublier le
-                    // ferait dessiner DEUX fois.
-                    if !f.opaque(id) {
-                        masque[(iv * n + iu) as usize] = 0;
-                        continue;
+                    // u = Y, v = Z
+                    vis_x[(iv * n + iu) as usize] = Opacite::visibles_x(op.rangee(iu, iv), positif);
+                }
+            }
+        }
+
+        for d in 0..n {
+            // ── 1. marquer les faces visibles de cette tranche, par RANGÉES
+            let mut vide = true;
+            match axe {
+                0 => {
+                    let bit = 1u32 << (d + 1);
+                    for iv in 0..n {
+                        for iu in 0..n {
+                            if vis_x[(iv * n + iu) as usize] & bit == 0 {
+                                continue;
+                            }
+                            masque[(iv * n + iu) as usize] = v.get(d, iu, iv) + 1;
+                            vide = false;
+                        }
                     }
-                    let mut q = p;
-                    q[axe] += pas;
-                    // Le voisin peut être dans la peau : c'est exactement à ça
-                    // qu'elle sert.
-                    if f.opaque(v.get(q[0], q[1], q[2])) {
-                        masque[(iv * n + iu) as usize] = 0;
-                        continue;
+                }
+                // ±Y : la profondeur est Y. La rangée (d, z) et sa voisine
+                // (d ± 1, z) donnent seize faces d'un coup.
+                1 => {
+                    let dv = if positif { d + 1 } else { d - 1 };
+                    for iv in 0..n {
+                        // u = X, v = Z
+                        let mut vis = Opacite::visibles_entre(op.rangee(d, iv), op.rangee(dv, iv));
+                        while vis != 0 {
+                            let iu = vis.trailing_zeros() as i32 - 1;
+                            vis &= vis - 1;
+                            masque[(iv * n + iu) as usize] = v.get(iu, d, iv) + 1;
+                            vide = false;
+                        }
                     }
-                    // `id + 1` : zéro veut dire « pas de face ». Un identifiant
-                    // de voxel vaut l'indice PLUS UN — confondre les deux
-                    // décale toute la tranche d'un cran.
-                    masque[(iv * n + iu) as usize] = id + 1;
-                    vide = false;
+                }
+                // ±Z : la profondeur est Z. Rangée (y, d) contre (y, d ± 1).
+                _ => {
+                    let dv = if positif { d + 1 } else { d - 1 };
+                    for iv in 0..n {
+                        // u = X, v = Y
+                        let mut vis = Opacite::visibles_entre(op.rangee(iv, d), op.rangee(iv, dv));
+                        while vis != 0 {
+                            let iu = vis.trailing_zeros() as i32 - 1;
+                            vis &= vis - 1;
+                            masque[(iv * n + iu) as usize] = v.get(iu, iv, d) + 1;
+                            vide = false;
+                        }
+                    }
                 }
             }
             if vide {
@@ -95,12 +147,10 @@ pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
                         iu += 1;
                         continue;
                     }
-                    // Largeur : on avance tant que c'est le même état.
                     let mut w = 1;
                     while iu + w < n && masque[(iv * n + iu + w) as usize] == marque {
                         w += 1;
                     }
-                    // Hauteur : on descend tant que la rangée ENTIÈRE suit.
                     let mut h = 1;
                     'hauteur: while iv + h < n {
                         for k in 0..w {
@@ -110,18 +160,17 @@ pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
                         }
                         h += 1;
                     }
-
-                    for dv in 0..h {
-                        for du in 0..w {
-                            masque[((iv + dv) * n + iu + du) as usize] = 0;
+                    for ddv in 0..h {
+                        for ddu in 0..w {
+                            masque[((iv + ddv) * n + iu + ddu) as usize] = 0;
                         }
                     }
 
                     // Le plan de la face est du côté POSITIF de la case quand
                     // la face l'est : sinon les deux faces d'un même bloc
                     // sortiraient au même endroit.
-                    let profondeur = if face.positif() { d + 1 } else { d };
-                    // `compose` place déjà `iu` et `iv` sur les axes que
+                    let profondeur = if positif { d + 1 } else { d };
+                    // `compose` place `iu` et `iv` sur les axes que
                     // `axes_du_plan` nomme, dans le même ordre : les deux
                     // fonctions se répondent, et un test le vérifie.
                     let min = compose(axe, profondeur, iu, iv);
@@ -136,6 +185,12 @@ pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
                     iu += w;
                 }
             }
+            debug_assert!(
+                masque.iter().all(|c| *c == 0),
+                "la fusion doit laisser le masque propre : la tranche suivante \
+                 ne le nettoie pas, et des marques oubliées produiraient des \
+                 quads fantômes à la mauvaise profondeur"
+            );
         }
     }
 }

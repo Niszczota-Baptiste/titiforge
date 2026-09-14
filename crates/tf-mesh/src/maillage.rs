@@ -59,3 +59,53 @@ impl Maillage {
         self.quads.iter().map(Quad::aire).sum()
     }
 }
+
+/// Un bloc-modèle **posé**, sans sa géométrie.
+///
+/// C'est la réponse à la mesure de la passe de modèles : sur un build
+/// Minefield, 349 k blocs-modèles produisaient **5,8 M de quads**, neuf
+/// dixièmes du maillage. Or ces quads sont la MÊME géométrie répétée — deux
+/// dalles de chêne posées côte à côte n'ont pas deux modèles, elles ont deux
+/// positions.
+///
+/// On n'émet donc plus la géométrie mais la POSE : huit octets par bloc au
+/// lieu d'un quad par face de chaque cuboïde. Le modèle vit une fois, dans un
+/// tampon indexé par l'état, et le GPU le répète.
+///
+/// Contrepartie assumée : le masquage des faces ne peut plus être fait ici,
+/// puisqu'on n'émet plus de faces. D'où `voisins_opaques`, que le shader
+/// consulte — ça déplace le travail, ça ne le supprime pas. Mais il devient
+/// proportionnel au nombre de BLOCS et non au nombre de faces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Instance {
+    /// Position locale dans la section, `0..16` par axe.
+    pub pos: [u8; 3],
+    /// Un bit par face (ordre de `Face`) : le voisin de ce côté est opaque.
+    pub voisins_opaques: u8,
+    pub id: StateId,
+}
+
+/// Ce que produit la passe de modèles en mode instances.
+#[derive(Debug, Default, Clone)]
+pub struct Instances {
+    pub poses: Vec<Instance>,
+}
+
+impl Instances {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.poses.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.poses.is_empty()
+    }
+
+    /// Octets que ça pèse sur le GPU.
+    pub fn octets(&self) -> usize {
+        self.poses.len() * std::mem::size_of::<Instance>()
+    }
+}

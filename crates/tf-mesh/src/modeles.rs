@@ -13,12 +13,17 @@
 //! face au milieu du bloc reste visible quoi qu'il y ait à côté.
 
 use crate::forme::{Formes, FACES};
-use crate::maillage::{Maillage, Quad};
+use crate::maillage::{Instance, Instances, Maillage, Quad};
 use crate::voisinage::{Voisinage, COTE};
 
 use crate::glouton::axes_du_plan;
+use crate::opacite::Opacite;
 
-pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
+pub fn mailler<F: Formes + ?Sized>(v: &Voisinage, f: &F, out: &mut Maillage) {
+    mailler_avec(v, f, &Opacite::relever(v, f), out)
+}
+
+pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, f: &F, op: &Opacite, out: &mut Maillage) {
     let n = COTE as i32;
     for y in 0..n {
         for z in 0..n {
@@ -37,7 +42,7 @@ pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
                 let mut voisin_opaque = [false; 6];
                 for face in FACES {
                     let p = face.pas();
-                    voisin_opaque[face.indice()] = f.opaque(v.get(x + p[0], y + p[1], z + p[2]));
+                    voisin_opaque[face.indice()] = op.est(x + p[0], y + p[1], z + p[2]);
                 }
 
                 for c in cuboides {
@@ -85,6 +90,55 @@ pub fn mailler(v: &Voisinage, f: &dyn Formes, out: &mut Maillage) {
                         out.quads_modele += 1;
                     }
                 }
+            }
+        }
+    }
+}
+
+/// La même passe, en **instances** : une pose par bloc-modèle, sans géométrie.
+///
+/// Mesuré face à `mailler` sur un build Minefield : le rapport est de l'ordre
+/// de dix-sept pour un en nombre d'éléments, et le temps suit — il n'y a plus
+/// de boucle sur les cuboïdes, donc plus rien qui dépende de la complexité du
+/// modèle. Un bloc à 82 cuboïdes coûte exactement ce que coûte une dalle.
+///
+/// Ce que ça déplace : le masquage. Les faces n'étant plus émises, elles ne
+/// peuvent plus être supprimées ici ; l'instance porte donc l'opacité de ses
+/// six voisins et le shader tranche. Le travail devient proportionnel au
+/// nombre de BLOCS, pas au nombre de faces.
+pub fn instancier<F: Formes + ?Sized>(v: &Voisinage, f: &F, out: &mut Instances) {
+    instancier_avec(v, f, &Opacite::relever(v, f), out)
+}
+
+pub fn instancier_avec<F: Formes + ?Sized>(
+    v: &Voisinage,
+    f: &F,
+    op: &Opacite,
+    out: &mut Instances,
+) {
+    let n = COTE as i32;
+    for y in 0..n {
+        for z in 0..n {
+            for x in 0..n {
+                let id = v.get(x, y, z);
+                if f.est_air(id) || f.opaque(id) {
+                    continue;
+                }
+                if f.cuboides(id).is_empty() {
+                    continue;
+                }
+                let mut voisins = 0u8;
+                for face in FACES {
+                    let p = face.pas();
+                    if op.est(x + p[0], y + p[1], z + p[2]) {
+                        voisins |= face.bit();
+                    }
+                }
+                out.poses.push(Instance {
+                    pos: [x as u8, y as u8, z as u8],
+                    voisins_opaques: voisins,
+                    id,
+                });
             }
         }
     }

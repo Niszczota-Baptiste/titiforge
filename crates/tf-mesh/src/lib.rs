@@ -18,10 +18,12 @@ pub mod forme;
 pub mod glouton;
 pub mod maillage;
 pub mod modeles;
+pub mod opacite;
 pub mod voisinage;
 
 pub use forme::{Cuboide, Face, Formes, TableFormes, FACES};
-pub use maillage::{Maillage, Quad};
+pub use maillage::{Instance, Instances, Maillage, Quad};
+pub use opacite::Opacite;
 pub use voisinage::{Voisinage, COTE, COTE_PAD, PAD, VOL_PAD};
 
 /// Maille une section : les deux passes, dans le même maillage.
@@ -32,9 +34,34 @@ pub use voisinage::{Voisinage, COTE, COTE_PAD, PAD, VOL_PAD};
 /// bloc opaque ne passe jamais par les modèles, un bloc-modèle n'entre jamais
 /// dans le masque glouton. Sans cette disjonction, tout ce qui est entre les
 /// deux serait dessiné deux fois.
-pub fn mailler(v: &Voisinage, f: &dyn Formes) -> Maillage {
+/// Mesuré : une section entièrement d'air coûte quand même **17 µs**, parce
+/// que la carte d'opacité et la passe de modèles la parcourent toutes les
+/// deux. Sur un monde plein de ciel, c'est le poste principal.
+///
+/// Le mailleur ne peut pas l'éviter seul : une section d'air n'est pas
+/// distinguable d'une section de plantes du point de vue de l'opacité. C'est
+/// l'appelant qui le sait gratuitement — sa palette a UNE entrée, et c'est de
+/// l'air. **Ne pas appeler le mailleur sur une section-là.**
+pub fn mailler<F: Formes + ?Sized>(v: &Voisinage, f: &F) -> Maillage {
     let mut out = Maillage::new();
-    glouton::mailler(v, f, &mut out);
-    modeles::mailler(v, f, &mut out);
+    // La carte d'opacité est relevée UNE fois pour les deux passes. Chacune la
+    // demandait à son compte : 49 152 appels virtuels par section pour la
+    // gloutonne seule, quel que soit son contenu.
+    let op = opacite::Opacite::relever(v, f);
+    glouton::mailler_avec(v, f, &op, &mut out);
+    modeles::mailler_avec(v, f, &op, &mut out);
     out
+}
+
+/// Maille une section pour le **GPU** : quads gloutons et poses de modèles.
+///
+/// C'est le chemin du rendu. `mailler` reste celui de tout ce qui a besoin de
+/// la géométrie côté processeur — un export, une capture, un test.
+pub fn mailler_pour_gpu<F: Formes + ?Sized>(v: &Voisinage, f: &F) -> (Maillage, Instances) {
+    let mut quads = Maillage::new();
+    let mut poses = Instances::new();
+    let op = opacite::Opacite::relever(v, f);
+    glouton::mailler_avec(v, f, &op, &mut quads);
+    modeles::instancier_avec(v, f, &op, &mut poses);
+    (quads, poses)
 }

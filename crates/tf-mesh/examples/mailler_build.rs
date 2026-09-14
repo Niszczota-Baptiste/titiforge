@@ -11,7 +11,7 @@ use tf_anvil::{decode_section, inflate, read, scan, Interner, StateId};
 use tf_bench::catalogue::{Forme, BLOCS, PIRE_CAS};
 use tf_bench::{build, Build};
 use tf_mesh::forme::Cuboide;
-use tf_mesh::{mailler, TableFormes, Voisinage};
+use tf_mesh::{mailler, mailler_pour_gpu, TableFormes, Voisinage};
 
 /// Fabrique un cuboïde plausible pour le n-ième élément d'un modèle.
 ///
@@ -77,8 +77,10 @@ fn main() {
         let mut t_charge = 0u128;
         let mut t_voisinage = 0u128;
         let mut t_maille = 0u128;
+        let mut t_gpu = 0u128;
         let mut quads_g = 0usize;
         let mut quads_m = 0usize;
+        let mut poses = 0usize;
         let mut sections = 0usize;
 
         let debut = Instant::now();
@@ -132,6 +134,11 @@ fn main() {
                     t_maille += t2.elapsed().as_nanos();
                     quads_g += m.quads_glouton;
                     quads_m += m.quads_modele;
+
+                    let t3 = Instant::now();
+                    let (_, inst) = mailler_pour_gpu(&v, &table);
+                    t_gpu += t3.elapsed().as_nanos();
+                    poses += inst.len();
                     sections += 1;
                 }
             }
@@ -168,6 +175,26 @@ fn main() {
         println!(
             "│   modèles        {quads_m:10}  ({:4.1} %)",
             100.0 * quads_m as f64 / quads as f64
+        );
+        println!("│");
+        println!("│ ── le même maillage, modèles en INSTANCES ──");
+        println!(
+            "│   temps          {:8.0} ms  (× {:.2})",
+            ms(t_gpu),
+            t_maille as f64 / t_gpu as f64
+        );
+        println!(
+            "│   éléments       {:10}  (× {:.1} moins que {quads})",
+            quads_g + poses,
+            quads as f64 / (quads_g + poses) as f64
+        );
+        println!(
+            "│   poses          {poses:10}  soit {:.2} Mo pour le GPU",
+            poses as f64 * 8.0 / 1e6
+        );
+        println!(
+            "│   quads de modèles évités : {:.1} Mo à 16 octets",
+            quads_m as f64 * 16.0 / 1e6
         );
         println!(
             "╰─ {:.2} µs par section maillée · {:.0} quads par section",

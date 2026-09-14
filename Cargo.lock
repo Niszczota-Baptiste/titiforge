@@ -456,6 +456,7 @@ dependencies = [
 name = "tf-mesh"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "tf-anvil",
  "tf-bench",
 ]
