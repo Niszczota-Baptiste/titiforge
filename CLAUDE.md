@@ -168,7 +168,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (316 tests aujourd'hui)
+cargo test            # tous les crates (322 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -190,6 +190,11 @@ cargo run --release -p tf-assets --example mailler_reel -- ../titisite/public/co
 cargo run --release -p tf-assets --example engendrer_catalogue -- ../titisite/public/codex \
     > crates/tf-bench/src/catalogue.rs
 TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --nocapture
+
+# une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
+cargo run --release -p tf-render --example adaptateur
+cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 1000
+TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/public/codex pres.png
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -216,7 +221,7 @@ crates/
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
-  tf-render/   wgpu : arène, multi-draw indirect, HZB, transparence
+  tf-render/   wgpu : arène ✅ · rendu hors écran ✅ · indirect, HZB à venir
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
@@ -433,6 +438,25 @@ propres à ce dépôt.
 - **Un pixel totalement transparent n'a pas de couleur.** L'inclure dans la
   moyenne d'une tuile la tirerait vers le noir d'un fond qu'on ne voit jamais,
   et le facteur de teinte serait faux pour toutes les plantes.
+- **Sans mipmaps, tout build vu de loin est du BRUIT.** Une texture de 16 × 16
+  écrasée dans dix pixels d'écran échantillonne un pixel sur deux : à la
+  première capture, un mur de pierre ressemblait à de la neige. Et la moyenne
+  d'un mip se pondère par l'ALPHA — une feuille a des pixels transparents de
+  couleur arbitraire, en général noire, et les moyenner à poids égal borde
+  chaque feuille de noir à mesure qu'on s'éloigne.
+- **Un tableau de textures est plafonné à 2 048 couches**, sur la carte comme
+  sur le pilote logiciel. Le pack du serveur en cite 2 207 : charger tout le
+  catalogue dépasse la limite ET paie des textures qu'aucun bloc de la scène
+  n'emploie. On ne monte que celles des blocs PRÉSENTS.
+- **Ne pas trier les faces par orientation.** Le mailleur n'émet que des faces
+  visibles et ne garantit pas leur sens de rotation : activer le culling par
+  orientation en ferait disparaître la moitié, et c'est le genre de défaut
+  qu'on met des heures à voir.
+- **Une copie GPU exige des lignes alignées sur 256 octets.** L'ignorer rend
+  une image décalée d'un peu plus à chaque ligne — une image en escalier,
+  parfaitement plausible et fausse.
+- **La profondeur de wgpu va de 0 à 1, pas de −1 à 1.** Se tromper de
+  convention met TOUT derrière le plan proche : image noire, aucune erreur.
 - **Une section d'air coûte 17 µs au mailleur, et il ne peut rien y faire.**
   De l'air et des plantes sont indiscernables du point de vue de l'opacité.
   C'est l'APPELANT qui le sait gratuitement — sa palette a une entrée, et c'est

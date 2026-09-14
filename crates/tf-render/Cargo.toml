@@ -1,0 +1,19 @@
+[package]
+name = "tf-render"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rendu wgpu : arène GPU, passes nommées, rendu hors écran"
+
+[dependencies]
+tf-anvil.workspace = true
+tf-mesh.workspace = true
+wgpu = { version = "22", default-features = false, features = ["wgsl", "dx12", "metal", "wgc"] }
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+png = "0.17"
+tf-assets = { path = "../tf-assets" }
+tf-bench = { path = "../tf-bench" }

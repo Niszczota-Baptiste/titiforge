@@ -168,3 +168,81 @@ impl Atlas {
             .collect()
     }
 }
+
+/// Les niveaux de mip d'une couche, du plus grand au plus petit.
+///
+/// **Sans eux, tout build vu de loin est du BRUIT.** Une texture de 16 × 16
+/// écrasée dans dix pixels d'écran échantillonne un pixel sur deux, et le
+/// résultat scintille à chaque mouvement de caméra. Mesuré à l'œil sur la
+/// première capture : un mur de pierre ressemblait à de la neige.
+///
+/// La moyenne est **pondérée par l'alpha**, et ce n'est pas un raffinement :
+/// une feuille a des pixels transparents dont la couleur est arbitraire, en
+/// général noire. Les moyenner à poids égal borderait chaque feuille de noir à
+/// mesure qu'on s'en éloigne — c'est le défaut que Minecraft a mis des années
+/// à corriger dans son propre mipmapping.
+pub fn mips(cote: u32, pixels: &[u8]) -> Vec<(u32, Vec<u8>)> {
+    let mut out = vec![(cote, pixels.to_vec())];
+    let mut c = cote;
+    while c > 1 {
+        let (precedent_cote, precedent) = out.last().unwrap();
+        let pc = *precedent_cote;
+        c = (pc / 2).max(1);
+        let mut niveau = vec![0u8; (c * c * 4) as usize];
+        for y in 0..c {
+            for x in 0..c {
+                let mut somme = [0f32; 3];
+                let mut alpha = 0f32;
+                let mut poids = 0f32;
+                for dy in 0..2u32 {
+                    for dx in 0..2u32 {
+                        let sx = (x * 2 + dx).min(pc - 1);
+                        let sy = (y * 2 + dy).min(pc - 1);
+                        let i = ((sy * pc + sx) * 4) as usize;
+                        let a = precedent[i + 3] as f32 / 255.0;
+                        somme[0] += precedent[i] as f32 * a;
+                        somme[1] += precedent[i + 1] as f32 * a;
+                        somme[2] += precedent[i + 2] as f32 * a;
+                        alpha += a;
+                        poids += 1.0;
+                    }
+                }
+                let d = ((y * c + x) * 4) as usize;
+                if alpha > 0.0 {
+                    for k in 0..3 {
+                        niveau[d + k] = (somme[k] / alpha).round().clamp(0.0, 255.0) as u8;
+                    }
+                }
+                niveau[d + 3] = ((alpha / poids) * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        out.push((c, niveau));
+    }
+    out
+}
+
+impl Atlas {
+    /// Le nombre de niveaux de mip d'une couche.
+    pub fn niveaux(&self) -> u32 {
+        32 - self.cote.max(1).leading_zeros()
+    }
+
+    /// Toutes les couches, à tous les niveaux : `[niveau][couche]`.
+    ///
+    /// Un niveau à la fois, toutes couches confondues — c'est l'ordre dans
+    /// lequel le GPU les attend.
+    pub fn pyramide(&self) -> Vec<(u32, Vec<u8>)> {
+        let par_couche = (self.cote * self.cote * 4) as usize;
+        let mut par_niveau: Vec<(u32, Vec<u8>)> = Vec::new();
+        for (i, _) in self.couches.iter().enumerate() {
+            let src = &self.pixels[i * par_couche..(i + 1) * par_couche];
+            for (n, (cote, données)) in mips(self.cote, src).into_iter().enumerate() {
+                if par_niveau.len() <= n {
+                    par_niveau.push((cote, Vec::new()));
+                }
+                par_niveau[n].1.extend_from_slice(&données);
+            }
+        }
+        par_niveau
+    }
+}
