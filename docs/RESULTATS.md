@@ -332,3 +332,55 @@ chose n'est pas un décodage rapide.
 
 Sur une machine de développement à 8 ou 16 cœurs, l'efficacité mesurée laisse
 attendre 15 ms ou moins — mais ça se mesurera là-bas, pas ici.
+
+# Les règles de transformation, dérivées du pack
+
+Une table de rotation écrite à la main est impossible ici : **910 blocs
+Minefield portent un état**, avec quatre propriétés que le vanilla ne connaît
+pas (`vertical`, 16 920 occurrences, puis `offset`, `model`, `position`). Elles
+sont donc DÉRIVÉES des `blockstates.json`, sans jamais regarder le nom d'une
+propriété.
+
+Mesuré sur le pack du serveur (2 560 blockstates, 6 233 modèles), **813 ms** :
+
+| | rotations | miroirs |
+|---|---:|---:|
+| `minefield:*` — 910 blocs à état | **99,3 %** | **97,0 %** |
+| `minecraft:*` — 345 blocs à état | **99,4 %** | 99,7 % / 100 % |
+
+**Zéro faute aux lois du groupe sur 33 844 états** : quatre rotations de 90°
+rendent l'état de départ, deux miroirs aussi, et `rot90 ∘ rot90 = rot180`.
+Ces lois ne sont pas vérifiées après coup, elles sont **construites** —
+`rot180`/`rot270` sont `rot90` composée, `miroirZ` est `miroirX` suivi du
+demi-tour.
+
+## Ce qui reste, et pourquoi
+
+Les 471 manques signalés se lisent en deux tas très différents :
+
+| | | |
+|---|---:|---|
+| `non décomposable` | 393 | **la règle exacte est juste** ; seule la forme compacte est appauvrie |
+| `non représentable` | 78 | un vrai trou, refusé plutôt que deviné |
+
+Les vrais trous sont deux familles, toutes deux des asymétries du pack :
+
+- **Les bougies** (6 blocs) déclarent 144 états sur 4 géométries, et les
+  classes ont des tailles inégales (48 contre 32) : `position=middle` n'a
+  aucun homologue tourné. Aucune bijection n'existe.
+- **`minecraft:snow`** et sa famille n'ont de formes qu'au nord et au sud : la
+  rotation de 90° mènerait à un angle que rien ne déclare.
+
+## Le point de conception que la mesure met au jour
+
+La règle est une **permutation d'ÉTATS**, pas de propriétés — et c'est la
+mesure qui l'a imposé. Sur les escaliers du serveur, `shape=outer` (un ajout
+Minefield, une seule écriture par coin) exige `facing: east → south` sous
+miroir est-ouest, pendant que l'escalier DROIT exige `east → west`. **Les deux
+sont géométriquement justes**, et aucune permutation de `facing` ne fait les
+deux : 393 blocs, toute la famille des escaliers.
+
+La forme par propriété reste, mais comme **repli** pour un état que le pack ne
+déclare pas — un monde plus récent que le pack en contient. Elle coûte une
+indexation de tableau en moins à l'exécution, et elle dit ce qu'elle ne peut
+pas porter au lieu de se taire.

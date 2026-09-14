@@ -42,6 +42,9 @@ Trois conséquences qui ne sont pas négociables :
    avec quatre propriétés que le vanilla n'a pas — `vertical` (16 920
    occurrences), `offset`, `model`, `position`. Les règles DÉRIVÉES des
    `blockstates` ne sont pas un confort, c'est la seule option praticable.
+   Mesuré (`tf-blocks`) : **99,3 % des rotations et 97,0 % des miroirs
+   Minefield**, zéro faute aux lois du groupe sur 33 844 états, et ce qui
+   manque est NOMMÉ. Détail et limites : `docs/RESULTATS.md`.
 3. **Un `minefield:*` n'est JAMAIS remappé vanilla.** Sa géométrie et ses états
    se transforment ; son namespace, jamais. Invariant hérité d'`ExeWorldEdit`,
    et il devient central quand les deux tiers du catalogue sont custom.
@@ -168,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (322 tests aujourd'hui)
+cargo test            # tous les crates (342 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -190,6 +193,9 @@ cargo run --release -p tf-assets --example mailler_reel -- ../titisite/public/co
 cargo run --release -p tf-assets --example engendrer_catalogue -- ../titisite/public/codex \
     > crates/tf-bench/src/catalogue.rs
 TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --nocapture
+
+# ce que les règles de transformation couvrent, sur le pack RÉEL
+cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
 
 # une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
 cargo run --release -p tf-render --example adaptateur
@@ -215,7 +221,7 @@ de save, pas un plantage.
 crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
-  tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
+  tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
@@ -465,3 +471,62 @@ propres à ce dépôt.
   variante décalerait tout ce qui est déjà sur le disque d'un utilisateur, et
   ses annulations viseraient le mauvais dossier. `Folder::code()` est la
   correspondance stable, écrite à la main.
+- **Une règle de rotation est une permutation d'ÉTATS, pas de propriétés.**
+  C'est la mesure qui l'a imposé, et le contre-exemple n'est pas exotique :
+  sur les escaliers du serveur, `shape=outer` (un ajout Minefield, une seule
+  écriture par coin) exige `facing: east → south` sous miroir est-ouest,
+  pendant que l'escalier DROIT exige `east → west`. Les deux sont
+  géométriquement JUSTES ; aucune permutation de `facing` ne fait les deux.
+  393 blocs concernés, toute la famille des escaliers. La forme par propriété
+  reste — comme REPLI pour un état que le pack ne déclare pas — et elle DIT ce
+  qu'elle ne peut pas porter (`Manque::NonDecomposable`) au lieu de se taire.
+- **Deux modèles qui décrivent le même solide ne le découpent pas pareil.**
+  `oak_stairs_inner` réfléchi est exactement `oak_stairs_inner` tourné — même
+  solide, boîtes différentes. Comparer les listes de cuboïdes répondait
+  « formes différentes », la route géométrique ne trouvait RIEN pour les
+  escaliers en coin, et le miroir retombait sur la route des angles, qui rend
+  l'escalier TOURNÉ. On découpe sur la grille induite, on refusionne dans un
+  ordre fixe, et la comparaison porte sur le SOLIDE. Corollaire : les boîtes
+  PLATES (une fleur en croix) n'occupent aucune cellule — sans mise à part,
+  elles disparaîtraient.
+- **Une preuve qui envoie un état sur lui-même ne prouve rien.** Une forme
+  symétrique réfléchie se ressemble, et n'a donc rien à dire sur un `facing`
+  qui veut dire plus que le dessin : `minecraft:bell` en
+  `attachment=double_wall` est symétrique est-ouest, concluait « east → east »,
+  et contredisait le « east → west » des trois autres attaches. L'immobilité
+  n'est pas jetée, elle est RELÉGUÉE — et ne se juge qu'après les
+  déplacements, sinon une trappe fermée (immobile sous toute rotation)
+  contredit le `facing` que la trappe ouverte vient de donner.
+- **Partager un angle ne rend pas l'angle faux.** J'avais gardé « la source
+  doit être seule sur sa géométrie », pour écarter la trappe fermée. Mais sur
+  le pack du serveur une trappe OUVERTE partage son (modèle, angle) entre
+  `half=bottom` et `half=top`, un escalier entre trois états : la garde coupait
+  donc la route des angles — la seule exacte — sur tous les escaliers, trappes,
+  portes et portillons. 35 blocs Minefield retombaient sur une règle IDENTITÉ
+  **silencieuse**, comptée comme une réussite. Partager un angle veut seulement
+  dire que plusieurs états ont cette orientation ; c'est au départage de
+  choisir lequel.
+- **L'identité n'est pas toujours un aveu d'ignorance.** Une bougie a `candles`
+  et `lit`, pas un champ qui oriente : aucune rotation de sa forme n'est
+  déclarée nulle part, et pourtant refuser rendrait `//rotate` inutilisable sur
+  tout un mur décoré. L'identité est la seule fonction TOTALE sur cet espace
+  d'états, et c'est ce que fait le jeu. **Mais** dès qu'un modèle est déclaré à
+  DEUX angles, `y` porte du sens et l'angle manquant est un vrai trou —
+  `minecraft:snow` n'a de formes qu'au nord et au sud. La différence entre les
+  deux est le seul contrôle qui sache dire « cette rotation n'existe pas » :
+  les angles déclarés doivent être CLOS par la transformation.
+- **L'injectivité se construit, elle ne se vérifie pas.** Tous les candidats
+  d'un état rendent le MÊME solide — ils sont sa classe d'arrivée, et le pack
+  ne dit rien de plus. N'importe quelle bijection entre les deux classes est
+  donc visuellement juste : on honore les preuves, puis on complète sur ce qui
+  reste LIBRE. Vérifier après coup laissait deux escaliers en coin tomber sur
+  le même état, et la moitié du mur disparaissait à l'annulation.
+- **Les deux miroirs ne sont pas indépendants.** `z → −z` est `x → −x` suivi
+  d'un demi-tour. Dérivés séparément, ils divergeaient là où le pack est
+  asymétrique : mesuré, 97,0 % contre 84,5 % sur exactement les mêmes blocs. On
+  en dérive UN et on compose l'autre — même principe que `rot180`/`rot270`,
+  construites à partir de `rot90`.
+- **Un manque réparé par composition n'est pas un manque.** Les manques
+  s'accumulent par bloc et ne sont publiés qu'à la fin, quand on sait ce que la
+  composition a rattrapé. Annoncer un trou qui n'existe plus est aussi trompeur
+  que d'en taire un vrai — et noie les 78 vrais dans 471 lignes.

@@ -6,6 +6,7 @@ members = [
     "crates/tf-world",
     "crates/tf-mesh",
     "crates/tf-assets",
+    "crates/tf-blocks",
     "crates/tf-render",
     "crates/tf-bench",
     "proto",
@@ -23,6 +24,7 @@ tf-world = { path = "crates/tf-world" }
 tf-mesh = { path = "crates/tf-mesh" }
 tf-assets = { path = "crates/tf-assets" }
 tf-render = { path = "crates/tf-render" }
+tf-blocks = { path = "crates/tf-blocks" }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 rayon = "1"
 memmap2 = "0.9"

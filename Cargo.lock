@@ -1176,6 +1176,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-blocks"
+version = "0.1.0"
+dependencies = [
+ "tf-anvil",
+ "tf-assets",
+]
+
+[[package]]
 name = "tf-mesh"
 version = "0.1.0"
 dependencies = [

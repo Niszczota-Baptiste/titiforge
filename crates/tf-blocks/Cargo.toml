@@ -1,0 +1,11 @@
+[package]
+name = "tf-blocks"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "États de blocs, et règles de rotation DÉRIVÉES du pack"
+
+[dependencies]
+tf-anvil.workspace = true
+tf-assets.workspace = true
