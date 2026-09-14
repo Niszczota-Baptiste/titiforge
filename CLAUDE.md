@@ -19,17 +19,24 @@ le disent (mesurés sur le codex de `titisite`) :
 | | |
 |---|---|
 | Blocs `minefield:*` | **1 678** — contre 882 vanilla, presque le double |
-| Formes non-cubes | **56 %** (950 blocs) ; cubes pleins : 29 % seulement |
+| Formes non-cubes | **66,8 %** (1 121 blocs) ; cubes pleins : 32,0 % (537) |
+| Cuboïdes d'un bloc-modèle | **3,58** en moyenne, médiane 2, pire cas 82 |
 | Blocs portant un état | **54 %** (910), à transformer sous rotation |
 | Variantes avec rotation | **22 627** déclarées dans `blockstates.json` |
-| Le plus complexe | une tombe en bois : **82 cuboïdes** dans un seul bloc |
+| Le plus complexe | `red_pumpkin_treat_bag` : **82 cuboïdes** dans une case |
 
 Trois conséquences qui ne sont pas négociables :
 
-1. **Le greedy meshing ne couvre que 29 % d'un build Minefield.** La passe de
-   modèles n'est pas un repli pour quelques escaliers : c'est le chemin
-   PRINCIPAL sur la cible principale. La phase 2 doit se dimensionner là-dessus,
-   pas sur du terrain vanilla.
+1. **Le greedy meshing ne couvre qu'un tiers du CATALOGUE Minefield**, et la
+   passe de modèles porte près de la moitié de la géométrie d'un build. Les deux
+   chiffres sont différents et il faut les deux : 66,8 % des blocs du catalogue
+   sont des modèles, mais dans un bâtiment ils ne sont que 9 % des blocs POSÉS —
+   un mur est fait de cubes, le décor est semé. Sauf qu'un bloc-modèle vaut 3,58
+   cuboïdes : sur une région bâtie, 2,87 M de blocs-modèles portent **9,46 M de
+   cuboïdes** contre 28,7 M de cubes pleins qui se fondent en quads. La passe de
+   modèles n'est donc pas un repli pour quelques escaliers, et la phase 2 se
+   dimensionne sur ce chiffre-là — mesuré sur `Build` (`docs/fixtures.md`), pas
+   déduit de la part du catalogue.
 2. **Une table de rotation écrite à la main est impossible.** 910 blocs à état,
    avec quatre propriétés que le vanilla n'a pas — `vertical` (16 920
    occurrences), `offset`, `model`, `position`. Les règles DÉRIVÉES des
@@ -145,7 +152,13 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 - Chaque fonction arrive **avec ses tests**, déterministes.
 - **Pas de fixture binaire dans le dépôt** : les tests et les benchs
   construisent leurs régions à la volée depuis une graine. Un `.mca` commité
-  est opaque en revue et impossible à faire évoluer.
+  est opaque en revue et impossible à faire évoluer. Il y en a **deux**, et les
+  confondre fausse tout : `Terrain` (du sous-sol) mesure Anvil, `Build` (un
+  bâtiment) mesure le rendu. Voir `docs/fixtures.md`.
+- **Un réglage de fixture qu'on n'a pas mesuré se NOMME comme un réglage.** La
+  densité de décor d'un build dépend de qui l'a construit ; la présenter comme
+  un fait mesuré serait l'erreur que tout ce dépôt s'interdit. Les benchs la
+  balaient.
 - Un écart de performance ne s'annonce qu'au-delà de **25 %**, sur une
   **médiane de N**. Mesuré dans `we-engine` : `mirror-rotate` a bougé de 18 % à
   code identique.
@@ -154,7 +167,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (240 tests aujourd'hui)
+cargo test            # tous les crates (248 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -162,8 +175,10 @@ cargo fmt
 node proto/fixtures/gen.mjs
 TF_MCA_TIERS=./r.0.1.mca cargo test -p tf-anvil --test croisement -- --nocapture
 
-# mesure continue — fixture construite en Rust, aucune dépendance extérieure
+# mesure continue — fixtures construites en Rust, aucune dépendance extérieure
 cargo bench -p tf-bench
+cargo run --release -p tf-bench --example profil_build     # ce que la fixture de BUILD produit
+cargo run --release -p tf-bench --example poids_editions   # ce qu'une opération fait réécrire
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -317,6 +332,18 @@ propres à ce dépôt.
   n'écrivent que quelques octets à la fin. Un enregistrement coupé en plein vol
   est repéré par sa longueur et son empreinte, et la lecture s'arrête là —
   perdre la dernière action vaut mieux que perdre l'historique.
+- **Une fixture fausse dans le sens prudent reste fausse.** Le premier
+  échantillon du catalogue forçait les blocs les plus lourds en tête : 7,58
+  cuboïdes en moyenne contre 3,58 dans le codex. Un bench deux fois plus
+  pessimiste que la cible ne protège de rien — il fait rejeter une optimisation
+  qui suffisait. Et le pire cas (82 cuboïdes, un sur 1 121) mérite sa propre
+  mesure au lieu de peser sur toutes les autres.
+- **Sauter les `multipart` fausse le recensement d'un pack.** Un tiers des
+  blocs Minefield déclarent leurs modèles en `multipart`, et le nom du modèle
+  n'est pas celui du bloc (`ladder_dark_oak` pour `dark_oak_ladder`). En
+  n'ouvrant que `models/` sur les seules `variants`, 353 blocs sur 1 678
+  restaient non résolus — et la part de blocs-modèles sortait à 50 % au lieu de
+  66,8 %. Un recensement qui laisse 21 % de trous ne dit rien.
 - **Le discriminant d'un `enum` n'est pas un format de fichier.** Insérer une
   variante décalerait tout ce qui est déjà sur le disque d'un utilisateur, et
   ses annulations viseraient le mauvais dossier. `Folder::code()` est la
