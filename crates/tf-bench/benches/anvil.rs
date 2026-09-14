@@ -183,6 +183,19 @@ fn bench_operations(c: &mut Criterion) {
         )
     });
 
+    // `count_of` : la version en `contains()` par bloc coûtait O(palette ×
+    // 4096). Ce bench le fige, parce qu'une régression y serait invisible —
+    // le résultat resterait juste, seulement lent.
+    g.bench_function("count_of", |b| {
+        b.iter(|| {
+            let mut n = 0usize;
+            for s in sections.iter() {
+                n += s.count_of(black_box(pierre));
+            }
+            black_box(n)
+        })
+    });
+
     // Le compactage, qui ne tourne qu'à l'écriture.
     g.bench_function("compact_palette", |b| {
         b.iter_batched_ref(

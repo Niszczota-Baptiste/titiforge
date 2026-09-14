@@ -87,7 +87,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (113 tests aujourd'hui)
+cargo test            # tous les crates (125 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -187,6 +187,28 @@ propres à ce dépôt.
 - **Le bit 0x80 de l'octet de compression n'est pas une compression.** Il
   signale une charge déportée en `c.X.Z.mcc`. Sans le masquer, `2 | 0x80` = 130
   se lit comme une compression inconnue et le chunk devient illisible.
+- **Une palette ne peut pas dépasser 4096 entrées.** Une section n'a que 4096
+  blocs, donc au plus 4096 états distincts y sont référencés — et le jeu ne lit
+  pas au-delà de 12 bits par indice. Sans plafond, `bits_for(5000)` rendait
+  13 bits et un fichier qu'aucun Minecraft ne relit ; au-delà de 16 bits, les
+  indices sortaient tronqués à 65535 dans le `u16` du dépack. `repack` compacte
+  quand il le faut, et **seulement** quand il le faut : compacter à chaque fois
+  coûterait 103 ms par région pour rien.
+- **`local_index` déborde sur l'axe voisin.** `local_index(16, 0, 0)` vaut 16,
+  c'est-à-dire `(0, 0, 1)` : sans borne, `get` rendait le bloc de la case d'à
+  côté. Un résultat parfaitement plausible, et faux. Toute lecture de bloc
+  borne ses coordonnées.
+- **Un tri sur une seule clé rend un résultat dépendant de l'ordre d'entrée.**
+  `splice` triait sur le seul début de plage : une insertion en `p` et un
+  remplacement commençant en `p` passaient ou rendaient `Overlap` selon lequel
+  arrivait en premier dans le vecteur. Le tri porte sur `(début, longueur)`,
+  donc les insertions passent avant — et deux appels au même ensemble
+  d'éditions font la même chose.
+- **Une recherche linéaire par BLOC est une boucle quadratique.** `count_of`
+  faisait `hits.contains(v)` sur chaque bloc : O(palette × 4096), mesuré à
+  340 µs pour une section à grosse palette. Une table indexée sur la palette,
+  construite une fois, ramène ça à O(palette + 4096). Même famille que le
+  `findIndex` de `we-engine`, sous une autre forme.
 - **Une optimisation non vérifiée est une corruption silencieuse.** Ici elle
   tombe sur la sauvegarde d'un utilisateur. Toute stratégie rapide se compare
   au résultat de la stratégie lente sur le même monde, et le compte doit être

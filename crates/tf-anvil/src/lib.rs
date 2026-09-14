@@ -19,8 +19,8 @@ pub mod section;
 pub mod state;
 
 pub use chunk::{
-    decode_section, encode_section, scan, section_edits, splice, ChunkScan, Edit, ScannedSection,
-    SectionSpans, SpliceError,
+    decode_section, encode_section, scan, section_edits, splice, ChunkScan, Edit, EncodeError,
+    ScannedSection, SectionSpans, SpliceError,
 };
 pub use codec::{deflate, inflate, CodecError};
 pub use format::{
@@ -32,5 +32,5 @@ pub use region::{
     region_of_chunk, write, Compression, ExternalFile, RawChunk, ReadError, Region, WriteError,
     WriteOutput, CHUNKS, EXTERNAL_FLAG, HEADER, MAX_SECTORS, MAX_SECTOR_OFFSET, SECTOR,
 };
-pub use section::{bits_for, local_index, Section, MAX_PALETTE, VOL};
+pub use section::{bits_for, in_section, local_index, Section, MAX_BITS, MAX_PALETTE, VOL};
 pub use state::{split_key, state_key, Interner, StateId};

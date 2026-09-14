@@ -18,7 +18,7 @@ zéro, `criterion` avec les scénarios de `we-engine` sous leurs noms actuels.
 > **Atteinte.** Région pleine décodée en **28,2 ms** (`rayon`, 4 cœurs ;
 > 107 ms monofil), empreinte **0,27 o/bloc**. Les deux dispositions
 > (1.13–1.17 et 1.18+), les deux packings, et les chunks surdimensionnés
-> `.mcc` sont couverts. **113 tests**, harnais `criterion` en place avec une
+> `.mcc` sont couverts. **125 tests**, harnais `criterion` en place avec une
 > fixture construite en Rust.
 >
 > Deux optimisations mesurées depuis : `zlib-rs` sur la compression (× 2,7,

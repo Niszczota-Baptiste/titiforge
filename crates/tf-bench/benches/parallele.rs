@@ -52,13 +52,11 @@ fn fusionner(parts: Vec<ChunkDecode>) -> (Vec<Section>, Interner) {
     let mut global = Interner::new();
     let mut out = Vec::new();
     for mut part in parts {
-        let table: Vec<u32> = (0..part.local.len())
-            .map(|i| global.intern(part.local.resolve(i as u32).unwrap()))
-            .collect();
+        // La table se calcule UNE fois par chunk et s'applique à chacune de
+        // ses sections. Les refondre ensemble la ferait recalculer par section.
+        let table = global.merge_from(&part.local);
         for s in part.sections.iter_mut() {
-            for id in s.palette.iter_mut() {
-                *id = table[*id as usize];
-            }
+            Interner::remap_palette(&table, &mut s.palette);
         }
         out.extend(part.sections);
     }

@@ -18,7 +18,7 @@
 use tf_nbt::{tag, Cur, Span, Trunc, R};
 
 use crate::format::{detect_packing, packing_de_repli, Layout, Packing};
-use crate::section::{bits_for, Section, VOL};
+use crate::section::{bits_for, Section, MAX_PALETTE, VOL};
 use crate::state::{split_key, state_key, Interner, StateId};
 
 /// Ce qu'un balayage a repéré, sans rien matérialiser.
@@ -399,25 +399,60 @@ pub struct Edit {
     pub bytes: Vec<u8>,
 }
 
+/// Pourquoi une section refuse d'être écrite.
+///
+/// Deux causes distinctes, et les confondre dans un `None` les rendait
+/// indiscernables — alors qu'elles demandent des corrections opposées.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodeError {
+    /// Un état de la palette ne se résout pas dans l'interner fourni. C'est un
+    /// mélange d'interners : les identifiants d'une table ne veulent rien dire
+    /// dans une autre, et les écrire poserait les mauvais blocs.
+    UnknownState(StateId),
+    /// La palette dépasse ce qu'une section peut porter. Un `repack` compacte
+    /// automatiquement ; y arriver signifie qu'on écrit une section qui n'a
+    /// jamais été repackée depuis qu'on a grossi sa palette.
+    PaletteTooLarge(usize),
+    /// La section n'a aucun champ de blocs à remplacer (section d'éclairage).
+    NoBlockFields,
+}
+
+impl std::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncodeError::UnknownState(id) => write!(
+                f,
+                "l'état {id} est introuvable dans l'interner fourni : deux tables ont été mélangées"
+            ),
+            EncodeError::PaletteTooLarge(n) => write!(
+                f,
+                "palette de {n} entrées, maximum {MAX_PALETTE} : la section n'a pas été repackée"
+            ),
+            EncodeError::NoBlockFields => write!(f, "section sans champ de blocs"),
+        }
+    }
+}
+
+impl std::error::Error for EncodeError {}
+
 /// Compose les éditions qui réécrivent une section, dans sa disposition
 /// d'origine.
-///
-/// Rend `None` si un état de la palette ne se résout pas dans l'interner —
-/// signe d'un mélange d'interners, donc d'un bug d'appelant qu'il vaut mieux
-/// voir ici qu'une fois le fichier écrit.
 pub fn section_edits(
     section: &Section,
     scanned: &ScannedSection,
     interner: &Interner,
-) -> Option<Vec<Edit>> {
-    let spans = scanned.spans?;
+) -> Result<Vec<Edit>, EncodeError> {
+    let spans = scanned.spans.ok_or(EncodeError::NoBlockFields)?;
+    if section.palette.len() > MAX_PALETTE {
+        return Err(EncodeError::PaletteTooLarge(section.palette.len()));
+    }
     let entries = palette_entries(section, interner)?;
     let refs: Vec<tf_nbt::PaletteEntryRef> = entries
         .iter()
         .map(|(n, p)| tf_nbt::PaletteEntryRef { name: n, props: p })
         .collect();
 
-    Some(match spans {
+    Ok(match spans {
         SectionSpans::Flat { states } => vec![Edit {
             span: states,
             bytes: tf_nbt::block_states_payload(&refs, &section.data),
@@ -457,24 +492,28 @@ pub fn section_edits(
 ///
 /// Conservé pour l'usage direct ; `section_edits` est le chemin qui gère les
 /// deux dispositions.
-pub fn encode_section(section: &Section, interner: &Interner) -> Option<Vec<u8>> {
+pub fn encode_section(section: &Section, interner: &Interner) -> Result<Vec<u8>, EncodeError> {
+    if section.palette.len() > MAX_PALETTE {
+        return Err(EncodeError::PaletteTooLarge(section.palette.len()));
+    }
     let entries = palette_entries(section, interner)?;
     let refs: Vec<tf_nbt::PaletteEntryRef> = entries
         .iter()
         .map(|(n, p)| tf_nbt::PaletteEntryRef { name: n, props: p })
         .collect();
-    Some(tf_nbt::block_states_payload(&refs, &section.data))
+    Ok(tf_nbt::block_states_payload(&refs, &section.data))
 }
 
 type Entries = Vec<(String, Vec<(String, String)>)>;
 
-fn palette_entries(section: &Section, interner: &Interner) -> Option<Entries> {
+fn palette_entries(section: &Section, interner: &Interner) -> Result<Entries, EncodeError> {
     let mut out = Vec::with_capacity(section.palette.len());
     for &id in &section.palette {
-        let (name, props) = split_key(interner.resolve(id)?);
+        let key = interner.resolve(id).ok_or(EncodeError::UnknownState(id))?;
+        let (name, props) = split_key(key);
         out.push((name.to_string(), props));
     }
-    Some(out)
+    Ok(out)
 }
 
 /// Remplace des plages d'octets et recopie tout le reste **tel quel**.
@@ -486,7 +525,13 @@ pub fn splice(inflated: &[u8], edits: &mut [Edit]) -> Result<Vec<u8>, SpliceErro
     if edits.is_empty() {
         return Ok(inflated.to_vec());
     }
-    edits.sort_by_key(|e| e.span.start);
+    // Trier sur le SEUL début rendait le résultat dépendant de l'ordre du
+    // vecteur : une insertion en `p` et un remplacement commençant en `p`
+    // passaient ou rendaient `Overlap` selon lequel arrivait en premier.
+    // Deux appels au même ensemble d'éditions doivent faire la même chose.
+    // Les insertions (longueur nulle) viennent avant : elles s'écrivent
+    // AVANT le texte remplacé, ce qui est la lecture naturelle.
+    edits.sort_by_key(|e| (e.span.start, e.span.len()));
 
     let mut prev_end = 0usize;
     for e in edits.iter() {

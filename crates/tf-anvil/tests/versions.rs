@@ -13,7 +13,8 @@ use common::frozen;
 use std::borrow::Cow;
 use tf_anvil::{
     decode_section, deflate, detect_packing, inflate, longs_for, pack, read, scan, section_edits,
-    splice, unpack_into, version_label, write, Edit, Interner, Layout, Packing, Section, VOL,
+    splice, unpack_into, version_label, write, Edit, EncodeError, Interner, Layout, Packing,
+    Section, VOL,
 };
 
 // ── le packing se déduit de la longueur ─────────────────────────────────────
@@ -480,15 +481,16 @@ fn section_edits_refuse_une_palette_qui_vient_d_un_autre_interner() {
         .unwrap()
         .unwrap();
     assert!(
-        section_edits(&section, sc, &vrai).is_some(),
+        section_edits(&section, sc, &vrai).is_ok(),
         "avec le bon interner"
     );
 
     // Un identifiant qui n'existe pas dans cet interner.
     section.palette[0] = vrai.len() as u32 + 500;
-    assert!(
-        section_edits(&section, sc, &vrai).is_none(),
-        "un état non résoluble doit refuser l'écriture, pas la deviner"
+    assert_eq!(
+        section_edits(&section, sc, &vrai).unwrap_err(),
+        EncodeError::UnknownState(section.palette[0]),
+        "un état non résoluble doit refuser l'écriture en DISANT pourquoi"
     );
 }
 

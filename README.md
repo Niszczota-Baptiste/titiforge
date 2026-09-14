@@ -55,7 +55,7 @@ Le chemin rapide n'est pas « itérer plus vite », c'est **ne pas itérer**.
 
 ## État — phase 0
 
-`tf-nbt` et `tf-anvil` sont écrits et testés : **113 tests**, lecture et
+`tf-nbt` et `tf-anvil` sont écrits et testés : **125 tests**, lecture et
 écriture, round-trip lossless, formats 1.13 → 1.21 et chunks déportés `.mcc`.
 
 Le round-trip ne repose pas sur une promesse mais sur une propriété
@@ -91,7 +91,7 @@ Feuille de route complète : `docs/ROADMAP.md`.
 ## Rejouer les mesures
 
 ```bash
-cargo test            # les 113 tests
+cargo test            # les 125 tests
 cargo bench -p tf-bench   # les mesures
 cargo clippy --all-targets
 
