@@ -126,7 +126,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (166 tests aujourd'hui)
+cargo test            # tous les crates (179 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -157,7 +157,7 @@ crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
-  tf-world/    adressage ✅ · résidence ✅ · streaming, staging, journal typé
+  tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging, journal typé
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   jars de mods, packs, blockstates→models→textures, atlas
