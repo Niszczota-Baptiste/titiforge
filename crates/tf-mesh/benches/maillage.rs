@@ -159,74 +159,78 @@ fn complet(c: &mut Criterion) {
 
 /// Une région bâtie, de bout en bout : c'est le chiffre qui compte pour
 /// l'utilisateur, et le seul qui intègre le coût de lecture.
+///
+/// La peau est VRAIE ici — elle traverse les chunks. La remplir d'air, comme
+/// le faisait la première mesure, invente un mur de faces fantômes le long de
+/// chaque frontière et gonfle le compte de quads.
 fn region(c: &mut Criterion) {
     let b = Build::petit();
     let octets = build::region(&b);
+    let (grille, table) = charger(&octets, &b);
+
     let mut g = c.benchmark_group("region");
     g.sample_size(10);
-    g.bench_function("charger_et_mailler", |bencher| {
-        bencher.iter(|| mailler_region(&octets, &b))
+    g.bench_function("mailler_1_fil", |bencher| {
+        bencher.iter(|| grille.mailler(&table))
+    });
+    g.bench_function("mailler_paralleles", |bencher| {
+        bencher.iter(|| grille.mailler_parallele(&table))
     });
     g.finish();
 }
 
-fn mailler_region(octets: &[u8], b: &Build) -> usize {
+/// Décode une région entière dans une grille, et bâtit la table de formes.
+fn charger(octets: &[u8], b: &Build) -> (tf_mesh::Grille, TableFormes) {
     use tf_anvil::{decode_section, inflate, read, scan, Interner};
     let r = read(octets, 0, 0).unwrap();
     let formes: HashMap<&str, (Forme, u8)> = BLOCS.iter().map(|(n, f, c)| (*n, (*f, *c))).collect();
-    let mut total = 0usize;
+    let mut grille = tf_mesh::Grille::new();
+    // Un SEUL interner pour toute la région : deux tables donneraient des
+    // identifiants qui ne veulent rien dire l'un chez l'autre, et la peau
+    // entre deux chunks poserait les mauvais blocs.
+    let mut interner = Interner::new();
     for cz in 0..b.side as i32 {
         for cx in 0..b.side as i32 {
             let brut = r.get(cx, cz).unwrap();
             let inflated = inflate(&brut.payload, brut.compression).unwrap();
             let sc = scan(&inflated).unwrap();
-            let mut interner = Interner::new();
-            let mut secs = Vec::new();
             for s in &sc.sections {
                 if let Some(sec) = decode_section(&inflated, &sc, s, &mut interner).unwrap() {
-                    secs.push(sec);
+                    grille.poser(cx, cz, sec);
                 }
-            }
-            let mut t = TableFormes::new();
-            for id in 0..interner.len() as StateId {
-                let cle = interner.resolve(id).unwrap();
-                let nu = cle.split('|').next().unwrap();
-                match nu {
-                    "minecraft:air" => t.pousser(true, false, Vec::new()),
-                    _ => match formes.get(nu) {
-                        Some((Forme::Cube, _)) => t.pousser(false, true, Vec::new()),
-                        Some((Forme::Modele, n)) => t.pousser(
-                            false,
-                            false,
-                            (0..*n)
-                                .map(|k| Cuboide {
-                                    min: [0, (k as i32 * 16 / (*n).max(1) as i32) as i8, 0],
-                                    max: [16, 16, 16],
-                                    faces: 0x3F,
-                                    cull: 0x3F,
-                                })
-                                .collect(),
-                        ),
-                        _ => t.pousser(true, false, Vec::new()),
-                    },
-                };
-            }
-            let mut v = Voisinage::new();
-            for sec in &secs {
-                let idx = sec.unpack();
-                v.remplir(|x, y, z| {
-                    if Voisinage::dedans(x, y, z) {
-                        sec.palette[idx[(y * 256 + z * 16 + x) as usize] as usize]
-                    } else {
-                        AIR
-                    }
-                });
-                let (q, i) = mailler_pour_gpu(&v, &t);
-                total += q.len() + i.len();
             }
         }
     }
-    total
+    let mut t = TableFormes::new();
+    for id in 0..interner.len() as StateId {
+        let cle = interner.resolve(id).unwrap();
+        let nu = cle.split('|').next().unwrap();
+        match nu {
+            "minecraft:air" => t.pousser(true, false, Vec::new()),
+            _ => match formes.get(nu) {
+                Some((Forme::Cube, _)) => t.pousser(false, true, Vec::new()),
+                Some((Forme::Modele, n)) => t.pousser(
+                    false,
+                    false,
+                    (0..*n)
+                        .map(|k| {
+                            let tt = (*n).max(1) as i32;
+                            let bas = (k as i32 * 16 / tt) as i8;
+                            let haut = ((k as i32 + 1) * 16 / tt).max(bas as i32 + 1).min(16) as i8;
+                            Cuboide {
+                                min: [0, bas, 0],
+                                max: [16, haut, 16],
+                                faces: 0x3F,
+                                cull: 0x3F,
+                            }
+                        })
+                        .collect(),
+                ),
+                _ => t.pousser(true, false, Vec::new()),
+            },
+        };
+    }
+    (grille, t)
 }
 
 criterion_group!(benches, passes, complet, region);

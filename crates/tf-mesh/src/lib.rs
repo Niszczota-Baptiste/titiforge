@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chantier;
 pub mod forme;
 pub mod glouton;
 pub mod maillage;
@@ -21,6 +22,7 @@ pub mod modeles;
 pub mod opacite;
 pub mod voisinage;
 
+pub use chantier::{Adresse, Chantier, Grille, Lot};
 pub use forme::{Cuboide, Face, Formes, TableFormes, FACES};
 pub use maillage::{Instance, Instances, Maillage, Quad};
 pub use opacite::Opacite;

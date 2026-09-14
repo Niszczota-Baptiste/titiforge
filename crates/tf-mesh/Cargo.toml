@@ -8,6 +8,11 @@ description = "Maillage : passe gloutonne, passe de modèles, occlusion ambiante
 
 [dependencies]
 tf-anvil.workspace = true
+rayon = { workspace = true, optional = true }
+
+[features]
+default = ["parallele"]
+parallele = ["dep:rayon"]
 
 [dev-dependencies]
 tf-bench = { path = "../tf-bench" }
