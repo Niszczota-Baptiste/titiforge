@@ -12,8 +12,36 @@ Successeur d'`ExeWorldEdit` (Electron + JS), qui **reste en service** et n'est
 pas modifié par ce dépôt. Il sert de référence d'écriture : sa table d'états de
 blocs, son packing Litematica et ses 44 pièges sont du savoir payé cher.
 
-Cible : Minecraft Java récent, Fabric / Forge / NeoForge, blocs moddés. Gros
-builds pour le serveur Minefield.
+Cible : **le serveur Minefield d'abord**, Minecraft vanilla ensuite. Ce n'est
+pas « du vanilla plus quelques blocs custom » — c'est l'inverse, et les chiffres
+le disent (mesurés sur le codex de `titisite`) :
+
+| | |
+|---|---|
+| Blocs `minefield:*` | **1 678** — contre 882 vanilla, presque le double |
+| Formes non-cubes | **56 %** (950 blocs) ; cubes pleins : 29 % seulement |
+| Blocs portant un état | **54 %** (910), à transformer sous rotation |
+| Variantes avec rotation | **22 627** déclarées dans `blockstates.json` |
+| Le plus complexe | une tombe en bois : **82 cuboïdes** dans un seul bloc |
+
+Trois conséquences qui ne sont pas négociables :
+
+1. **Le greedy meshing ne couvre que 29 % d'un build Minefield.** La passe de
+   modèles n'est pas un repli pour quelques escaliers : c'est le chemin
+   PRINCIPAL sur la cible principale. La phase 2 doit se dimensionner là-dessus,
+   pas sur du terrain vanilla.
+2. **Une table de rotation écrite à la main est impossible.** 910 blocs à état,
+   avec quatre propriétés que le vanilla n'a pas — `vertical` (16 920
+   occurrences), `offset`, `model`, `position`. Les règles DÉRIVÉES des
+   `blockstates` ne sont pas un confort, c'est la seule option praticable.
+3. **Un `minefield:*` n'est JAMAIS remappé vanilla.** Sa géométrie et ses états
+   se transforment ; son namespace, jamais. Invariant hérité d'`ExeWorldEdit`,
+   et il devient central quand les deux tiers du catalogue sont custom.
+
+Le codex extrait vit dans `titisite/public/codex/` : `codex.json` (2 034
+entrées avec noms français et catégories), `blockstates.json` (2 560 entrées,
+minefield ET vanilla), plus les modèles et textures. C'est la source de vérité
+du catalogue — `ExeWorldEdit` le réextrayait par `npm run codex`.
 
 ## Où va ce projet
 

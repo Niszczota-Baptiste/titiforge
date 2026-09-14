@@ -6,6 +6,25 @@ qu'elle interdit. Il est là pour qu'on n'ait pas à la redécouvrir à chaque
 session — et pour qu'on refuse, en connaissance de cause, les raccourcis qui
 coûteraient une refonte dans deux ans.
 
+## La cible, avant tout le reste
+
+**Minefield d'abord**, vanilla ensuite. Mesuré sur le codex du serveur : 1 678
+blocs `minefield:*` contre 882 vanilla, dont **56 % de formes non-cubes** et
+54 % portant un état à transformer. Le catalogue custom est le double du
+vanilla, et il est bien plus irrégulier.
+
+Ce que ça impose, et qu'on ne découvrira pas en testant sur du terrain vanilla :
+
+- Le **greedy meshing ne couvre que 29 %** d'un build Minefield. La passe de
+  modèles est le chemin principal, pas un repli — la phase 2 se dimensionne
+  là-dessus.
+- Les **règles de rotation se dérivent**, elles ne s'écrivent pas. 910 blocs à
+  état, quatre propriétés hors vanilla (`vertical`, `offset`, `model`,
+  `position`), 22 627 variantes avec rotation.
+- Un **banc d'essai qui ne mesure que du terrain vanilla ment**. Les fixtures
+  doivent porter des blocs non-cubes à palette riche, sinon elles mesurent un
+  monde que personne n'édite.
+
 ## L'objectif
 
 Pas « un MCEdit moderne ». Les **fondations d'un écosystème de création de
