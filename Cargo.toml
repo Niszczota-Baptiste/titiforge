@@ -10,7 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 tf-nbt = { path = "crates/tf-nbt" }
 tf-anvil = { path = "crates/tf-anvil" }
-flate2 = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 rayon = "1"
 memmap2 = "0.9"
 

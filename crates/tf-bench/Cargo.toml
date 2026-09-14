@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 description = "Fixtures et mesures de performance du moteur"
 
+# Sans ça, le harnais de test de la lib intercepte les arguments de criterion :
+# `cargo bench -- --save-baseline v0` échoue sur « Unrecognized option ».
+[lib]
+bench = false
+
 [dependencies]
 tf-anvil.workspace = true
 tf-nbt.workspace = true
@@ -13,6 +18,15 @@ flate2.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
+# Le backend CONCURRENT, en dépendance directe : c'est le seul moyen de
+# comparer deux décompresseurs dans le même processus et la même exécution.
+# Deux `cargo bench` séparés mesurent surtout la charge de la machine entre
+# les deux — vérifié : un scénario qui ne décompresse RIEN a bougé de 14 %.
+miniz_oxide = "0.9"
+
+[[bench]]
+name = "inflate"
+harness = false
 
 [[bench]]
 name = "anvil"

@@ -217,3 +217,73 @@ Deux pistes, dans cet ordre :
 `compact_palette` à 103 ms est cher, et c'est assumé : il ne tourne qu'à
 l'écriture, jamais dans une boucle chaude. Si un profil le montrait ailleurs,
 ce serait un bug d'appelant.
+
+---
+
+# Première optimisation : le backend de compression
+
+La mesure désignait `inflate`, à 75 % du chargement. L'hypothèse évidente était
+le backend : `flate2` utilise `miniz_oxide` en Rust pur, et « zlib-ng est 2 à
+3 fois plus rapide » est de notoriété publique.
+
+**L'hypothèse était fausse**, et la façon dont elle s'est effondrée mérite
+d'être notée.
+
+## Ce qui n'a pas marché : comparer deux exécutions
+
+Basculer sur `zlib-rs` puis relancer le bench annonçait **−16 %** sur
+`inflate_seul`. Sauf que `scan_seul`, qui ne décompresse **rien**, annonçait
+−14 % dans la même exécution. C'était le bruit du conteneur, pas un gain — et
+il était du même ordre que ce qu'on cherchait.
+
+C'est la règle des 25 % qui a fait son travail. Sans elle, `zlib-rs` aurait été
+adopté sur la foi d'un chiffre qui ne mesurait que la charge de la machine.
+
+## Ce qui a marché : les deux backends dans le même processus
+
+`benches/inflate.rs` fait tourner les deux décompresseurs sur les **mêmes
+octets**, dans la **même exécution**, en alternance. Le bruit machine s'annule,
+et ce qui reste est réel.
+
+| Décompression, région pleine | Temps | Débit |
+|---|---:|---:|
+| `flate2` / `zlib-rs` | 63,20 ms | 495 Mio/s |
+| `miniz_oxide` | 63,55 ms | 492 Mio/s |
+
+**0,6 % d'écart. Le backend ne change rien à la décompression.**
+
+## Où le gain était vraiment
+
+La réputation de `zlib-ng` porte sur la **compression**, pas sur l'inverse. Or
+écrire une région modifiée recompresse chaque chunk touché — et c'est trois
+fois plus cher que de le lire.
+
+| Compression (niveau 6), 64 chunks | Temps | Taille produite |
+|---|---:|---:|
+| `flate2` / `zlib-rs` | **21,7 ms** | **15,4 %** du clair |
+| `miniz_oxide` | 59,3 ms | 16,2 % du clair |
+
+**× 2,7 plus rapide, et 5 % plus petit.** Les deux à la fois, ce qui est rare :
+un compresseur plus rapide produit d'habitude des fichiers plus gros, et sur
+une save de plusieurs gigaoctets ça ne serait pas un gain.
+
+Vérifié sur le chemin réel :
+
+| Scénario | Avant | Après | |
+|---|---:|---:|---:|
+| `splice_et_recompression` | 1,10 ms | **392 µs** | **−64 %** |
+| `region_intacte` | 1,66 ms | 1,91 ms | bruit — ce chemin ne compresse pas |
+
+`zlib-rs` est donc adopté. Il est en Rust pur, donc la compilation croisée vers
+Windows reste triviale — un backend en C aurait imposé une chaîne de
+compilation à tous ceux qui construisent le projet.
+
+## Ce qui reste sur le chargement
+
+`inflate` pèse toujours 75 %, et aucun backend n'y changera rien. Le levier
+restant est le **parallélisme** : ces chiffres sont monofil, et le prototype
+décodait la même région en 48 ms contre 88,8 avec `rayon` sur 4 cœurs. La
+décompression est parfaitement parallélisable par chunk.
+
+`benches/inflate.rs` reste dans le dépôt : c'est la preuve, et elle évite qu'on
+repropose l'échange dans six mois sur la foi de la même réputation.
