@@ -77,6 +77,31 @@ c'est ce qui permettra à un greffon d'insérer une passe, et au rendu hors lign
 (captures haute qualité, shaders) d'être un autre graphe plutôt qu'un mode
 dégradé du premier.
 
+> **En cours — le maillage est là, mesuré, et il a déjà changé d'architecture
+> deux fois sous la mesure.**
+>
+> | | |
+> |---|---|
+> | Fixture honnête (`Build`) | ✅ `docs/fixtures.md` |
+> | Passe gloutonne | ✅ par rangées de bits |
+> | Passe de modèles, en quads | ✅ pour l'export et les tests |
+> | Passe de modèles, en **instances** | ✅ le chemin du GPU |
+> | Occlusion ambiante | ⬜ |
+> | Arène GPU, multi-draw indirect | ⬜ |
+> | Graphe de passes nommées | ⬜ |
+>
+> **Deux résultats qui ont décidé de l'architecture.**
+>
+> *La passe de modèles fait neuf dixièmes de la géométrie.* 349 k blocs-modèles
+> contre 3,5 M de cubes posés, et pourtant 5,8 M de quads contre 630 k. Ça ne
+> se déduisait pas de la part du catalogue (66,8 %), qui dit autre chose. Donc
+> les modèles n'émettent plus de géométrie mais des **poses** de huit octets :
+> 93 Mo de quads remplacés par 2,8 Mo.
+>
+> *La passe gloutonne payait le volume et non la sortie.* Une section pleine —
+> six quads — coûtait 94 µs. L'opacité par rangées de bits ramène la chaîne
+> complète de **453 ms à 251 ms** sur un quart de région bâtie.
+
 > **Sortie.** 60 FPS soutenus, rayon 512 blocs, sur un vrai monde Minefield.
 > < 5 appels de dessin (référence : 1 281).
 

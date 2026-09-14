@@ -167,7 +167,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (248 tests aujourd'hui)
+cargo test            # tous les crates (264 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -179,6 +179,8 @@ TF_MCA_TIERS=./r.0.1.mca cargo test -p tf-anvil --test croisement -- --nocapture
 cargo bench -p tf-bench
 cargo run --release -p tf-bench --example profil_build     # ce que la fixture de BUILD produit
 cargo run --release -p tf-bench --example poids_editions   # ce qu'une opération fait réécrire
+cargo bench -p tf-mesh                                     # le maillage, passe par passe
+cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -204,7 +206,7 @@ crates/
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   jars de mods, packs, blockstates→models→textures, atlas
-  tf-mesh/     greedy + AO, cuisson des modèles, mips de LOD
+  tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
   tf-render/   wgpu : arène, multi-draw indirect, HZB, transparence
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -344,6 +346,35 @@ propres à ce dépôt.
   n'ouvrant que `models/` sur les seules `variants`, 353 blocs sur 1 678
   restaient non résolus — et la part de blocs-modèles sortait à 50 % au lieu de
   66,8 %. Un recensement qui laisse 21 % de trous ne dit rien.
+- **Un mailleur qui paie le VOLUME au lieu de la SORTIE.** La passe gloutonne
+  examinait ses 24 576 cases de masque par section quel que soit le contenu :
+  mesuré au banc, une section **entièrement pleine** — six quads en sortie —
+  coûtait 94 µs, et sur une salle décorée la gloutonne prenait 68 % du temps en
+  produisant 10 % des quads. Même famille que le `warmup(extent)`
+  d'`ExeWorldEdit`. L'opacité tient par RANGÉES de dix-huit cases dans un
+  `u32`, « opaque et voisin transparent » est `rangee & !(rangee << 1)`, et on
+  ne visite que les bits posés. × 1,8 sur la chaîne complète.
+- **Une rangée qui TRAVERSE les tranches ne se recalcule pas par tranche.** Sur
+  l'axe X, une rangée court le long de la profondeur : la recalculer dans la
+  boucle des tranches la refaisait seize fois, et annulait tout le gain sur
+  deux faces sur six.
+- **Un masque reblanchi par tranche coûte ce qu'on vient d'économiser.** La
+  fusion remet à zéro chaque case qu'elle consomme, et elle les consomme
+  toutes : le masque ressort propre. Le nettoyer quand même, c'était 24 576
+  écritures par section. Un `debug_assert` fige la propriété — une marque
+  oubliée produirait un quad fantôme à la mauvaise profondeur.
+- **La passe de modèles ne doit pas produire de géométrie.** 349 k
+  blocs-modèles produisaient 5,8 M de quads, neuf dixièmes du maillage — alors
+  que ces quads sont la MÊME géométrie répétée : deux dalles de chêne côte à
+  côte n'ont pas deux modèles, elles ont deux positions. Une POSE fait huit
+  octets, le modèle vit une fois dans un tampon indexé par l'état. Mesuré :
+  93 Mo de quads remplacés par 2,8 Mo de poses. Contrepartie : le masquage des
+  faces se déplace dans le shader, puisqu'il n'y a plus de faces à supprimer
+  ici.
+- **Une section d'air coûte 17 µs au mailleur, et il ne peut rien y faire.**
+  De l'air et des plantes sont indiscernables du point de vue de l'opacité.
+  C'est l'APPELANT qui le sait gratuitement — sa palette a une entrée, et c'est
+  de l'air. Sur un monde plein de ciel, c'est le poste principal.
 - **Le discriminant d'un `enum` n'est pas un format de fichier.** Insérer une
   variante décalerait tout ce qui est déjà sur le disque d'un utilisateur, et
   ses annulations viseraient le mauvais dossier. `Folder::code()` est la
