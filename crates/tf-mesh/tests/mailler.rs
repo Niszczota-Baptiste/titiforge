@@ -465,3 +465,104 @@ fn le_maillage_est_deterministe() {
     });
     assert_eq!(quads_de(&v, &t).quads, quads_de(&v, &t).quads);
 }
+
+#[test]
+fn le_glouton_couvre_exactement_les_memes_cases_que_le_naif() {
+    // L'AIRE ne suffit pas, et c'est la leçon payée dans `tf-blocks` : un
+    // contrôle cohérent avec lui-même ne dit pas que le résultat est juste.
+    // Un quad posé à la mauvaise PROFONDEUR, ou sur le mauvais état, garde
+    // exactement la bonne aire — et le mur sort troué d'un côté et doublé de
+    // l'autre. On compare donc l'ENSEMBLE des cases couvertes : face,
+    // position, et l'état qui l'a produite.
+    let t = table();
+    let mut v = vide();
+    let mut n = 0u32;
+    v.remplir(|x, y, z| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        if !Voisinage::dedans(x, y, z) {
+            return AIR;
+        }
+        match n % 3 {
+            0 => PIERRE,
+            1 => AUTRE,
+            _ => AIR,
+        }
+    });
+
+    // Le naïf : une case de 16 × 16 par face visible, repérée par son coin.
+    let mut attendu: std::collections::BTreeSet<(u8, i32, i32, i32, u32)> =
+        std::collections::BTreeSet::new();
+    let n_cote = COTE as i32;
+    for y in 0..n_cote {
+        for z in 0..n_cote {
+            for x in 0..n_cote {
+                let id = v.get(x, y, z);
+                if !t.opaque(id) {
+                    continue;
+                }
+                for f in FACES {
+                    let p = f.pas();
+                    if !t.opaque(v.get(x + p[0], y + p[1], z + p[2])) {
+                        attendu.insert((f as u8, x, y, z, id));
+                    }
+                }
+            }
+        }
+    }
+
+    // Le glouton : chaque quad se redécoupe en cases d'un bloc.
+    let m = quads_de(&v, &t);
+    let mut obtenu: std::collections::BTreeSet<(u8, i32, i32, i32, u32)> =
+        std::collections::BTreeSet::new();
+    for q in &m.quads {
+        // Les axes du plan de la face, dans l'ordre croissant des autres axes.
+        let axe = q.face as usize / 2;
+        let (a, b) = match axe {
+            0 => (1, 2),
+            1 => (0, 2),
+            _ => (0, 1),
+        };
+        let pas_a = (q.taille[0] / 16.0).round() as i32;
+        let pas_b = (q.taille[1] / 16.0).round() as i32;
+        for i in 0..pas_a {
+            for j in 0..pas_b {
+                let mut c = [
+                    (q.min[0] / 16.0).round() as i32,
+                    (q.min[1] / 16.0).round() as i32,
+                    (q.min[2] / 16.0).round() as i32,
+                ];
+                c[a] += i;
+                c[b] += j;
+                // Une face POSITIVE est posée sur le bord haut du bloc : son
+                // `min` est donc déjà d'un cran plus loin sur l'axe.
+                if q.face as usize % 2 == 1 {
+                    c[axe] -= 1;
+                }
+                assert!(
+                    obtenu.insert((q.face as u8, c[0], c[1], c[2], q.id)),
+                    "deux quads couvrent la même case : {:?} en {c:?}",
+                    q.face
+                );
+            }
+        }
+    }
+
+    // Le contrôle ne vaut que si la fusion a VRAIMENT eu lieu : sur un
+    // remplissage qui ne fusionnerait rien, il ne comparerait le naïf qu'à
+    // lui-même.
+    assert!(
+        m.quads.iter().any(|q| q.aire() > 16.0 * 16.0),
+        "la fixture doit produire des quads FUSIONNÉS, sinon ce test est creux"
+    );
+    assert_eq!(
+        obtenu.len(),
+        attendu.len(),
+        "le glouton couvre {} cases, le naïf {}",
+        obtenu.len(),
+        attendu.len()
+    );
+    assert_eq!(
+        obtenu, attendu,
+        "le glouton et le naïf ne couvrent pas les mêmes cases"
+    );
+}
