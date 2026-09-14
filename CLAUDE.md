@@ -39,8 +39,20 @@ deux qui se cassent le plus facilement par inadvertance :
   suite d'entrées réversibles TYPÉES ; l'instantané de section n'en est qu'une.
 
 Ce qui se pose aujourd'hui, ce sont les **coutures** — registres plutôt
-qu'`enum` figés, journal typé, document de projet extensible. Le runtime de
+qu'`enum` figés, journal typé, format de projet versionné. Le runtime de
 greffons ne se construit pas avant que le cœur soit fini.
+
+### Portée de la 1.0, tranchée
+
+- **Ni PNJ ni quêtes** : greffon de 2.0. Aucun magasin de documents à écrire
+  aujourd'hui — seulement la couture pour qu'activer le greffon n'oblige pas à
+  migrer les projets de 1.0.
+- **Solo**, échange de fichiers exportés. Journal **linéaire**, staging par
+  copie locale. Un log d'opérations synchronisé aurait changé le staging,
+  l'annulation et le stockage : la question est tranchée, on ne la rouvre pas
+  sans raison.
+- **Annulation persistante avec points de reprise nommés.** Le journal vit sur
+  disque, à format figé et versionné.
 
 ## L'idée centrale
 
@@ -114,7 +126,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (146 tests aujourd'hui)
+cargo test            # tous les crates (166 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -145,7 +157,7 @@ crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   BlockState internés, palettes, règles de rotation dérivées
-  tf-world/    adressage ✅ · résidence LRU par octets, streaming, staging, undo
+  tf-world/    adressage ✅ · résidence ✅ · streaming, staging, journal typé
   tf-ops/      répartition 3 étages, masques, motifs, sélections-prédicat
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   jars de mods, packs, blockstates→models→textures, atlas

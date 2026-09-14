@@ -32,6 +32,28 @@ RP.
 
 Rien de tout cela ne sera dans le cœur. Tout passera par des **greffons**.
 
+## Ce qui est tranché
+
+Trois questions posées, trois réponses qui bornent le travail — et qui le
+réduisent, ce qui est la bonne nouvelle.
+
+**Pas de PNJ ni de quêtes en 1.0.** Ils viendront en 2.0, par un greffon confié
+à quelques personnes qui écrivent les quêtes. Conséquence directe : *aucun
+magasin de documents à concevoir aujourd'hui*. Il reste la couture — un format
+de projet **versionné** et un journal **typé** — pour qu'activer le greffon en
+2.0 n'oblige pas à migrer les projets de 1.0.
+
+**Solo.** Un seul éditeur à la fois, sur le poste de la personne ; on s'échange
+des fichiers exportés. Le journal reste **linéaire** et le staging une copie
+locale. C'était la question la plus coûteuse à retrofiter de tout le projet :
+un log d'opérations synchronisé aurait changé le staging, l'annulation et le
+stockage. La réponse nous l'épargne.
+
+**Annulation persistante, avec points de reprise nommés.** On ferme, on rouvre,
+on peut encore annuler — et on peut revenir à « avant la muraille ». Ça impose
+un journal sur disque à format **figé et versionné**, ce qui était de toute
+façon nécessaire pour les entrées de greffon de la 2.0.
+
 ---
 
 # Les six contraintes que ça impose
@@ -87,8 +109,12 @@ plus tard — donc de tout ce qui l'utilise.
 
 ## 3. Un monde n'est pas seulement des blocs
 
-PNJ, quêtes, routes, points de caméra : ce sont des **documents de projet**,
-pas des blocs. Ils ont besoin de trois choses que la grille de voxels ne donne
+**Rien de ceci n'est construit en 1.0** — voir « Ce qui est tranché ». Ce qui
+est construit, c'est la place où ça viendra : un format de projet versionné,
+extensible sans migration.
+
+PNJ, quêtes, routes, points de caméra seront des **documents de projet**, pas
+des blocs. Ils auront besoin de trois choses que la grille de voxels ne donne
 pas :
 
 - **Une identité stable.** Une quête désigne un PNJ ; ce lien doit survivre à

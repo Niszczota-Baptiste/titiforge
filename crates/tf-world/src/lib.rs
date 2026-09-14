@@ -8,7 +8,9 @@
 #![forbid(unsafe_code)]
 
 pub mod coords;
+pub mod residency;
 
 pub use coords::{
     floor_div, floor_mod, BBox, BlockPos, ChunkPos, Height, LocalBox, RegionPos, SectionPos,
 };
+pub use residency::{Editing, Evicted, Residency, State, Weighed};
