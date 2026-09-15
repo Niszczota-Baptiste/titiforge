@@ -202,6 +202,13 @@ TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --
 # ce que les règles de transformation couvrent, sur le pack RÉEL
 cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
 
+# UNE OPÉRATION SUR UN VRAI MONDE — le premier bout qu'on peut lancer soi-même.
+# Sans --ecrire, tout vit dans une copie de travail et la save n'est pas touchée.
+cargo run --release -p tf-ops --example semer  -- /tmp/monde-essai   # un monde d'essai
+cargo run --release -p tf-ops --example editer -- /tmp/monde-essai   # ce qu'il contient
+cargo run --release -p tf-ops --example editer -- /tmp/monde-essai \
+    --remplacer minecraft:stone minecraft:dirt --sel 0,-64,0,511,320,511 --compter
+
 # une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
 cargo run --release -p tf-render --example adaptateur
 cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 1000

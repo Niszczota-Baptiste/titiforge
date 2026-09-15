@@ -536,3 +536,20 @@ croisant les deux compilations (`--example empreinte`, avec et sans la
 fonctionnalité). Un résultat qui dépendrait du nombre de cœurs donnerait deux
 mondes différents de la même opération, et un journal qui ne défait pas ce
 qu'il croit défaire.
+
+## Sur de vrais fichiers
+
+`--example editer` fait tourner la chaîne complète sur une save sur disque.
+Mesuré sur un monde d'essai de quatre régions (256 chunks peuplés par région),
+sélection de 100 925 440 blocs :
+
+| | |
+|---|---:|
+| `//replace` (essai à blanc, sans compter) | **40 ms** |
+| le même, en comptant | 60 ms |
+| une cible ABSENTE de la save | **12 ms** — 3 072 sections écartées sur leur seule palette |
+
+Et l'aller-retour se vérifie sur le disque : après avoir remplacé la pierre par
+de la terre, il ne reste **aucune** pierre, et la terre compte 4 981 854 blocs —
+les 4 955 054 remplacés **plus les 26 800 qui existaient déjà**. La sauvegarde
+préalable est octet pour octet le fichier d'origine.
