@@ -6,8 +6,8 @@
 //! de quoi exercer la chaîne complète sur des fichiers, pas sur des tampons.
 //!
 //! ```text
-//! cargo run --release -p tf-ops --example semer -- /tmp/monde-essai
-//! cargo run --release -p tf-ops --example editer -- /tmp/monde-essai
+//! .\semer.exe  D:\monde-essai
+//! .\editer.exe D:\monde-essai
 //! ```
 
 use tf_bench::{region, Terrain};

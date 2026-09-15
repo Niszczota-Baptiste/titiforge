@@ -204,10 +204,14 @@ cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
 
 # UNE OPÉRATION SUR UN VRAI MONDE — le premier bout qu'on peut lancer soi-même.
 # Sans --ecrire, tout vit dans une copie de travail et la save n'est pas touchée.
-cargo run --release -p tf-ops --example semer  -- /tmp/monde-essai   # un monde d'essai
-cargo run --release -p tf-ops --example editer -- /tmp/monde-essai   # ce qu'il contient
-cargo run --release -p tf-ops --example editer -- /tmp/monde-essai \
-    --remplacer minecraft:stone minecraft:dirt --sel 0,-64,0,511,320,511 --compter
+# UNE COMMANDE PAR LIGNE : PowerShell ne connaît pas la continuation d'un shell Unix.
+cargo run --release -p tf-ops --example semer  -- D:\monde-essai
+cargo run --release -p tf-ops --example editer -- D:\monde-essai
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --remplacer minecraft:stone minecraft:dirt --sel "0,-64,0,511,320,511" --compter
+
+# le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
+# (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
+cargo build --release --target x86_64-pc-windows-gnu -p tf-ops --example editer --example semer
 
 # une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
 cargo run --release -p tf-render --example adaptateur
@@ -648,3 +652,13 @@ propres à ce dépôt.
   `collect()` de rayon garde l'ordre d'entrée. Les deux chemins sont croisés
   sur l'EMPREINTE du fichier produit — un test seul ne peut pas le faire, le
   choix se fait à la compilation.
+- **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
+  fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
+  PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que
+  PowerShell lit comme un TABLEAU et recolle avec des espaces avant de passer
+  l'argument. Dans les deux cas l'erreur ne parle pas du programme, et
+  l'utilisateur a tapé exactement ce que la documentation disait. Le
+  `CLAUDE.md` le dit depuis le début — **Windows est la cible** — et ça vaut
+  pour les EXEMPLES autant que pour les scripts. Corollaire : un outil accepte
+  le rendu naturel de son propre shell (la virgule ET l'espace), sinon un
+  oubli de guillemets devient un bug à déboguer.

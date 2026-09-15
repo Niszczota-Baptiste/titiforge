@@ -4,17 +4,19 @@
 //! Il ne remplace pas l'application ; il prouve que la chaîne complète tient
 //! sur des fichiers que Minecraft a écrits, et pas seulement sur des fixtures.
 //!
+//! **Une commande par LIGNE.** Windows est la cible, et PowerShell ne connaît
+//! pas la continuation `\` d'un shell Unix : il attend la suite et rend une
+//! erreur de syntaxe qui ne parle pas du programme.
+//!
 //! ```text
-//! # ce qu'il y a dans le monde, sans rien lire de lourd
-//! cargo run --release -p tf-ops --example editer -- ~/.minecraft/saves/Monde
-//!
-//! # un essai à blanc : tout se fait dans une copie de travail, rien n'est écrit
-//! cargo run --release -p tf-ops --example editer -- ~/.minecraft/saves/Monde \
-//!     --remplacer minecraft:stone minecraft:dirt --sel -64,0,-64,64,80,64
-//!
-//! # et pour de vrai
-//! cargo run --release -p tf-ops --example editer -- ... --ecrire
+//! .\editer.exe D:\monde-essai
+//! .\editer.exe D:\monde-essai --remplacer minecraft:stone minecraft:dirt --sel "0,-64,0,511,320,511" --compter
+//! .\editer.exe D:\monde-essai --poser minecraft:air --sel "0,60,0,15,70,15" --ecrire
 //! ```
+//!
+//! Les guillemets autour de `--sel` ne sont pas décoratifs sous PowerShell :
+//! sans eux, `0,-64,0` est lu comme un tableau et recollé avec des espaces.
+//! L'outil accepte les deux — mais la documentation montre la forme sûre.
 //!
 //! **Invariant n° 1 : on ne touche jamais au fichier source.** Sans `--ecrire`,
 //! tout vit dans un dossier temporaire et la save n'est même pas ouverte en
@@ -52,7 +54,8 @@ fn usage() -> ! {
     eprintln!(
         "usage : editer <monde> [options]
 
-  --sel x1,y1,z1,x2,y2,z2    la sélection, en coordonnées MONDE
+  --sel \"x1,y1,z1,x2,y2,z2\"  la sélection, en coordonnées MONDE. Les guillemets
+                             sous PowerShell : sans eux le shell mange la virgule
   --poser <bloc>             //set
   --remplacer <de> <vers>    //replace
   --melanger p:bloc,p:bloc   un mélange pondéré, ex. 3:minecraft:stone,1:minecraft:dirt
@@ -61,9 +64,23 @@ fn usage() -> ! {
   --compter                  compter les blocs modifiés — coûte 31 × l'opération
   --ecrire                   ÉCRIRE dans la save (sinon : essai à blanc)
 
+Une commande par LIGNE : PowerShell ne connaît pas la continuation \\ d'un shell Unix.
+
 Sans opération, se contente de décrire le monde."
     );
     std::process::exit(2)
+}
+
+/// Le séparateur d'une liste passée en argument : la virgule ET l'espace.
+///
+/// Ce n'est pas de la complaisance. PowerShell lit `0,-64,0,511` en position
+/// d'argument comme un TABLEAU et le recolle avec des espaces avant de le
+/// passer à l'exe : la virgule a disparu avant que le programme ne voie quoi
+/// que ce soit, alors que l'utilisateur a tapé exactement ce que la
+/// documentation dit. Windows est la cible ; un outil qui refuse le rendu
+/// naturel de son propre shell est un outil cassé.
+fn sep(c: char) -> bool {
+    c == ',' || c.is_whitespace()
 }
 
 fn lire_args() -> Args {
@@ -84,7 +101,8 @@ fn lire_args() -> Args {
                 let v: Vec<i32> = a
                     .next()
                     .unwrap_or_else(|| usage())
-                    .split(',')
+                    .split(sep)
+                    .filter(|s| !s.is_empty())
                     .map(|s| s.trim().parse().unwrap_or_else(|_| usage()))
                     .collect();
                 if v.len() != 6 {
@@ -112,7 +130,8 @@ fn lire_args() -> Args {
             "--melanger" => {
                 let v = a.next().unwrap_or_else(|| usage());
                 let entrees = v
-                    .split(',')
+                    .split(sep)
+                    .filter(|e| !e.is_empty())
                     .map(|e| {
                         let (p, b) = e.split_once(':').unwrap_or_else(|| usage());
                         (p.trim().parse().unwrap_or_else(|_| usage()), b.to_string())
