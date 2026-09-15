@@ -10,6 +10,11 @@ description = "Les opérations d'édition : masques, motifs, et la répartition 
 tf-anvil.workspace = true
 tf-world.workspace = true
 tf-nbt.workspace = true
+rayon = { workspace = true, optional = true }
+
+[features]
+default = ["parallele"]
+parallele = ["dep:rayon"]
 
 [dev-dependencies]
 tf-bench = { path = "../tf-bench" }
@@ -17,4 +22,8 @@ criterion = { version = "0.5", default-features = false }
 
 [[bench]]
 name = "etages"
+harness = false
+
+[[bench]]
+name = "edition"
 harness = false

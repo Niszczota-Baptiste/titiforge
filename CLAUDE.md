@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (378 tests aujourd'hui)
+cargo test            # tous les crates (379 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -185,6 +185,10 @@ cargo run --release -p tf-bench --example profil_build     # ce que la fixture d
 cargo run --release -p tf-bench --example poids_editions   # ce qu'une opération fait réécrire
 cargo bench -p tf-mesh                                     # le maillage, passe par passe
 cargo bench -p tf-ops                                      # les trois étages, avec leurs COMPTES
+cargo run --release -p tf-ops --example compression        # ce que coûte chaque niveau
+# le parallèle et le séquentiel doivent rendre le MÊME octet :
+cargo run --release -p tf-ops --example empreinte
+cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
 
 # le pack RÉEL du serveur (rien n'est copié dans le dépôt)
@@ -616,3 +620,24 @@ propres à ce dépôt.
   touche pas à ce qu'on ne comprend pas — la case reste telle quelle et
   ressort à l'identique, ou vaut de l'air pour le mailleur. Coût mesuré de la
   vérification : +3,4 % sur le seul chemin qui la fait par bloc.
+- **Le piège n° 1 s'est presque refermé une deuxième fois.** J'allais
+  paralléliser le CALCUL d'une opération — les trois étages, 1,35 ms sur une
+  région pleine. Découpée phase par phase, la chaîne complète dit : 541 ms de
+  RECOMPRESSION sur 800, 89 de décompression, 65 d'application, 37 de décodage,
+  5 de recollement. Le calcul qu'on avait soigneusement optimisé pèse **0,17 %**.
+  Découper une chaîne AVANT de choisir quoi accélérer n'est pas une précaution,
+  c'est la seule façon de ne pas travailler pour rien.
+- **Le niveau de compression est un réglage, pas une constante par défaut.**
+  Mesuré sur une région pleine : niveau 6 (le défaut de `flate2`) 550 ms pour
+  5,0 Mo, niveau 2 **230 ms pour 5,6 Mo**, niveau 9 **4 371 ms** pour 4,7 Mo —
+  huit fois plus lent pour 6 % de gain. La copie de travail se réécrit à chaque
+  opération pendant que l'utilisateur attend ; elle s'optimise pour le TEMPS,
+  comme le cache d'aperçu d'`ExeWorldEdit`. La contrepartie (+11,8 % de taille)
+  est réelle et tient dans une constante, `NIVEAU_STAGING`.
+- **Un résultat qui dépend du nombre de cœurs est un bug silencieux.** Deux
+  utilisateurs obtiendraient deux mondes différents de la même opération, et un
+  journal qui ne défait pas ce qu'il croit défaire. Ce qui rend la propriété
+  vraie n'est pas la chance : le tirage se hache sur la POSITION, et le
+  `collect()` de rayon garde l'ordre d'entrée. Les deux chemins sont croisés
+  sur l'EMPREINTE du fichier produit — un test seul ne peut pas le faire, le
+  choix se fait à la compilation.

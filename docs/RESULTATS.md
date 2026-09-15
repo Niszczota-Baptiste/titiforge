@@ -489,3 +489,50 @@ travaille ensemble, et ce que ça vérifie ne se vérifie nulle part ailleurs :
 Une opération qui déborde sur plusieurs régions fait **UNE** entrée de journal :
 un `Ctrl+Z` qui ne défait qu'un tiers du travail serait pire qu'une annulation
 absente.
+
+## Où part vraiment le temps d'une opération
+
+Le piège n° 1 du dépôt a failli se refermer une deuxième fois. J'allais
+paralléliser le CALCUL — les trois étages, 1,35 ms sur une région pleine.
+Découpée phase par phase, la chaîne complète dit autre chose :
+
+| Phase | Temps | Part |
+|---|---:|---:|
+| **recompression** | **541 ms** | **68 %** |
+| décompression | 89 ms | 11 % |
+| application + encodage des sections | 65 ms | 8 % |
+| balayage + décodage | 37 ms | 5 % |
+| recollement | 5 ms | 0,6 % |
+| **chaîne complète** | **800 ms** | |
+
+Le calcul qu'on avait soigneusement optimisé pèse **0,17 %**.
+
+### Ce que ça a donné
+
+La chaîne par chunk est parallélisable de bout en bout — et ce n'est pas un
+heureux hasard : le tirage se hache sur la POSITION précisément pour qu'aucune
+opération ne dépende de l'ordre de parcours. Chaque fil part d'une copie de
+l'interner, parce que le partager derrière un verrou sérialiserait exactement
+ce qu'on parallélise.
+
+| | Temps | |
+|---|---:|---|
+| départ | 800 ms | |
+| parallèle, 4 cœurs | **219 ms** | × 3,65 — **91 % d'efficacité** |
+| + niveau de compression 2 | **138 ms** | **× 5,8 au total** |
+
+Le niveau de compression se choisit sur mesure, pas par défaut : 550 ms au
+niveau 6 contre 230 au niveau 2, pour 11,8 % de taille en plus. Le niveau 9
+coûte **huit fois** le niveau 6 pour 6 % de gain — jamais. Le raisonnement est
+celui du cache d'aperçu d'`ExeWorldEdit` : la copie de travail se réécrit à
+chaque opération pendant que l'utilisateur attend, la sauvegarde finale ne
+s'écrit qu'une fois.
+
+### Et la propriété qui rend tout ça acceptable
+
+Les chemins parallèle et séquentiel produisent le **même octet** : même
+fichier, même ordre de correctifs de journal, mêmes comptes. Vérifié en
+croisant les deux compilations (`--example empreinte`, avec et sans la
+fonctionnalité). Un résultat qui dépendrait du nombre de cœurs donnerait deux
+mondes différents de la même opération, et un journal qui ne défait pas ce
+qu'il croit défaire.

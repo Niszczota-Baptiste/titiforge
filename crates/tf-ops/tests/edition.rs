@@ -124,21 +124,13 @@ fn une_operation_ecrit_dans_le_staging_et_jamais_dans_la_source() {
     // L'invariant n° 1, vérifié au bout de la chaîne et pas seulement dans le
     // module qui l'implémente.
     let (src, avant) = monde();
-    let mut interner = interner_de(&avant);
+    let interner = interner_de(&avant);
     let pierre = interner.get("minecraft:stone").expect("la fixture en a");
     let terre = interner.get("minecraft:dirt").expect("et de la terre");
     let st = staging(src);
 
     let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre)).en_comptant();
-    let rap = appliquer(
-        &st,
-        &SURFACE,
-        DOSSIER,
-        &selection_large(),
-        &plan,
-        &mut interner,
-    )
-    .unwrap();
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &selection_large(), &plan, &interner).unwrap();
 
     assert!(!rap.est_vide(), "l'opération doit avoir touché des chunks");
     assert!(rap.blocs.unwrap() > 0, "et modifié des blocs");
@@ -176,7 +168,7 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     // blocs dans un fichier réécrit autrement aurait perdu tout ce qu'on n'a
     // pas compris du format.
     let (src, avant) = monde();
-    let mut interner = interner_de(&avant);
+    let interner = interner_de(&avant);
     let pierre = interner.get("minecraft:stone").unwrap();
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
@@ -189,7 +181,7 @@ fn annuler_rend_le_monde_octet_pour_octet() {
         ZERO,
         &selection_large(),
         &plan,
-        &mut interner,
+        &interner,
     )
     .unwrap();
     assert!(!rap.patches.is_empty());
@@ -304,7 +296,7 @@ fn un_chunk_hors_selection_n_est_pas_touche() {
     // La portée d'une opération est ce qu'elle a VRAIMENT écrit. Un chunk que
     // la sélection ne touche pas ne doit produire ni correctif, ni réécriture.
     let (src, avant) = monde();
-    let mut interner = interner_de(&avant);
+    let interner = interner_de(&avant);
     let pierre = interner.get("minecraft:stone").unwrap();
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
@@ -319,7 +311,7 @@ fn un_chunk_hors_selection_n_est_pas_touche() {
         },
     );
     let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
-    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &interner).unwrap();
 
     assert_eq!(
         rap.patches.len(),
@@ -356,15 +348,7 @@ fn une_operation_qui_ne_change_rien_n_ecrit_rien() {
     let st = staging(src);
 
     let plan = Plan::nouveau(Masque::Etat(absent), Motif::Bloc(terre)).en_comptant();
-    let rap = appliquer(
-        &st,
-        &SURFACE,
-        DOSSIER,
-        &selection_large(),
-        &plan,
-        &mut interner,
-    )
-    .unwrap();
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &selection_large(), &plan, &interner).unwrap();
 
     assert!(rap.est_vide(), "aucun correctif");
     assert_eq!(rap.blocs, Some(0));
@@ -378,7 +362,7 @@ fn une_region_absente_n_est_pas_une_erreur() {
     // Le cas NORMAL au bord d'un monde. Le confondre avec un échec ferait
     // refuser une save parfaitement saine.
     let (src, avant) = monde();
-    let mut interner = interner_de(&avant);
+    let interner = interner_de(&avant);
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
 
@@ -396,7 +380,7 @@ fn une_region_absente_n_est_pas_une_erreur() {
         },
     );
     let plan = Plan::nouveau(Masque::Tout, Motif::Bloc(terre));
-    let rap = appliquer_region(&st, &SURFACE, DOSSIER, loin, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, loin, &sel, &plan, &interner).unwrap();
     assert!(rap.est_vide());
 }
 
@@ -414,7 +398,7 @@ fn un_monde_en_coordonnees_negatives_se_modifie_au_bon_endroit() {
     let src = MemorySource::new();
     let moins = RegionPos { x: -1, z: -1 };
     src.put_region(SURFACE, DOSSIER, moins, brut.clone());
-    let mut interner = interner_de(&brut);
+    let interner = interner_de(&brut);
     let pierre = interner.get("minecraft:stone").unwrap();
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
@@ -434,7 +418,7 @@ fn un_monde_en_coordonnees_negatives_se_modifie_au_bon_endroit() {
         },
     );
     let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre)).en_comptant();
-    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &interner).unwrap();
 
     assert_eq!(
         rap.patches.len(),
@@ -469,7 +453,7 @@ fn une_operation_sur_plusieurs_regions_fait_une_seule_entree_de_journal() {
     for (x, z) in [(0, 0), (1, 0), (0, 1)] {
         src.put_region(SURFACE, DOSSIER, RegionPos { x, z }, brut.clone());
     }
-    let mut interner = interner_de(&brut);
+    let interner = interner_de(&brut);
     let pierre = interner.get("minecraft:stone").unwrap();
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
@@ -486,7 +470,7 @@ fn une_operation_sur_plusieurs_regions_fait_une_seule_entree_de_journal() {
         },
     );
     let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
-    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &interner).unwrap();
 
     let regions: std::collections::BTreeSet<_> =
         rap.patches.iter().map(|p| p.cible.region).collect();
@@ -528,7 +512,7 @@ fn l_etage_section_traverse_le_splice_et_se_relit() {
     // pas seulement sa charge — et ça ne se vérifie qu'en relisant le fichier
     // produit.
     let (src, avant) = monde();
-    let mut interner = interner_de(&avant);
+    let interner = interner_de(&avant);
     let terre = interner.get("minecraft:dirt").unwrap();
     let st = staging(src);
 
@@ -541,7 +525,7 @@ fn l_etage_section_traverse_le_splice_et_se_relit() {
         },
     );
     let plan = Plan::nouveau(Masque::Tout, Motif::Bloc(terre)).en_comptant();
-    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &interner).unwrap();
     assert_eq!(
         rap.etages[1],
         rap.etages.iter().sum::<usize>() - rap.etages[0] - rap.etages[3],
@@ -601,7 +585,7 @@ fn l_etage_bloc_fait_grandir_la_palette_et_se_relit() {
     let plan = Plan::nouveau(Masque::Tout, Motif::melange(vec![(1, a), (1, b), (1, c)]))
         .avec_seed(1234)
         .en_comptant();
-    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &mut interner).unwrap();
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &interner).unwrap();
     assert!(rap.etages[3] > 0, "le mélange doit passer par l'étage BLOC");
     assert!(rap.blocs.unwrap() > 0);
 
@@ -636,4 +620,53 @@ fn l_etage_bloc_fait_grandir_la_palette_et_se_relit() {
             "état {i} : {part:.3} au lieu d'un tiers"
         );
     }
+}
+
+#[test]
+fn le_resultat_ne_depend_pas_du_nombre_de_coeurs() {
+    // La chaîne par chunk tourne sur plusieurs fils. Si le résultat en
+    // dépendait, deux utilisateurs obtiendraient deux mondes différents de la
+    // même opération — et le journal ne défairait pas ce qu'il croit défaire.
+    //
+    // Ce qui rend la propriété vraie n'est pas la chance : le tirage se hache
+    // sur la POSITION, et `collect()` garde l'ordre d'entrée. Ce test fige les
+    // deux.
+    let (_, avant) = monde();
+    let interner = interner_de(&avant);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+
+    let sel = selection_large();
+    let melange = Plan::nouveau(Masque::Tout, Motif::melange(vec![(3, pierre), (1, terre)]))
+        .avec_seed(4242)
+        .en_comptant();
+
+    let mut resultats = Vec::new();
+    for _ in 0..3 {
+        let s = MemorySource::new();
+        s.put_region(SURFACE, DOSSIER, ZERO, avant.clone());
+        let st = staging(s);
+        let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &melange, &interner).unwrap();
+        let bytes = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+        let cibles: Vec<u16> = rap.patches.iter().map(|p| p.cible.chunk).collect();
+        resultats.push((bytes, cibles, rap.blocs, rap.etages));
+    }
+
+    for i in 1..resultats.len() {
+        assert_eq!(
+            resultats[0].0, resultats[i].0,
+            "le FICHIER doit être identique d'une exécution à l'autre"
+        );
+        assert_eq!(
+            resultats[0].1, resultats[i].1,
+            "et l'ordre des correctifs de journal aussi"
+        );
+        assert_eq!(resultats[0].2, resultats[i].2, "et le compte de blocs");
+        assert_eq!(resultats[0].3, resultats[i].3, "et les étages traversés");
+    }
+    assert!(resultats[0].2.unwrap() > 0, "l'opération doit avoir écrit");
+    assert!(
+        resultats[0].1.len() > 1,
+        "et toucher plusieurs chunks, sinon le test ne prouve rien"
+    );
 }

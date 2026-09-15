@@ -58,7 +58,12 @@ pub fn split_key(key: &str) -> (&str, Vec<(String, String)>) {
 }
 
 /// Table d'internement des états. `intern` est idempotent.
-#[derive(Default)]
+/// `Clone` est là pour la PARALLÉLISATION : `decode_section` a besoin d'une
+/// table mutable, et la partager derrière un verrou sérialiserait exactement ce
+/// qu'on essaie de paralléliser — mesuré dans `we-engine`, c'est l'erreur qui a
+/// fait conclure « un fil par chunk ne gagne rien ». Chaque fil part donc d'une
+/// COPIE de la table, et `merge_from` refond après coup.
+#[derive(Default, Clone)]
 pub struct Interner {
     map: HashMap<Box<str>, StateId>,
     names: Vec<Box<str>>,

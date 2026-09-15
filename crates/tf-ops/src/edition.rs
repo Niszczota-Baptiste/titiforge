@@ -28,7 +28,7 @@
 use std::borrow::Cow;
 
 use tf_anvil::chunk::{decode_section, scan, section_edits, splice, EncodeError};
-use tf_anvil::codec::{deflate, inflate, CodecError};
+use tf_anvil::codec::{deflate_level, inflate, CodecError};
 use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
 use tf_anvil::Interner;
 use tf_world::coords::{BBox, ChunkPos, RegionPos, SectionPos};
@@ -107,6 +107,133 @@ impl std::fmt::Display for Erreur {
     }
 }
 
+/// Le niveau de compression des écritures de STAGING.
+///
+/// La recompression pèse **68 %** d'une opération complète : c'est là, et nulle
+/// part ailleurs, que se décide la réactivité de l'éditeur. Mesuré sur une
+/// région pleine (1 024 chunks, 32,8 Mo décompressés) :
+///
+/// | niveau | temps | taille | |
+/// |---:|---:|---:|---|
+/// | 0 | 37 ms | 32,8 Mo | × 6,5 la taille — non |
+/// | 1 | 146 ms | 7,6 Mo | +51 % |
+/// | **2** | **230 ms** | **5,6 Mo** | **× 2,4 plus rapide pour +11,8 %** |
+/// | 3 | 298 ms | 5,4 Mo | +7,8 % |
+/// | 6 | 550 ms | 5,0 Mo | la référence, et celui de `deflate` |
+/// | 9 | 4 371 ms | 4,7 Mo | × 8 plus lent pour −6 % — jamais |
+///
+/// Le niveau 2 est le point d'équilibre, et le raisonnement est le même que
+/// pour le cache d'aperçu d'`ExeWorldEdit` : **la copie de travail se réécrit à
+/// chaque opération**, pendant que l'utilisateur attend, alors que la
+/// sauvegarde finale ne s'écrit qu'une fois. Un cache s'optimise pour le temps.
+///
+/// La contrepartie est réelle et assumée : la copie de travail pèse 11,8 % de
+/// plus, et si elle est validée telle quelle, la save aussi — jusqu'à ce que le
+/// jeu réécrive ces chunks à son propre niveau. C'est **le seul endroit** à
+/// changer pour en décider autrement.
+const NIVEAU_STAGING: u32 = 2;
+
+/// Ce qu'il y a à faire sur UN chunk : sa charge, telle qu'elle est sur disque.
+struct Travail {
+    cpos: ChunkPos,
+    index: u16,
+    compression: tf_anvil::Compression,
+    charge: Vec<u8>,
+}
+
+/// Ce qu'on en a fait.
+struct Fait {
+    index: u16,
+    /// Absent quand l'opération n'a rien écrit dans ce chunk.
+    ecrit: Option<(ChunkPatch, Vec<u8>)>,
+    etages: [usize; 4],
+    blocs: Option<u64>,
+    bornes: Option<BBox>,
+}
+
+/// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
+/// encoder, recoller, recompresser.
+///
+/// **Pure et sans état partagé** — c'est ce qui la rend parallélisable, et ce
+/// n'est pas un heureux hasard : le tirage aléatoire se hache sur la POSITION
+/// précisément pour qu'aucune opération ne dépende de l'ordre de parcours.
+///
+/// L'interner est une COPIE de travail. `decode_section` a besoin d'une table
+/// mutable, et la partager derrière un verrou sérialiserait exactement ce qu'on
+/// cherche à paralléliser — c'est la mesure de `we-engine` relue correctement :
+/// là-bas le coût était le `structuredClone` de l'arbre NBT, pas le calcul.
+/// Les états qu'un chunk fait découvrir ne quittent pas le fil : le fichier
+/// porte des NOMS, pas des identifiants.
+fn un_chunk(
+    t: &Travail,
+    sel: &BBox,
+    plan: &Plan,
+    cible: Cible,
+    interner: &mut Interner,
+) -> Result<Fait, Erreur> {
+    let avant = inflate(&t.charge, t.compression)?;
+    let balayage = scan(&avant)?;
+    let mut fait = Fait {
+        index: t.index,
+        ecrit: None,
+        etages: [0; 4],
+        blocs: plan.compter.then_some(0),
+        bornes: None,
+    };
+    let mut edits = Vec::new();
+
+    for sc in &balayage.sections {
+        let spos = SectionPos {
+            x: t.cpos.x,
+            y: sc.y as i32,
+            z: t.cpos.z,
+        };
+        if sel.clip_to_section(spos).is_none() {
+            continue;
+        }
+        let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
+            continue;
+        };
+        let r = plan.appliquer(&mut section, sel, spos);
+        fait.etages[match r.etage {
+            Etage::Rien => 0,
+            Etage::Section => 1,
+            Etage::Palette => 2,
+            Etage::Bloc => 3,
+        }] += 1;
+        if let (Some(c), Some(n)) = (fait.blocs.as_mut(), r.blocs) {
+            *c += n;
+        }
+        fait.bornes = unir(fait.bornes, r.bornes);
+        if r.etage == Etage::Rien {
+            continue;
+        }
+        // `section_edits` compare ce qu'il va écrire à ce qui est DÉJÀ là : une
+        // section que l'opération n'a pas vraiment changée ne produit aucune
+        // édition, donc aucune entrée de journal vide.
+        edits.extend(section_edits(&avant, &section, sc, interner)?);
+    }
+
+    if !edits.is_empty() {
+        let apres = splice(&avant, &mut edits)?;
+        let patch = ChunkPatch::record(cible, &avant, &apres, &edits)?;
+        fait.ecrit = Some((patch, deflate_level(&apres, t.compression, NIVEAU_STAGING)?));
+    }
+    Ok(fait)
+}
+
+/// La plus petite boîte qui contient les deux.
+fn unir(a: Option<BBox>, b: Option<BBox>) -> Option<BBox> {
+    match (a, b) {
+        (None, x) | (x, None) => x,
+        (Some(mut d), Some(b)) => {
+            d.extend(b.min);
+            d.extend(b.max);
+            Some(d)
+        }
+    }
+}
+
 /// Les chunks d'UNE région que la sélection touche.
 ///
 /// **Coupé avant d'itérer, jamais filtré après.** Parcourir tous les chunks de
@@ -137,7 +264,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     pos: RegionPos,
     sel: &BBox,
     plan: &Plan,
-    interner: &mut Interner,
+    interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
     let bytes = match staging.read_region(dim, folder, pos) {
         Ok(b) => b,
@@ -147,16 +274,17 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
         Err(e) => return Err(e.into()),
     };
     let mut region = read(&bytes, pos.x, pos.z)?;
-    let mut rap = RapportRegion::default();
-    let mut compte = plan.compter.then_some(0u64);
 
+    // ── Le ramassage, séquentiel : c'est lui qui touche au disque.
+    //
+    // Une charge déportée arrive VIDE — le crate Anvil ne lit pas de fichiers.
+    // L'oublier ferait lire un chunk vide et l'écraser.
+    let mut travaux: Vec<Travail> = Vec::new();
     for cpos in chunks_de(sel, pos) {
         let (lx, lz) = (cpos.x.rem_euclid(32), cpos.z.rem_euclid(32));
         let Some(brut) = region.get_mut(lx, lz) else {
             continue;
         };
-        // Une charge déportée arrive VIDE : le crate Anvil ne touche pas au
-        // disque. L'oublier ferait lire un chunk vide et l'écraser.
         if brut.needs_external() {
             let nom = external_file_name(cpos.x, cpos.z);
             let charge = staging.read_external(dim, folder, &nom)?;
@@ -165,67 +293,76 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
         if brut.payload.is_empty() {
             continue;
         }
+        travaux.push(Travail {
+            cpos,
+            index: brut.index,
+            compression: brut.compression,
+            // On COPIE la charge compressée — quelques mégaoctets pour toute une
+            // région — parce que la suite tourne sur plusieurs fils et ne peut
+            // pas emprunter la région qu'on va réécrire.
+            charge: brut.payload.to_vec(),
+        });
+    }
 
-        let avant = inflate(&brut.payload, brut.compression)?;
-        let balayage = scan(&avant)?;
-        let mut edits = Vec::new();
-        for sc in &balayage.sections {
-            let spos = SectionPos {
-                x: cpos.x,
-                y: sc.y as i32,
-                z: cpos.z,
-            };
-            if sel.clip_to_section(spos).is_none() {
-                continue;
-            }
-            let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
-                continue;
-            };
-            let r = plan.appliquer(&mut section, sel, spos);
-            rap.etages[match r.etage {
-                Etage::Rien => 0,
-                Etage::Section => 1,
-                Etage::Palette => 2,
-                Etage::Bloc => 3,
-            }] += 1;
-            if let (Some(c), Some(n)) = (compte.as_mut(), r.blocs) {
-                *c += n;
-            }
-            if let Some(b) = r.bornes {
-                rap.bornes = Some(match rap.bornes {
-                    None => b,
-                    Some(mut d) => {
-                        d.extend(b.min);
-                        d.extend(b.max);
-                        d
-                    }
-                });
-            }
-            if r.etage == Etage::Rien {
-                continue;
-            }
-            // `section_edits` compare ce qu'il va écrire à ce qui est DÉJÀ là :
-            // une section que l'opération n'a pas vraiment changée ne produit
-            // aucune édition, donc aucune entrée de journal vide.
-            edits.extend(section_edits(&avant, &section, sc, interner)?);
+    // ── Le travail, parallèle : 92 % du temps d'une opération est ici.
+    //
+    // Mesuré sur une région pleine, la chaîne complète prend 800 ms dont
+    // 541 de recompression, 89 de décompression, 65 d'application et
+    // d'encodage, 37 de décodage et 5 de recollement. Optimiser le calcul
+    // — les trois étages, 1,35 ms — n'aurait rien changé : c'est le piège
+    // n° 1 du dépôt, et il a failli se refermer une deuxième fois.
+    let cible = |index: u16| Cible {
+        dim: dim.clone(),
+        folder,
+        region: pos,
+        chunk: index,
+    };
+    let faits: Result<Vec<Fait>, Erreur> = {
+        #[cfg(feature = "parallele")]
+        {
+            use rayon::prelude::*;
+            travaux
+                .par_iter()
+                .map_init(
+                    || interner.clone(),
+                    |local, t| un_chunk(t, sel, plan, cible(t.index), local),
+                )
+                .collect()
         }
-        if edits.is_empty() {
-            continue;
+        #[cfg(not(feature = "parallele"))]
+        {
+            let mut local = interner.clone();
+            travaux
+                .iter()
+                .map(|t| un_chunk(t, sel, plan, cible(t.index), &mut local))
+                .collect()
         }
+    };
+    let faits = faits?;
 
-        let apres = splice(&avant, &mut edits)?;
-        rap.patches.push(ChunkPatch::record(
-            Cible {
-                dim: dim.clone(),
-                folder,
-                region: pos,
-                chunk: brut.index,
-            },
-            &avant,
-            &apres,
-            &edits,
-        )?);
-        brut.payload = Cow::Owned(deflate(&apres, brut.compression)?);
+    // ── Le recollage, séquentiel et DÉTERMINISTE.
+    //
+    // `par_iter().collect()` garde l'ordre d'entrée : le rapport et le journal
+    // ne dépendent donc pas du nombre de cœurs. Un journal qui changerait
+    // d'ordre selon la machine rendrait deux annulations différentes du même
+    // travail.
+    let mut rap = RapportRegion::default();
+    let mut compte = plan.compter.then_some(0u64);
+    for f in faits {
+        for (a, b) in rap.etages.iter_mut().zip(f.etages) {
+            *a += b;
+        }
+        if let (Some(c), Some(n)) = (compte.as_mut(), f.blocs) {
+            *c += n;
+        }
+        rap.bornes = unir(rap.bornes, f.bornes);
+        if let Some((patch, charge)) = f.ecrit {
+            let (lx, lz) = ((f.index % 32) as i32, (f.index / 32) as i32);
+            if let Some(brut) = region.get_mut(lx, lz) {
+                brut.payload = Cow::Owned(charge);
+            }
+            rap.patches.push(patch);
+        }
     }
 
     if !rap.patches.is_empty() {
@@ -255,7 +392,7 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
     folder: Folder,
     sel: &BBox,
     plan: &Plan,
-    interner: &mut Interner,
+    interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
     let mut total = RapportRegion::default();
     let mut compte = plan.compter.then_some(0u64);
@@ -268,16 +405,7 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         if let (Some(c), Some(n)) = (compte.as_mut(), r.blocs) {
             *c += n;
         }
-        if let Some(b) = r.bornes {
-            total.bornes = Some(match total.bornes {
-                None => b,
-                Some(mut d) => {
-                    d.extend(b.min);
-                    d.extend(b.max);
-                    d
-                }
-            });
-        }
+        total.bornes = unir(total.bornes, r.bornes);
     }
     total.blocs = compte;
     Ok(total)
