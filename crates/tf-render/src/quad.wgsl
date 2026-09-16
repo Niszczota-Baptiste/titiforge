@@ -21,6 +21,8 @@ struct Instance {
     // L'ordre est `axe * 2 + (positif ? 1 : 0)` — la face NÉGATIVE d'abord.
     @location(2) face: u32,
     @location(3) couche: u32,
+    // Un FACTEUR par canal, pas une couleur : 1 sur une face non teintée.
+    @location(4) teinte: vec4<f32>,
 };
 
 struct Sortie {
@@ -29,6 +31,7 @@ struct Sortie {
     @location(1) couche: u32,
     @location(2) ombre: f32,
     @location(3) monde: vec3<f32>,
+    @location(4) teinte: vec3<f32>,
 };
 
 // L'ombrage par face, dans l'ORDRE DU MAILLEUR.
@@ -81,17 +84,20 @@ fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
     out.uv = vec2<f32>(u * inst.taille.x, v * inst.taille.y) / 16.0;
     out.couche = inst.couche;
     out.ombre = ombre_de(inst.face);
+    out.teinte = inst.teinte.rgb;
     return out;
 }
 
 @fragment
 fn fs(e: Sortie) -> @location(0) vec4<f32> {
     let c = textureSample(atlas, echantillonneur, e.uv, i32(e.couche));
-    // Une face texturée ne porte PLUS que l'ombrage dans sa couleur. Y ajouter
-    // une teinte de bloc l'appliquerait deux fois, et tout le build sortirait
-    // deux fois trop sombre.
     if c.a < 0.5 {
         discard;
     }
-    return vec4<f32>(c.rgb * e.ombre, 1.0);
+    // Deux facteurs, et un seul de chaque : l'OMBRAGE, qui dépend de la face,
+    // et la TEINTE, qui dépend du bloc. La teinte vaut 1 partout où le modèle
+    // ne déclare pas de `tintindex` ; là où il en déclare, elle porte déjà la
+    // compensation du gris de la tuile, calculée une fois côté processeur.
+    // L'appliquer aussi à une face non teintée assombrirait tout le build.
+    return vec4<f32>(c.rgb * e.ombre * e.teinte, 1.0);
 }

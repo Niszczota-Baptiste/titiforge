@@ -135,14 +135,20 @@ impl Atlas {
         self.pixels.len()
     }
 
-    /// Le facteur par lequel multiplier une couleur de teinte pour cette
-    /// couche.
+    /// Le facteur qui COMPENSE le gris d'une tuile, pour une couleur PLATE.
     ///
     /// Les textures teintées du jeu sont GRISES : `grass_block_top.png` vaut
-    /// (147, 147, 147). En les multipliant telles quelles par un vert de
-    /// biome, le sol sort deux fois trop sombre. On divise donc par la moyenne
-    /// RÉELLE de la tuile — et le résultat est BORNÉ à 1 : une teinte ne peut
-    /// qu'assombrir, c'est une multiplication, la même limite que dans le jeu.
+    /// (147, 147, 147). Une vue qui ne pose pas la texture — une icône, une
+    /// carte, un aperçu en couleurs unies — n'a rien pour porter ce gris : il
+    /// faut le rendre au facteur, sinon l'herbe y sort deux fois trop sombre.
+    ///
+    /// **Le chemin TEXTURÉ ne doit pas s'en servir.** Là, la texture porte
+    /// déjà le gris, et la règle est celle du jeu : `texel × teinte`.
+    /// Compenser y ferait dépasser 1 au canal vert (1,286 pour l'herbe), et
+    /// comme une teinte ne peut qu'assombrir il serait écrêté — le vert
+    /// perdrait son avance sur le rouge et le sol sortirait OLIVE. Mesuré :
+    /// (145, 147, 89) au lieu de (84, 109, 51). Voir
+    /// `apparence::teinte_finale`.
     pub fn facteur_de_teinte(&self, couche: u32) -> [f32; 3] {
         let Some(c) = self.couches.get(couche as usize) else {
             return [1.0; 3];

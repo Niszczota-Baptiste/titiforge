@@ -86,7 +86,7 @@ fn rendre_un_cube(app: &Appareil, cote: u32) -> (Vec<u8>, u32, u32) {
         }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_| 0);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
     assert_eq!(arene.len(), 6, "un cube isolé montre ses six faces");
 
     let cible = Cible::nouvelle(app, cote, cote);
@@ -217,7 +217,7 @@ fn l_arene_place_chaque_section_a_son_origine() {
         section(2, |x, y, z| if x + y + z == 0 { CUBE } else { AIR }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_| 0);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
 
     let (min, max) = arene.bornes().unwrap();
     assert_eq!(min, [0.0, 0.0, 0.0]);
@@ -252,7 +252,7 @@ fn les_tranches_couvrent_toute_l_arene_sans_trou_ni_recouvrement() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_| 0);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
 
     let mut attendu = 0u32;
     for tr in &arene.tranches {
@@ -275,7 +275,7 @@ fn la_camera_cadre_le_contenu_sans_le_couper() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_| 0);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
     let cible = Cible::nouvelle(&app, 200, 200);
     let scene = Scene::nouvelle(&app, &arene, &atlas_blanc(&app));
     let (min, max) = arene.bornes().unwrap();
@@ -297,4 +297,128 @@ fn la_camera_cadre_le_contenu_sans_le_couper() {
         bord_touche, 0,
         "{bord_touche} pixels de build touchent le bord"
     );
+}
+
+// ── la teinte ───────────────────────────────────────────────────────────────
+
+/// Un atlas d'une couche GRISE — la valeur mesurée de `grass_block_top.png`.
+///
+/// Grise exprès : c'est ce que le jeu livre pour tout bloc teinté, et c'est
+/// précisément ce qui rendait le sol de tout terrain blanchâtre quand la
+/// teinte était ignorée. Un atlas blanc ne montrerait pas le défaut.
+fn atlas_gris_147(app: &Appareil) -> AtlasGpu {
+    let mut px = Vec::new();
+    for _ in 0..(4 * 4) {
+        px.extend([147u8, 147, 147, 255]);
+    }
+    AtlasGpu::nouveau(app, 4, 1, &px)
+}
+
+/// Le dessus du cube, moyenné : `+Y` est la seule face à ombrage 1,0, donc la
+/// seule où la couleur rendue est celle de la teinte et rien d'autre.
+///
+/// La bande haute du cadrage, et le fond EXCLU — il est bleu-gris, pas noir,
+/// et le moyenner ferait passer un cube invisible pour un cube terne.
+fn dessus(pixels: &[u8], cote: u32) -> [u32; 3] {
+    let fond = [pixels[0], pixels[1], pixels[2]];
+    let (mut s, mut n) = ([0u64; 3], 0u64);
+    // La même bande que `luminance` pour le dessus : le cadrage centre le
+    // cube, donc le tiers supérieur de l'image est du ciel.
+    for y in cote / 4..cote * 5 / 12 {
+        for x in 0..cote {
+            let i = ((y * cote + x) * 4) as usize;
+            let p = [pixels[i], pixels[i + 1], pixels[i + 2]];
+            if p == fond {
+                continue;
+            }
+            for k in 0..3 {
+                s[k] += p[k] as u64;
+            }
+            n += 1;
+        }
+    }
+    assert!(n > 0, "rien de dessiné");
+    [(s[0] / n) as u32, (s[1] / n) as u32, (s[2] / n) as u32]
+}
+
+fn rendre_un_cube_teinte(app: &Appareil, teinte: [f32; 3]) -> Vec<u8> {
+    let t = table();
+    let mut g = Grille::new();
+    g.poser(
+        0,
+        0,
+        section(0, |x, y, z| {
+            if x == 8 && y == 8 && z == 8 {
+                CUBE
+            } else {
+                AIR
+            }
+        }),
+    );
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, teinte));
+    let cible = Cible::nouvelle(app, 96, 96);
+    let scene = Scene::nouvelle(app, &arene, &atlas_gris_147(app));
+    let (min, max) = arene.bornes().unwrap();
+    let cam = Camera::cadrer(min, max, 1.0);
+    scene.rendre(&cible, &cam).0
+}
+
+/// **Une texture grise teintée doit sortir VERTE.**
+///
+/// Sans la teinte, `grass_block_top.png` (147, 147, 147) s'affiche tel quel et
+/// le sol de tout terrain sort blanchâtre : la texture est là, simplement pas
+/// de la bonne couleur — ce qui se lit « les blocs ont la mauvaise couleur »
+/// et ne désigne pas la cause.
+///
+/// La cible est la couleur du JEU : (84, 109, 51), soit `texel × teinte`. Deux
+/// façons de la rater, et le test les attrape toutes les deux :
+///
+/// - compenser le gris de la tuile écrête le canal vert et rend un OLIVE,
+///   (145, 147, 89) — le vert perd son avance sur le rouge ;
+/// - passer une teinte sRGB dans un mélange LINÉAIRE rend un délavé,
+///   (113, 128, 90).
+///
+/// Les deux ont du vert en tête ; seule la comparaison au rouge les sépare.
+#[test]
+fn une_tuile_grise_teintee_sort_verte_et_pas_olive() {
+    let Some(app) = app() else { return };
+    let herbe = tf_assets::apparence::teinte_finale([0x91, 0xBD, 0x59]);
+    let c = dessus(&rendre_un_cube_teinte(&app, herbe), 96);
+
+    assert!(
+        c[1] > c[0] && c[1] > c[2],
+        "le vert doit dominer, il sort {c:?}"
+    );
+    // Le rapport vert/rouge sépare les trois issues : 1,30 pour le jeu, 1,01
+    // pour l'olive de la compensation, 1,13 pour le délavé sRGB.
+    let vr = c[1] as f32 / c[0] as f32;
+    assert!(
+        vr > 1.22,
+        "vert/rouge = {vr:.2} : trop proche du gris — la teinte est appliquée \
+         dans le mauvais espace, ou compensée puis écrêtée ({c:?})"
+    );
+    // Et la couleur elle-même, à la tolérance d'un rastériseur logiciel près.
+    for (k, attendu) in [84u32, 109, 51].iter().enumerate() {
+        let ecart = c[k].abs_diff(*attendu);
+        assert!(
+            ecart <= 10,
+            "canal {k} : {} au lieu de {attendu} ({c:?})",
+            c[k]
+        );
+    }
+}
+
+/// Une face NON teintée ne doit rien perdre. Appliquer la teinte partout
+/// assombrirait tout le build — c'est le pendant exact du piège précédent.
+#[test]
+fn une_face_non_teintee_garde_sa_couleur() {
+    let Some(app) = app() else { return };
+    let c = dessus(&rendre_un_cube_teinte(&app, [1.0; 3]), 96);
+    for k in 0..3 {
+        assert!(
+            c[k].abs_diff(147) <= 6,
+            "teinte neutre : {c:?} devrait rester (147, 147, 147)"
+        );
+    }
 }

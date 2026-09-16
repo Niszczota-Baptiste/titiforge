@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod apparence;
 pub mod atlas;
 pub mod blockstates;
 pub mod catalogue;
@@ -24,6 +25,7 @@ pub mod rotation;
 pub mod source;
 pub mod texture;
 
+pub use apparence::{table_apparence, textures_des_etats, Apparence, Teintes};
 pub use atlas::Atlas;
 pub use blockstates::{Blockstate, Variante};
 pub use catalogue::{Catalogue, Classement};

@@ -128,7 +128,8 @@ impl Scene {
                     array_stride: std::mem::size_of::<crate::arene::InstanceQuad>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, 1 => Float32x2, 2 => Uint32, 3 => Uint32
+                        0 => Float32x3, 1 => Float32x2, 2 => Uint32, 3 => Uint32,
+                        4 => Unorm8x4
                     ],
                 }],
             },

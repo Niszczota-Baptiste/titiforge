@@ -127,26 +127,7 @@ fn main() {
     let cles: Vec<String> = (0..interner.len() as StateId)
         .map(|i| interner.resolve(i).unwrap().to_string())
         .collect();
-    let mut voulues: Vec<String> = Vec::new();
-    for cle in &cles {
-        let (nom, etat) = tf_assets::catalogue::decouper(cle);
-        let Some(bs) = cat.blockstate(nom) else {
-            continue;
-        };
-        for v in bs.pour(&etat) {
-            if let Some(m) = cat.modele(&v.modele) {
-                for e in &m.elements {
-                    for fd in e.faces.values() {
-                        if !fd.texture.starts_with('#') {
-                            voulues.push(fd.texture.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    voulues.sort();
-    voulues.dedup();
+    let voulues = tf_assets::textures_des_etats(&cat, cles.iter().cloned());
     let atlas = Atlas::batir(&src, voulues.clone(), &|n| {
         Disposition::Codex.chemins_texture(n)
     });
@@ -164,32 +145,20 @@ fn main() {
     let chantier = grille.mailler_parallele(&table);
     let t_maille = t.elapsed();
 
-    // ── quelle couche d'atlas pour quel état ?
-    let couche_de: Vec<u32> = cles
-        .iter()
-        .map(|cle| {
-            let (nom, etat) = tf_assets::catalogue::decouper(cle);
-            cat.blockstate(nom)
-                .and_then(|bs| {
-                    bs.pour(&etat).first().and_then(|v| {
-                        cat.modele(&v.modele).and_then(|m| {
-                            m.elements.first().and_then(|e| {
-                                // La face du DESSUS d'abord : c'est celle qu'on
-                                // voit d'une vue de trois quarts.
-                                e.faces
-                                    .get(&tf_mesh::Face::PlusY)
-                                    .or_else(|| e.faces.values().next())
-                                    .and_then(|fd| atlas.couche(&fd.texture))
-                            })
-                        })
-                    })
-                })
-                .unwrap_or(0)
-        })
-        .collect();
-
-    let arene = Arene::depuis(&chantier, &|id| {
-        couche_de.get(id as usize).copied().unwrap_or(0)
+    // ── quelle tuile et quelle teinte, PAR FACE
+    //
+    // Par face, et pas seulement par état : prendre la texture du dessus et la
+    // poser partout habillait les côtés d'un bloc d'herbe avec de l'herbe. Et
+    // la teinte, sans quoi le sol de tout terrain sort blanchâtre — les
+    // textures teintées du jeu sont grises.
+    let teintes = tf_assets::Teintes::default();
+    let apparence = tf_assets::table_apparence(&cat, &atlas, &teintes, cles.iter().cloned());
+    let arene = Arene::depuis(&chantier, &|id, face| match apparence.get(id as usize) {
+        Some(f) => {
+            let a = f[face.indice()];
+            (a.couche, a.teinte)
+        }
+        None => (0, [1.0; 3]),
     });
 
     // ── dessiner

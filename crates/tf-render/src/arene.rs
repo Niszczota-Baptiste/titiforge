@@ -24,6 +24,22 @@ pub struct InstanceQuad {
     pub taille: [f32; 2],
     pub face: u32,
     pub couche: u32,
+    /// Ce par quoi multiplier le texel, en RGBA8. **Pas une couleur** : un
+    /// FACTEUR, qui vaut `0xFFFFFFFF` sur une face non teintée.
+    ///
+    /// Les textures teintées du jeu sont GRISES — `grass_block_top.png` vaut
+    /// (147, 147, 147) — et c'est le jeu qui les multiplie par une couleur de
+    /// biome. Sans ce champ, le sol de tout terrain sort blanchâtre : la
+    /// texture s'affiche, simplement pas de la bonne couleur.
+    pub teinte: u32,
+}
+
+/// Un facteur `0..1` par canal, empaqueté en RGBA8.
+///
+/// Huit bits suffisent : c'est la précision de la texture qu'il multiplie.
+fn en_rgba8(t: [f32; 3]) -> u32 {
+    let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    c(t[0]) | (c(t[1]) << 8) | (c(t[2]) << 16) | (0xFF << 24)
 }
 
 /// Une tranche de l'arène : ce qu'une section occupe.
@@ -48,13 +64,22 @@ pub struct Arene {
 }
 
 impl Arene {
-    /// Empile un chantier. `couche` dit quelle tuile d'atlas porte un état.
-    pub fn depuis(chantier: &Chantier, couche: &dyn Fn(tf_anvil::StateId) -> u32) -> Arene {
+    /// Empile un chantier. `apparence` dit, pour un état et une FACE, quelle
+    /// tuile d'atlas l'habille et par quoi multiplier son texel.
+    ///
+    /// Par face, et pas seulement par état : un modèle déclare une texture par
+    /// face, et prendre celle du dessus habille les côtés d'un bloc d'herbe
+    /// avec de l'herbe.
+    pub fn depuis(
+        chantier: &Chantier,
+        apparence: &dyn Fn(tf_anvil::StateId, tf_mesh::forme::Face) -> (u32, [f32; 3]),
+    ) -> Arene {
         let mut a = Arene::default();
         for lot in &chantier.lots {
             let debut = a.instances.len() as u32;
             let [ox, oy, oz] = lot.origine();
             for q in &lot.quads.quads {
+                let (couche, teinte) = apparence(q.id, q.face);
                 a.instances.push(InstanceQuad {
                     // Le quad est LOCAL à sa section : sans l'origine, tout le
                     // monde se dessinerait empilé sur la section zéro.
@@ -65,7 +90,8 @@ impl Arene {
                     ],
                     taille: q.taille,
                     face: q.face as u32,
-                    couche: couche(q.id),
+                    couche,
+                    teinte: en_rgba8(teinte),
                 });
             }
             a.tranches.push(Tranche {
