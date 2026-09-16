@@ -683,3 +683,65 @@ en cite 2 207. Monter tout le catalogue lève une erreur de VALIDATION wgpu qui
 parle de `depth_or_array_layers` : exacte, et illisible pour qui vient
 d'ouvrir une save. `AtlasGpu` vérifie le plafond et dit quoi faire — ne monter
 que les textures des blocs PRÉSENTS.
+
+## Mosslorn : un build DENSE, en 1.20
+
+Cinq régions d'une carte vanilla **1.20.1** (DataVersion 3465), 82,5 Mo — une
+ville envahie par la végétation. C'est le cas que les relevés précédents
+n'avaient pas : 5 120 chunks, **152 033 934 blocs posés sur 503 316 480**, soit
+**30,2 % du volume**. Le monde Minefield du premier essai était un plot plat à
+0,8 %.
+
+| | |
+|---|---:|
+| Sections | 127 921, dont 72 975 homogènes |
+| Palette d'une section | médiane 1 · moyenne **9,7** · max **215** |
+| Bits par indice | 4 → 102 718 · 5 → 8 923 · 6 → 7 683 · 7 → 2 998 · 8 → 558 |
+| États distincts | **3 602** |
+| Blocs posés par chunk | médiane **31 021** · p99 52 618 · max 63 192 |
+
+La palette moyenne à 9,7 et les 558 sections à 8 bits comptent : le premier
+monde ne sortait jamais des 4 bits, donc ne faisait travailler qu'un seul
+chemin de dépack.
+
+### Une VERSION que le moteur n'avait jamais vue
+
+`tf-anvil` annonce 1.13 → 1.21 ; rien ne l'avait vérifié au-delà de 1.18.
+`--example verite_terrain`, sur ces fichiers :
+
+| | |
+|---|---:|
+| `//replace` (étage palette) | **1 015 ms**, 5 052 chunks, 7 409 907 blocs |
+| étages | rien 100 166 · palette 22 714 · **bloc 0** |
+| un mélange (étage bloc) | **3 706 ms** pour **460 876 778 blocs** |
+| chunks refaits puis annulés, octet pour octet | 5 052 puis 5 120 |
+| contrôles, fautes | **40 756 · 0** |
+
+460 millions de blocs réécrits, recompressés, puis annulés **au bit près**, en
+3,7 s — 124 millions de blocs par seconde sur le chemin complet.
+
+### Ce que ça coûte à l'écran
+
+Une région PLEINE de Mosslorn, 1 024 chunks, maillée et montée au GPU :
+
+| | |
+|---|---:|
+| Quads gloutons | 3 241 796 → **51,87 Mo** |
+| Poses de modèles | 1 775 664 → 10 169 366 faces → **29,86 Mo** |
+| Les mêmes faces en quads | **162,7 Mo** — × 5,4 |
+| Total GPU | **81,7 Mo** |
+| Maillage | 219 ms |
+| **Appels de dessin** | **2** |
+
+Le rapport de 5,4 est plus bas que les 19,9 de la fixture, et c'est cohérent :
+les blocs-modèles d'un vrai build sont des plantes en croix à deux cuboïdes,
+pas des meubles à trente. La fixture surestime la géométrie d'un facteur deux
+(`docs/fixtures.md`) ; ce qui reste vrai des deux côtés, c'est qu'émettre ces
+faces en quads coûte un ordre de grandeur de plus que les poser.
+
+### Le dossier annonçait 1.21
+
+Il s'appelle `§aMosslorn v4.0_java 1.21+`. Le contenu dit **3465**, soit
+1.20.1. Un nom de dossier n'est pas une source de vérité, exactement comme un
+nom de fichier de région — et c'est le contenu qui décide du packing à
+réécrire.

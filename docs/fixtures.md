@@ -100,11 +100,51 @@ ce qui existe n'est pas celle de ce qu'on pose.** C'est la même erreur que
 celle déjà notée un cran plus haut (« un premier tirage forçait les plus lourds
 en tête »), qui avait survécu au niveau suivant.
 
-Elle n'est pas corrigée dans la fixture, et c'est délibéré : remplacer une
-estimation documentée par une mesure sous-échantillonnée — 42 chunks d'un seul
-monde — échangerait une erreur connue contre une erreur cachée. Ce qui la
-trancherait est un export de build DENSE, que `recenser_monde --zone` saura
-recenser tel quel.
+### Tranché : deux mondes réels, et ils sont d'accord
+
+Le premier relevé portait sur 42 chunks d'un seul monde — trop peu pour
+corriger quoi que ce soit. Un second monde a levé le doute : **Mosslorn**, une
+carte vanilla 1.20.1 de 5 régions, **152 033 934 blocs posés sur 503 316 480**
+balayés, soit **30,2 % du volume** — la densité que la fixture annonce (31,4 %).
+
+| | fixture `Build` | Minefield, 42 chunks | Mosslorn, 5 120 chunks |
+|---|---:|---:|---:|
+| Blocs posés | 31,4 % | 1,3 % | **30,2 %** |
+| Blocs-modèles, part des posés | 9,1 % | 7,6 % | **5,8 %** |
+| Cuboïdes par bloc-modèle | 3,58 | 1,54 | **1,75** |
+
+Deux mondes sans rien en commun — l'un Minefield, l'autre vanilla ; l'un un plot
+plat, l'autre une ville envahie de végétation — donnent **1,54 et 1,75**. La
+fixture annonce 3,58 : elle est **deux fois trop pessimiste** sur le seul
+chiffre qui dimensionne la passe de modèles.
+
+La cause se lit dans le classement de ce qui PÈSE, sur Mosslorn :
+
+| | |
+|---|---|
+| `minecraft:grass` | 615 976 blocs × **2** cuboïdes |
+| `minecraft:fern` | 338 618 × 2 |
+| `minecraft:moss_carpet` | 559 948 × **1** |
+| `minecraft:cobweb` | 258 485 × 2 |
+
+Des plantes en croix et des tapis. Le sac de friandises à 82 cuboïdes n'apparaît
+nulle part, et il ne peut pas : personne n'en pose un million.
+
+### Et pourtant la fixture n'est pas corrigée
+
+Non par prudence, mais parce qu'elle n'a plus à porter ce chiffre.
+
+Le dimensionnement ABSOLU vient désormais des mondes réels : `recenser_monde` et
+`capture` le mesurent sur la save qu'on leur donne, et `docs/RESULTATS.md` porte
+le relevé d'une région pleine de Mosslorn. La fixture reste ce qu'un bench doit
+être — un instrument de COMPARAISON, où un pessimisme uniforme ne trompe sur
+rien puisqu'il s'applique des deux côtés de la mesure.
+
+Lui inventer une distribution de placement serait refaire l'erreur d'un cran
+plus haut : on n'a de relevé de placement que pour un monde vanilla, et rien ne
+dit qu'un constructeur Minefield pose les mêmes formes. *Une fixture fausse dans
+le sens prudent reste fausse* — mais une fixture recalibrée sur un
+échantillon qu'on n'a pas est fausse sans qu'on sache dans quel sens.
 
 ### Ce que ça a trouvé
 

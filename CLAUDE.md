@@ -681,6 +681,18 @@ propres à ce dépôt.
   s'ANCRE, il ne se lit pas dans un commentaire.** `mushroom_stem` déclare six
   rotations et NOMME la face visée par chacune — six rotations, six faces
   distinctes, le sens est forcé.
+- **Un seul monde réel ne tranche rien non plus.** Le premier relevé donnait
+  1,54 cuboïde par bloc-modèle contre 3,58 attendus, sur 42 chunks — trop peu
+  pour corriger quoi que ce soit, et le dire était la seule réponse honnête. Il
+  a fallu un SECOND monde, sans rien de commun avec le premier (vanilla contre
+  Minefield, une ville dense contre un plot plat, 5 120 chunks contre 42) pour
+  que **1,75** confirme **1,54**. Deux mesures qui se ressemblent en disent plus
+  que l'une des deux, et une seule mesure n'est qu'une anecdote mieux habillée.
+  Corollaire : la fixture n'a PAS été recalibrée pour autant — lui inventer une
+  distribution de placement qu'on n'a mesurée que sur du vanilla la rendrait
+  fausse sans qu'on sache dans quel sens. Le dimensionnement absolu vient des
+  vrais mondes ; le bench reste un instrument de COMPARAISON, où un pessimisme
+  uniforme ne trompe sur rien.
 - **Une fixture ne peut trouver que ce qu'on savait déjà.** Tout ce que le dépôt
   affirmait venait de fixtures qu'on avait écrites soi-même : le décodeur et
   l'encodeur ne s'étaient jamais mesurés qu'à eux-mêmes. Le premier relevé d'une
