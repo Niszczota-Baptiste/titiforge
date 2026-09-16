@@ -31,11 +31,32 @@ pub struct Scene {
     camera: wgpu::Buffer,
     instances: wgpu::Buffer,
     nombre: u32,
+    /// La passe de MODÈLES. Absente quand la scène n'a aucun bloc-modèle —
+    /// une passe qui ne dessine rien reste un changement de pipeline.
+    modeles: Option<PasseModeles>,
+}
+
+/// Ce que la passe de modèles tient au GPU.
+struct PasseModeles {
+    pipeline: wgpu::RenderPipeline,
+    liaison: wgpu::BindGroup,
+    /// Nombre de FACES à dessiner — une instance chacune.
+    faces: u32,
 }
 
 impl Scene {
     /// Prépare la passe : l'atlas monte au GPU, les instances aussi.
     pub fn nouvelle(app: &Appareil, arene: &Arene, atlas: &AtlasGpu) -> Scene {
+        Scene::avec_modeles(app, arene, &crate::AreneModeles::default(), atlas)
+    }
+
+    /// La scène complète : les cubes gloutons ET les blocs-modèles.
+    pub fn avec_modeles(
+        app: &Appareil,
+        arene: &Arene,
+        modeles: &crate::AreneModeles,
+        atlas: &AtlasGpu,
+    ) -> Scene {
         let device = app.device.clone();
         let queue = app.queue.clone();
 
@@ -164,6 +185,9 @@ impl Scene {
             cache: None,
         });
 
+        let passe_modeles = (!modeles.is_empty())
+            .then(|| PasseModeles::nouvelle(&device, &disposition, modeles, FORMAT));
+
         Scene {
             appareil: device,
             queue,
@@ -172,6 +196,7 @@ impl Scene {
             camera,
             instances,
             nombre: arene.len() as u32,
+            modeles: passe_modeles,
         }
     }
 
@@ -218,6 +243,16 @@ impl Scene {
             passe.set_vertex_buffer(0, self.instances.slice(..));
             // UN appel pour toute l'arène.
             passe.draw(0..6, 0..self.nombre);
+
+            // Et UN pour tous les blocs-modèles, quel que soit leur nombre de
+            // faces : la pose porte le rang de sa première face, le sommet
+            // retrouve la sienne par dichotomie.
+            if let Some(m) = &self.modeles {
+                passe.set_pipeline(&m.pipeline);
+                passe.set_bind_group(0, &self.liaison, &[]);
+                passe.set_bind_group(1, &m.liaison, &[]);
+                passe.draw(0..6, 0..m.faces);
+            }
         }
         cible.copier(&mut enc);
         self.queue.submit([enc.finish()]);
@@ -225,10 +260,125 @@ impl Scene {
         (
             cible.relire(&self.appareil),
             Compte {
-                appels_de_dessin: 1,
-                instances: self.nombre,
+                appels_de_dessin: 1 + u32::from(self.modeles.is_some()),
+                instances: self.nombre + self.modeles.as_ref().map_or(0, |m| m.faces),
             },
         )
+    }
+}
+
+impl PasseModeles {
+    fn nouvelle(
+        device: &wgpu::Device,
+        commun: &wgpu::BindGroupLayout,
+        a: &crate::AreneModeles,
+        format: wgpu::TextureFormat,
+    ) -> PasseModeles {
+        let tampon = |nom: &str, octets: &[u8]| {
+            // Un tampon de stockage VIDE est refusé par wgpu, et une arène peut
+            // n'avoir aucune origine si toutes ses sections sont sans modèle.
+            // Seize octets de rien coûtent moins qu'une branche par usage.
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(nom),
+                contents: if octets.is_empty() {
+                    &[0u8; 16]
+                } else {
+                    octets
+                },
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+        let faces = tampon("faces de modèle", bytemuck::cast_slice(&a.faces));
+        let poses = tampon("poses", bytemuck::cast_slice(&a.poses));
+        let origines = tampon("origines de section", bytemuck::cast_slice(&a.origines));
+
+        let lecture = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("modèles"),
+            entries: &[lecture(0), lecture(1), lecture(2)],
+        });
+        let liaison = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("modèles"),
+            layout: &disposition,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: faces.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: poses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: origines.as_entire_binding(),
+                },
+            ],
+        });
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("modèles"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("modeles.wgsl").into()),
+        });
+        let agencement = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("modèles"),
+            bind_group_layouts: &[commun, &disposition],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("modèles"),
+            layout: Some(&agencement),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: "vs",
+                compilation_options: Default::default(),
+                // AUCUN tampon de sommets : la géométrie se lit dans les
+                // tampons de stockage. C'est ce qui permet qu'une pose ne pèse
+                // que seize octets.
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: "fs",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // Pas de tri par orientation, même raison que la passe
+                // gloutonne : un modèle ne garantit pas le sens de ses faces.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: PROFONDEUR,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        PasseModeles {
+            pipeline,
+            liaison,
+            faces: a.faces_a_dessiner,
+        }
     }
 }
 

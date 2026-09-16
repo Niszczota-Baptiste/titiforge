@@ -5,7 +5,7 @@
 //! `we-engine` sans que personne ne le voie — parce qu'il était invisible sur
 //! un build gris.
 
-use tf_mesh::forme::Cuboide;
+use tf_mesh::forme::{Cuboide, Formes};
 use tf_mesh::{Grille, TableFormes};
 use tf_render::{Appareil, Arene, AtlasGpu, Camera, Cible, Scene};
 
@@ -419,6 +419,213 @@ fn une_face_non_teintee_garde_sa_couleur() {
         assert!(
             c[k].abs_diff(147) <= 6,
             "teinte neutre : {c:?} devrait rester (147, 147, 147)"
+        );
+    }
+}
+
+// ── la passe de MODÈLES ─────────────────────────────────────────────────────
+
+use tf_render::{faces_de, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
+
+/// **Un `vec3<f32>` s'aligne sur SEIZE octets en WGSL, pas sur quatre.**
+///
+/// Une structure Rust en `[f32; 3]` mise en face décale tout ce qui suit d'un
+/// champ sur deux, et le shader lit des bornes prises au hasard dans la table
+/// voisine. Mesuré : des traînées qui filent à l'infini depuis le build, sans
+/// la moindre erreur de validation — les deux côtés sont valides séparément,
+/// c'est leur RACCORD qui est faux.
+///
+/// Le test n'ouvre pas le WGSL ; il fige la règle qui rend le raccord
+/// possible : tout ce qui traverse la frontière est en `vec4`, donc aligné et
+/// dimensionné sur seize.
+#[test]
+fn les_structures_du_shader_sont_alignees_sur_seize() {
+    for (nom, taille) in [
+        ("FaceModele", std::mem::size_of::<FaceModele>()),
+        ("Origine", std::mem::size_of::<Origine>()),
+    ] {
+        assert_eq!(
+            taille % 16,
+            0,
+            "{nom} fait {taille} octets : un multiple de seize, ou le shader \
+             lira la structure suivante"
+        );
+    }
+    // Les bornes et les uv doivent tomber sur des frontières de seize.
+    assert_eq!(std::mem::offset_of!(FaceModele, min), 0);
+    assert_eq!(std::mem::offset_of!(FaceModele, max), 16);
+    assert_eq!(std::mem::offset_of!(FaceModele, uv), 32);
+    assert_eq!(std::mem::offset_of!(FaceModele, face), 48);
+    // Une pose n'a que des u32 : rien à aligner, mais sa taille doit rester
+    // celle que le shader suppose.
+    assert_eq!(std::mem::size_of::<Pose>(), 16);
+}
+
+fn blanc(n: usize) -> Vec<HabillageFaces> {
+    vec![std::array::from_fn(|_| (0u32, [1.0f32; 3], [0.0, 0.0, 16.0, 16.0])); n]
+}
+
+/// Une scène d'UN bloc à la position (8, 8, 8), et la caméra figée sur lui.
+///
+/// Figée, parce que `Camera::cadrer` cadre sur ce qu'on lui donne : laisser la
+/// dalle cadrer sur elle-même la ferait remplir l'image autant que le cube, et
+/// le test ne comparerait plus rien.
+fn rendre_un_bloc(app: &Appareil, id: StateId) -> (Vec<u8>, u32, tf_render::Compte) {
+    let t = table();
+    let mut g = Grille::new();
+    g.poser(
+        0,
+        0,
+        section(
+            0,
+            |x, y, z| {
+                if x == 8 && y == 8 && z == 8 {
+                    id
+                } else {
+                    AIR
+                }
+            },
+        ),
+    );
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let modeles = AreneModeles::depuis(&chantier, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+
+    let cote = 128;
+    let cible = Cible::nouvelle(app, cote, cote);
+    let scene = Scene::avec_modeles(app, &arene, &modeles, &atlas_blanc(app));
+    // La boîte du BLOC, pas celle du contenu : les deux scènes se comparent.
+    let cam = Camera::cadrer([8.0, 8.0, 8.0], [9.0, 9.0, 9.0], 1.0);
+    let (pixels, compte) = scene.rendre(&cible, &cam);
+    (pixels, cote, compte)
+}
+
+/// La boîte des pixels dessinés : `(x0, y0, x1, y1)`, bornes exclues à droite.
+fn boite_dessinee(pixels: &[u8], cote: u32) -> Option<(u32, u32, u32, u32)> {
+    let fond = [pixels[0], pixels[1], pixels[2]];
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for y in 0..cote {
+        for x in 0..cote {
+            let i = ((y * cote + x) * 4) as usize;
+            if [pixels[i], pixels[i + 1], pixels[i + 2]] == fond {
+                continue;
+            }
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+    }
+    (x0 != u32::MAX).then_some((x0, y0, x1, y1))
+}
+
+fn dessines(pixels: &[u8], cote: u32) -> u32 {
+    let fond = [pixels[0], pixels[1], pixels[2]];
+    let mut n = 0;
+    for y in 0..cote {
+        for x in 0..cote {
+            let i = ((y * cote + x) * 4) as usize;
+            if [pixels[i], pixels[i + 1], pixels[i + 2]] != fond {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// **Un bloc-modèle se DESSINE.**
+///
+/// Sur la cible Minefield, deux tiers du catalogue ne sont pas des cubes. La
+/// passe gloutonne ne les voit pas ; jusqu'ici rien d'autre ne les dessinait,
+/// et sur la première capture d'une vraie save 3 957 blocs manquaient à
+/// l'appel sans que l'image ne le dise. Une absence ne se voit pas — d'où ce
+/// test plutôt qu'un coup d'œil.
+#[test]
+fn une_dalle_se_dessine() {
+    let Some(app) = app() else { return };
+    let (pixels, cote, compte) = rendre_un_bloc(&app, 2);
+    assert_eq!(compte.appels_de_dessin, 2, "gloutons + modèles");
+    assert!(
+        dessines(&pixels, cote) > 100,
+        "une dalle doit couvrir des pixels, elle n'en couvre aucun"
+    );
+}
+
+/// Et elle occupe la MOITIÉ BASSE de sa case.
+///
+/// Dessiner un cube plein à sa place donnerait une image plausible et fausse :
+/// c'est la hauteur qui prouve que la géométrie du modèle est lue, et pas
+/// seulement qu'« il y a quelque chose ».
+#[test]
+fn une_dalle_n_occupe_que_le_bas_de_sa_case() {
+    let Some(app) = app() else { return };
+    let (cube, cote, _) = rendre_un_bloc(&app, CUBE);
+    let (dalle, _, _) = rendre_un_bloc(&app, 2);
+    let (_, hc0, _, hc1) = boite_dessinee(&cube, cote).expect("le cube se dessine");
+    let (_, hd0, _, hd1) = boite_dessinee(&dalle, cote).expect("la dalle se dessine");
+
+    // Le bas des deux coïncide : la dalle est POSÉE au sol de sa case.
+    assert!(
+        hd1.abs_diff(hc1) <= 2,
+        "la dalle devrait reposer au même niveau que le cube ({hd1} contre {hc1})"
+    );
+    // Son haut est nettement plus bas. Pas « la moitié » au pixel près : en
+    // vue de trois quarts, une hauteur de bloc n'est pas une hauteur d'écran.
+    assert!(
+        hd0 > hc0 + (hc1 - hc0) / 5,
+        "la dalle monte aussi haut que le cube : la géométrie du modèle n'est \
+         pas lue ({hd0} contre {hc0}, boîte {hc0}..{hc1})"
+    );
+    assert!(
+        dessines(&dalle, cote) < dessines(&cube, cote),
+        "une dalle couvre moins de pixels qu'un cube"
+    );
+}
+
+/// Une scène SANS bloc-modèle ne paie pas la passe.
+///
+/// Un pipeline qu'on branche pour dessiner zéro instance reste un changement
+/// de pipeline, et le projet compte ses appels de dessin.
+#[test]
+fn une_scene_sans_modele_garde_un_seul_appel() {
+    let Some(app) = app() else { return };
+    let (_, _, compte) = rendre_un_bloc(&app, CUBE);
+    assert_eq!(compte.appels_de_dessin, 1);
+}
+
+/// La géométrie d'un état vit UNE fois, quel que soit le nombre de blocs.
+///
+/// C'est toute la raison d'être de la pose : 349 000 blocs-modèles produisaient
+/// 5,8 millions de quads, neuf dixièmes du maillage, alors que ces quads sont
+/// la même géométrie répétée.
+#[test]
+fn mille_dalles_ne_stockent_qu_un_seul_modele() {
+    let t = table();
+    let mut g = Grille::new();
+    // Une couche pleine de dalles : 256 blocs, un seul état.
+    g.poser(0, 0, section(0, |_, y, _| if y == 8 { 2 } else { AIR }));
+    let chantier = g.mailler(&t);
+    let a = AreneModeles::depuis(&chantier, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    assert_eq!(a.poses.len(), 256, "une pose par bloc");
+    assert_eq!(
+        a.faces.len(),
+        6,
+        "mais une seule géométrie : les six faces du cuboïde de la dalle"
+    );
+    assert_eq!(a.faces_a_dessiner, 256 * 6);
+    // Et les rangs de départ sont STRICTEMENT croissants — c'est ce que la
+    // dichotomie du shader suppose. Une pose sans face les casserait.
+    for i in 1..a.poses.len() {
+        assert!(
+            a.poses[i].debut_face > a.poses[i - 1].debut_face,
+            "les rangs doivent croître strictement, sinon la dichotomie rend \
+             la mauvaise pose"
         );
     }
 }

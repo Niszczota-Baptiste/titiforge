@@ -23,8 +23,8 @@
 use tf_mesh::forme::{Face, FACES};
 
 use crate::atlas::Atlas;
-use crate::catalogue::{decouper, indice_cube_plein, Catalogue};
-use crate::modele::{self, Element};
+use crate::catalogue::{decouper, Catalogue};
+use crate::modele::Element;
 
 /// Ce que le rendu doit savoir d'une face.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +33,15 @@ pub struct Apparence {
     pub couche: u32,
     /// Ce par quoi multiplier le texel. `[1, 1, 1]` pour une face non teintée.
     pub teinte: [f32; 3],
+    /// Les uv de la face, en seizièmes — DÉDUITES du cuboïde quand le modèle
+    /// n'en déclare pas, ce qui est le cas de 26 % des faces du pack.
+    ///
+    /// Elles ne suivent pas encore la rotation de la variante (`uvlock`) : une
+    /// dalle tournée montrera la bonne portion de texture, pas forcément dans
+    /// le bon sens. Une texture de travers se voit et se corrige ; une face
+    /// absente ne se voit pas du tout, et c'est l'ordre dans lequel on les
+    /// traite.
+    pub uv: [f32; 4],
 }
 
 impl Default for Apparence {
@@ -40,6 +49,7 @@ impl Default for Apparence {
         Apparence {
             couche: 0,
             teinte: [1.0; 3],
+            uv: [0.0, 0.0, 16.0, 16.0],
         }
     }
 }
@@ -141,53 +151,34 @@ pub fn teinte_finale(couleur: [u8; 3]) -> [f32; 3] {
     out
 }
 
-/// L'apparence des six faces de chaque état, dans l'ordre de l'interner.
+/// L'habillage d'un état : son cube, et chacun de ses cuboïdes.
 ///
-/// L'élément retenu est celui qui REMPLIT la case — `indice_cube_plein`, le
-/// même critère que le classement. « Le premier élément » prendrait la couche
-/// d'herbe transparente de `grass_block` au lieu du cube.
-pub fn table_apparence(
-    cat: &Catalogue,
-    atlas: &Atlas,
-    teintes: &Teintes,
-    cles: impl Iterator<Item = String>,
-) -> Vec<[Apparence; 6]> {
-    let mut out = Vec::new();
-    for cle in cles {
-        let (nom, etat) = decouper(&cle);
-        out.push(pour_un_etat(cat, atlas, teintes, nom, &etat));
-    }
-    out
+/// Les deux ne servent jamais ensemble. Un cube plein opaque passe par la
+/// passe gloutonne et n'a pas de géométrie ; tout le reste passe par la passe
+/// de modèles et porte la sienne, cuboïde par cuboïde.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Habillage {
+    /// Les six faces du cuboïde qui remplit la case — pour la passe gloutonne.
+    pub cube: [Apparence; 6],
+    /// Les six faces de CHAQUE cuboïde — pour la passe de modèles. Dans
+    /// l'ordre exact de `TableFormes::cuboides`, parce que les deux sortent du
+    /// même parcours.
+    pub cuboides: Vec<[Apparence; 6]>,
 }
 
-fn pour_un_etat(
-    cat: &Catalogue,
+/// L'habillage des six faces d'un élément de modèle, la rotation de sa
+/// variante appliquée.
+///
+/// La rotation DÉPLACE les faces : la texture du nord d'un modèle tourné de
+/// 90° habille l'est du bloc. L'oublier ici referait, sur les textures, le
+/// défaut qu'on vient de corriger sur la géométrie.
+pub fn habiller(
+    e: &Element,
+    axes: crate::rotation::Axes,
     atlas: &Atlas,
-    teintes: &Teintes,
-    nom: &str,
-    etat: &[(String, String)],
+    couleur: Option<[u8; 3]>,
 ) -> [Apparence; 6] {
     let mut faces = [Apparence::default(); 6];
-    let Some(bs) = cat.blockstate(nom) else {
-        return faces;
-    };
-    // L'élément qui remplit la case, pris chez la première variante qui en a
-    // un. Les autres sont des couches posées par-dessus — elles n'habillent
-    // pas le cube.
-    let mut plein: Option<&Element> = None;
-    for v in bs.pour(etat) {
-        let Some(m) = cat.modele(&v.modele) else {
-            continue;
-        };
-        if let Some(i) = indice_cube_plein(&modele::cuboides(m)) {
-            plein = m.elements.get(i);
-            break;
-        }
-    }
-    let Some(e) = plein else {
-        return faces;
-    };
-    let couleur = teintes.pour(nom);
     for f in FACES {
         let Some(fd) = e.faces.get(&f) else {
             continue;
@@ -195,12 +186,13 @@ fn pour_un_etat(
         let Some(couche) = atlas.couche(&fd.texture) else {
             continue;
         };
-        faces[f.indice()] = Apparence {
+        faces[crate::rotation::tourner_face(f, axes).indice()] = Apparence {
             couche,
-            teinte: match fd.tintindex {
-                Some(_) => teinte_finale(couleur),
-                None => [1.0; 3],
+            teinte: match (fd.tintindex, couleur) {
+                (Some(_), Some(c)) => teinte_finale(c),
+                _ => [1.0; 3],
             },
+            uv: crate::modele::uv_de(e, f, fd),
         };
     }
     faces

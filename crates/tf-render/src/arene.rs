@@ -37,7 +37,7 @@ pub struct InstanceQuad {
 /// Un facteur `0..1` par canal, empaqueté en RGBA8.
 ///
 /// Huit bits suffisent : c'est la précision de la texture qu'il multiplie.
-fn en_rgba8(t: [f32; 3]) -> u32 {
+pub(crate) fn en_rgba8(t: [f32; 3]) -> u32 {
     let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
     c(t[0]) | (c(t[1]) << 8) | (c(t[2]) << 16) | (0xFF << 24)
 }

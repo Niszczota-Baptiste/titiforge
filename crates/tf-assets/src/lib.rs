@@ -25,10 +25,10 @@ pub mod rotation;
 pub mod source;
 pub mod texture;
 
-pub use apparence::{table_apparence, textures_des_etats, Apparence, Teintes};
+pub use apparence::{textures_des_etats, Apparence, Habillage, Teintes};
 pub use atlas::Atlas;
 pub use blockstates::{Blockstate, Variante};
-pub use catalogue::{Catalogue, Classement};
+pub use catalogue::{table_rendu, Catalogue, Classement};
 pub use modele::{cuboides, resoudre, Element, Modele, ModeleError, ModeleResolu};
 pub use rotation::{axes, tourner, Axes};
 pub use source::{Dossier, Id, Pile, Source, SourceError};

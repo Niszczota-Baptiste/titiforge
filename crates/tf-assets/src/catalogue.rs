@@ -277,48 +277,150 @@ pub fn table_formes(
 ) -> tf_mesh::TableFormes {
     let mut t = tf_mesh::TableFormes::new();
     for cle in cles {
-        let (nom, etat) = decouper(&cle);
-        if nom == "minecraft:air" || nom == "minecraft:cave_air" || nom == "minecraft:void_air" {
-            t.pousser(true, false, Vec::new());
-            continue;
-        }
-        let Some(bs) = cat.blockstate(nom) else {
-            // Un bloc que le pack ne connaît pas : ni air, ni opaque, ni
-            // géométrie. Le supposer opaque effacerait des faces réelles.
-            t.pousser(false, false, Vec::new());
-            continue;
-        };
-        // L'état décide du MODÈLE : un escalier tourné n'a pas la même
-        // géométrie, et prendre le premier modèle déclaré les dessinerait tous
-        // dans la même direction.
-        //
-        // Et le modèle ne suffit pas : un pack ne décrit pas seize escaliers,
-        // il en décrit UN et le TOURNE. La rotation vit sur la variante, et
-        // l'oublier dessinait tous les escaliers d'un build vers l'est —
-        // relevé sur une vraie save, avec un `mushroom_stem` dont les six
-        // parts se superposaient en un seul plan, à lui seul 38 % de la passe
-        // de modèles.
-        let mut cub: Vec<Cuboide> = Vec::new();
-        let mut plein = false;
-        for v in bs.pour(&etat) {
-            let Some(m) = cat.modele(&v.modele) else {
-                continue;
-            };
-            let c = crate::rotation::tourner(modele::cuboides(m), v.x, v.y);
-            plein |= indice_cube_plein(&c).is_some();
-            cub.extend(c);
-        }
-        if cub.is_empty() {
-            t.pousser(true, false, Vec::new());
-        } else if plein && !translucide(nom) {
-            // Un cube plein opaque passe par la passe gloutonne, qui n'a pas
-            // besoin de sa géométrie.
-            t.pousser(false, true, Vec::new());
-        } else {
-            t.pousser(false, false, cub);
-        }
+        let (forme, _) = forme_et_habillage(cat, None, None, &cle, translucide);
+        t.pousser(forme.air, forme.opaque, forme.cuboides);
+        let _ = &t;
     }
     t
+}
+
+/// Ce qu'un état oppose au mailleur, avant d'entrer dans la table.
+pub struct Forme {
+    pub air: bool,
+    pub opaque: bool,
+    pub cuboides: Vec<Cuboide>,
+}
+
+/// La forme d'un état ET l'habillage de chacun de ses cuboïdes, **d'un seul
+/// parcours**.
+///
+/// Les deux se déduisent de la même liste de variantes, dans le même ordre :
+/// `habillage.cuboides[i]` habille `forme.cuboides[i]`. Les produire
+/// séparément laisserait ce couplage implicite — « le n-ième de l'un va avec
+/// le n-ième de l'autre » — et c'est le genre de contrat qui se casse à la
+/// première optimisation, sans bruit.
+///
+/// `atlas` et `teintes` sont facultatifs : le mailleur n'a aucun besoin de
+/// savoir qu'un atlas existe, et les benchs le construisent sans pack.
+fn forme_et_habillage(
+    cat: &Catalogue,
+    atlas: Option<&crate::atlas::Atlas>,
+    teintes: Option<&crate::apparence::Teintes>,
+    cle: &str,
+    translucide: &dyn Fn(&str) -> bool,
+) -> (Forme, crate::apparence::Habillage) {
+    use crate::apparence::{Apparence, Habillage};
+    let vide = |air: bool| {
+        (
+            Forme {
+                air,
+                opaque: false,
+                cuboides: Vec::new(),
+            },
+            Habillage::default(),
+        )
+    };
+    let (nom, etat) = decouper(cle);
+    if nom == "minecraft:air" || nom == "minecraft:cave_air" || nom == "minecraft:void_air" {
+        return vide(true);
+    }
+    let Some(bs) = cat.blockstate(nom) else {
+        // Un bloc que le pack ne connaît pas : ni air, ni opaque, ni
+        // géométrie. Le supposer opaque effacerait des faces réelles.
+        return vide(false);
+    };
+    // L'état décide du MODÈLE : un escalier tourné n'a pas la même géométrie,
+    // et prendre le premier modèle déclaré les dessinerait tous dans la même
+    // direction.
+    //
+    // Et le modèle ne suffit pas : un pack ne décrit pas seize escaliers, il
+    // en décrit UN et le TOURNE. La rotation vit sur la variante, et l'oublier
+    // dessinait tous les escaliers d'un build vers l'est — relevé sur une
+    // vraie save, avec un `mushroom_stem` dont les six parts se superposaient
+    // en un seul plan, à lui seul 38 % de la passe de modèles.
+    let couleur = teintes.map(|t| t.pour(nom));
+    let mut cub: Vec<Cuboide> = Vec::new();
+    let mut hab: Vec<[Apparence; 6]> = Vec::new();
+    let mut plein = false;
+    let mut cube = [Apparence::default(); 6];
+    for v in bs.pour(&etat) {
+        let Some(m) = cat.modele(&v.modele) else {
+            continue;
+        };
+        let a = crate::rotation::axes(v.x, v.y);
+        let c = crate::rotation::tourner(modele::cuboides(m), v.x, v.y);
+        if let Some(i) = indice_cube_plein(&c) {
+            if !plein {
+                // Le premier cuboïde qui REMPLIT la case habille le cube. « Le
+                // premier élément » prendrait la couche d'herbe transparente de
+                // `grass_block` au lieu du cube lui-même.
+                if let (Some(atlas), Some(e)) = (atlas, m.elements.get(i)) {
+                    cube = crate::apparence::habiller(e, a, atlas, couleur);
+                }
+            }
+            plein = true;
+        }
+        if let Some(atlas) = atlas {
+            for e in &m.elements {
+                hab.push(crate::apparence::habiller(e, a, atlas, couleur));
+            }
+        }
+        cub.extend(c);
+    }
+    if cub.is_empty() {
+        return vide(true);
+    }
+    if plein && !translucide(nom) {
+        // Un cube plein opaque passe par la passe gloutonne, qui n'a pas
+        // besoin de sa géométrie.
+        return (
+            Forme {
+                air: false,
+                opaque: true,
+                cuboides: Vec::new(),
+            },
+            Habillage {
+                cube,
+                cuboides: Vec::new(),
+            },
+        );
+    }
+    debug_assert!(
+        atlas.is_none() || hab.len() == cub.len(),
+        "un habillage par cuboïde, sinon la correspondance est fausse"
+    );
+    (
+        Forme {
+            air: false,
+            opaque: false,
+            cuboides: cub,
+        },
+        Habillage {
+            cube,
+            cuboides: hab,
+        },
+    )
+}
+
+/// La table du mailleur ET l'habillage, d'un seul parcours.
+///
+/// C'est ce que consomme le rendu : le premier dit ce qu'un bloc OPPOSE, le
+/// second à quoi il RESSEMBLE, et les deux sont indexés par `StateId`.
+pub fn table_rendu(
+    cat: &Catalogue,
+    atlas: &crate::atlas::Atlas,
+    teintes: &crate::apparence::Teintes,
+    cles: impl Iterator<Item = String>,
+    translucide: &dyn Fn(&str) -> bool,
+) -> (tf_mesh::TableFormes, Vec<crate::apparence::Habillage>) {
+    let mut t = tf_mesh::TableFormes::new();
+    let mut h = Vec::new();
+    for cle in cles {
+        let (forme, hab) = forme_et_habillage(cat, Some(atlas), Some(teintes), &cle, translucide);
+        t.pousser(forme.air, forme.opaque, forme.cuboides);
+        h.push(hab);
+    }
+    (t, h)
 }
 
 /// Tous les noms de texture cités par les modèles résolus.

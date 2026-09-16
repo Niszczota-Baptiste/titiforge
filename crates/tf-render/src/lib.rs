@@ -9,9 +9,11 @@
 pub mod appareil;
 pub mod arene;
 pub mod camera;
+pub mod modeles;
 pub mod scene;
 
 pub use appareil::{Appareil, AppareilError};
 pub use arene::{Arene, InstanceQuad, Tranche};
 pub use camera::Camera;
+pub use modeles::{faces_de, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
 pub use scene::{AtlasGpu, Cible, Compte, Scene};

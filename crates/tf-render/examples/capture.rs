@@ -13,9 +13,10 @@
 use std::time::Instant;
 
 use tf_anvil::{decode_section, inflate, read, scan, Interner, StateId};
-use tf_assets::catalogue::{blocs_translucides, table_formes, textures_citees, Disposition};
+use tf_assets::catalogue::{blocs_translucides, textures_citees, Disposition};
 use tf_assets::{Atlas, Catalogue, Dossier};
 use tf_bench::{build, Build};
+use tf_mesh::forme::Formes;
 use tf_mesh::Grille;
 use tf_render::{Appareil, Arene, AtlasGpu, Camera, Cible, Scene};
 use tf_world::{sections_de, BBox, BlockPos, Dimension, Folder, FsSource};
@@ -138,27 +139,42 @@ fn main() {
         Disposition::Codex.chemins_texture(n)
     });
     let translucides = blocs_translucides(&cat, &atlas_complet);
-    let table = table_formes(&cat, cles.iter().cloned(), &|n| translucides.contains(n));
+
+    // ── la forme ET l'habillage, d'un seul parcours
+    //
+    // Le n-ième habillage va avec le n-ième cuboïde, structurellement : les
+    // produire séparément laisserait ce couplage implicite, et c'est le genre
+    // de contrat qui se casse sans bruit.
+    let teintes = tf_assets::Teintes::default();
+    let (table, habillage) =
+        tf_assets::table_rendu(&cat, &atlas, &teintes, cles.iter().cloned(), &|n| {
+            translucides.contains(n)
+        });
 
     // ── mailler
     let t = Instant::now();
     let chantier = grille.mailler_parallele(&table);
     let t_maille = t.elapsed();
 
-    // ── quelle tuile et quelle teinte, PAR FACE
-    //
-    // Par face, et pas seulement par état : prendre la texture du dessus et la
-    // poser partout habillait les côtés d'un bloc d'herbe avec de l'herbe. Et
-    // la teinte, sans quoi le sol de tout terrain sort blanchâtre — les
-    // textures teintées du jeu sont grises.
-    let teintes = tf_assets::Teintes::default();
-    let apparence = tf_assets::table_apparence(&cat, &atlas, &teintes, cles.iter().cloned());
-    let arene = Arene::depuis(&chantier, &|id, face| match apparence.get(id as usize) {
-        Some(f) => {
-            let a = f[face.indice()];
+    let arene = Arene::depuis(&chantier, &|id, face| match habillage.get(id as usize) {
+        Some(h) => {
+            let a = h.cube[face.indice()];
             (a.couche, a.teinte)
         }
         None => (0, [1.0; 3]),
+    });
+
+    // ── les blocs-modèles : la géométrie UNE fois par état, une pose par bloc
+    let modeles = tf_render::AreneModeles::depuis(&chantier, &|id| {
+        let Some(h) = habillage.get(id as usize) else {
+            return Vec::new();
+        };
+        let hab: Vec<tf_render::HabillageFaces> = h
+            .cuboides
+            .iter()
+            .map(|f| std::array::from_fn(|k| (f[k].couche, f[k].teinte, f[k].uv)))
+            .collect();
+        tf_render::faces_de(table.cuboides(id), &hab)
     });
 
     // ── dessiner
@@ -166,7 +182,7 @@ fn main() {
     println!("adaptateur : {}", app.decrire());
     let atlas_gpu = AtlasGpu::avec_mips(&app, atlas.cote, atlas.len() as u32, &atlas.pyramide());
     let cible = Cible::nouvelle(&app, cote, (cote * 5) / 8);
-    let scene = Scene::nouvelle(&app, &arene, &atlas_gpu);
+    let scene = Scene::avec_modeles(&app, &arene, &modeles, &atlas_gpu);
 
     let (min, max) = arene.bornes().expect("l'arène doit avoir du contenu");
     let aspect = cible.largeur as f32 / cible.hauteur as f32;
@@ -206,8 +222,10 @@ fn main() {
     );
     println!("quads            : {}", chantier.quads());
     println!(
-        "poses de modèles : {} (pas encore dessinées)",
-        chantier.poses()
+        "poses de modèles : {} → {} faces, {:.2} Mo",
+        chantier.poses(),
+        modeles.faces_a_dessiner,
+        modeles.octets() as f64 / 1e6
     );
     println!(
         "arène            : {} instances, {:.2} Mo",
