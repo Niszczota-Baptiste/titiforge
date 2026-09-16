@@ -553,3 +553,78 @@ Et l'aller-retour se vérifie sur le disque : après avoir remplacé la pierre p
 de la terre, il ne reste **aucune** pierre, et la terre compte 4 981 854 blocs —
 les 4 955 054 remplacés **plus les 26 800 qui existaient déjà**. La sauvegarde
 préalable est octet pour octet le fichier d'origine.
+
+## Une vraie save, et un vrai pack
+
+Cinq régions d'un monde Minefield 1.18 (6,2 Mo, 1 481 chunks), et le codex du
+serveur. Jusqu'ici tout venait de fixtures qu'on avait écrites soi-même : le
+décodeur et l'encodeur ne s'étaient jamais mesurés qu'à eux-mêmes.
+
+### Les deux invariants porteurs, sur des fichiers que Minecraft a écrits
+
+`--example verite_terrain`. On n'exige pas la même empreinte, on exige les
+mêmes **octets** — une empreinte qui collerait sur des octets différents serait
+une collision.
+
+| | |
+|---|---:|
+| `//replace` (étage palette) | **71 ms**, 1 141 chunks, 582 861 blocs |
+| étages | rien 34 403 · palette 1 141 · **bloc 0** |
+| chunks refaits puis annulés, octet pour octet | 1 141 |
+| chunks NON modifiés, vérifiés au ZLIB près | 288 |
+| un mélange (étage bloc) | **1 121 ms** pour **145 296 392 blocs** |
+| chunks refaits puis annulés, octet pour octet | 1 481 |
+| contrôles, fautes | 15 034 · **0** |
+
+L'étage bloc réécrit chaque bloc du monde en 1,12 s — 130 millions de blocs par
+seconde, recompression comprise — et l'aller-retour reste exact au bit près.
+
+Corroboration croisée : le recensement compte 582 861 blocs de terre en
+dépaquetant chaque indice ; l'opération en compte 582 861 par sa palette, sans
+en dépaquetter un seul. Deux chemins sans code commun, le même nombre.
+
+### Ce que le monde contient VRAIMENT
+
+`--example recenser_monde`. Le détail et ce qu'il corrige aux fixtures sont
+dans `docs/fixtures.md` ; l'essentiel :
+
+| | fixture `Build` | zone BÂTIE réelle |
+|---|---:|---:|
+| Blocs-modèles, part des posés | 9,1 % | **7,6 %** |
+| Cuboïdes par bloc-modèle | 3,58 | **1,54** |
+
+La densité de décor était une bonne estimation ; le nombre de cuboïdes par
+bloc-modèle était **2,3 × trop pessimiste**, parce que l'échantillon est
+stratifié sur ce qu'un pack CONTIENT alors qu'un constructeur pose des dalles
+et des escaliers, jamais le sac de friandises à 82 cuboïdes.
+
+Et c'est ce relevé qui a sorti une rotation de variante jamais appliquée :
+`minecraft:mushroom_stem`, un bloc PLEIN du jeu, arrivait en tête d'un
+classement de blocs-MODÈLES avec 38 % du total — ses six parts se superposaient
+en un seul plan.
+
+## Ce que la passe de modèles coûte
+
+`--example mesurer`, sur `Build::petit()` (un quart de région) avec la
+géométrie RÉELLE du pack. La dernière colonne est la conception qu'on compare,
+pas une optimisation qu'on espère : ce que les mêmes faces pèseraient si on les
+émettait en quads.
+
+| décor | quads | arène | poses | faces | modèles | en quads | gain |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 % | 516 893 | 16,54 Mo | 125 697 | 2 202 918 | 2,69 Mo | 70,49 Mo | **26,2 ×** |
+| 55 % | 516 893 | 16,54 Mo | 300 942 | 5 276 449 | 5,50 Mo | 168,85 Mo | **30,7 ×** |
+| 90 % | 516 893 | 16,54 Mo | 478 288 | 8 390 074 | 8,34 Mo | 268,48 Mo | **32,2 ×** |
+
+Maillage 77 à 89 ms, construction des deux arènes 23 à 28 ms, et la table de
+géométrie pèse **638 ko** — 570 états de modèle, quel que soit le nombre de
+blocs qui les portent. C'est tout l'argument : deux dalles de chêne côte à côte
+n'ont pas deux modèles, elles ont deux positions.
+
+**Et le tout en DEUX appels de dessin**, quel que soit le nombre de faces par
+bloc. Chaque pose a un nombre de faces différent — six pour une dalle, jusqu'à
+492 pour le pire bloc du serveur — donc « n faces par instance » n'existe pas.
+Aplatir côté processeur annulerait le gain ci-dessus ; un appel par nombre de
+faces distinct en ferait une quinzaine. La pose porte le RANG de sa première
+face dans le flot global, et le sommet retrouve la sienne par dichotomie :
+vingt itérations sur un million de poses, zéro octet par face.
