@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (379 tests aujourd'hui)
+cargo test            # tous les crates (389 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -201,6 +201,14 @@ TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --
 
 # ce que les règles de transformation couvrent, sur le pack RÉEL
 cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
+
+# UN VRAI MONDE, croisé avec un VRAI pack — ce qu'aucune fixture ne peut dire.
+# --zone restreint à un rectangle de CHUNKS (sur un monde plat, 99 % d'air
+# dilue tout), --mailler maille pour de vrai ce qui a été relevé.
+cargo run --release -p tf-assets --example recenser_monde -- D:\monde ../titisite/public/codex
+cargo run --release -p tf-assets --example recenser_monde -- D:\monde ../titisite/public/codex --zone "4,7,10,12" --mailler
+# les deux invariants porteurs, sur des fichiers que MINECRAFT a écrits
+cargo run --release -p tf-ops --example verite_terrain -- D:\monde minecraft:dirt
 
 # UNE OPÉRATION SUR UN VRAI MONDE — le premier bout qu'on peut lancer soi-même.
 # Sans --ecrire, tout vit dans une copie de travail et la save n'est pas touchée.
@@ -652,6 +660,28 @@ propres à ce dépôt.
   `collect()` de rayon garde l'ordre d'entrée. Les deux chemins sont croisés
   sur l'EMPREINTE du fichier produit — un test seul ne peut pas le faire, le
   choix se fait à la compilation.
+- **Un pack ne décrit pas seize escaliers : il en décrit UN et le TOURNE.** La
+  rotation vit sur la VARIANTE (`"x": 90, "y": 270`), pas sur le modèle, et
+  elle n'était appliquée nulle part au rendu : tous les escaliers d'un build
+  sortaient tournés vers l'est, toutes les échelles plaquées au nord. Aucune
+  erreur à l'écran — ça se lit « le rendu est bizarre » et ça ne désigne pas la
+  cause. Pire, la règle vivait en DOUBLE (ici pour le rendu, dans `tf-blocks`
+  pour la dérivation) et les deux copies avaient divergé sur le sens de X :
+  quatrième fois que ce piège se referme. Corollaire : **le sens d'une rotation
+  s'ANCRE, il ne se lit pas dans un commentaire.** `mushroom_stem` déclare six
+  rotations et NOMME la face visée par chacune — six rotations, six faces
+  distinctes, le sens est forcé.
+- **Une fixture ne peut trouver que ce qu'on savait déjà.** Tout ce que le dépôt
+  affirmait venait de fixtures qu'on avait écrites soi-même : le décodeur et
+  l'encodeur ne s'étaient jamais mesurés qu'à eux-mêmes. Le premier relevé d'une
+  VRAIE save a sorti la rotation manquante en une ligne — `mushroom_stem`, un
+  bloc plein du jeu, en tête d'un classement de blocs-MODÈLES. Et il a corrigé
+  le chiffre qui dimensionne la passe de modèles : **1,54 cuboïde par
+  bloc-modèle posé contre 3,58 attendus**, parce que l'échantillon est stratifié
+  sur ce qu'un pack CONTIENT alors qu'un constructeur pose des dalles et des
+  escaliers, jamais le sac de friandises à 82 cuboïdes. *La distribution de ce
+  qui existe n'est pas celle de ce qu'on pose* — même erreur que le premier
+  tirage du catalogue, survivant au niveau suivant (`docs/fixtures.md`).
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que

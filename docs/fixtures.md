@@ -49,9 +49,9 @@ parce qu'un bloc-modèle vaut 3,58 cuboïdes en moyenne.
 
 ### La densité de décor est un réglage, pas une mesure
 
-Personne ici n'a de vrai build Minefield à recenser : la proportion de
-blocs-modèles dans un bâtiment dépend de qui l'a construit. La faire passer
-pour un fait mesuré serait exactement l'erreur que ce dépôt s'interdit.
+La proportion de blocs-modèles dans un bâtiment dépend de qui l'a construit. La
+faire passer pour un fait mesuré serait exactement l'erreur que ce dépôt
+s'interdit.
 
 `densite_decor` est donc explicite, et les benchs la **balaient** :
 
@@ -62,6 +62,60 @@ pour un fait mesuré serait exactement l'erreur que ce dépôt s'interdit.
 | 90 % | 13,7 % | 1 851 345 |
 
 *(sur `Build::petit()`, un quart de région)*
+
+## Ce qu'une vraie save en dit
+
+Cinq régions d'un monde Minefield réel (1.18, 6,2 Mo, 1 481 chunks), relevées
+par `cargo run --release -p tf-assets --example recenser_monde -- <monde>
+<codex>`. Rien n'en est copié ici : l'outil lit la save de l'utilisateur et rend
+des chiffres.
+
+| | fixture `Build` | zone BÂTIE réelle | monde entier |
+|---|---:|---:|---:|
+| Blocs posés | 31,4 % du volume | 1,3 % | 0,8 % |
+| Sections homogènes | 0 | 93,8 % | 96,6 % |
+| Palette médiane d'une section | 49 (6 bits) | 1 (4 bits) | 1 (4 bits) |
+| Blocs-modèles, part des posés | 9,1 % | **7,6 %** | 1,6 % |
+| Cuboïdes par bloc-modèle | 3,58 | **1,54** | 2,16 |
+
+Deux colonnes parce qu'une seule mentirait. Le monde est un PLOT créatif : un
+sol plat de quatre couches (socle, deux de terre, une d'herbe — 1 024 blocs par
+chunk, et c'est exactement la médiane), avec des constructions posées dessus sur
+un chunk sur dix. Sa moyenne est un chiffre vrai qui ne décrit aucun chunk
+existant, et surtout pas ceux qui coûtent quelque chose. La colonne « zone
+bâtie » est le rectangle de chunks le plus chargé.
+
+### Ce que ça confirme, et ce que ça corrige
+
+**La densité de décor était une bonne estimation.** 9,1 % réglés contre 7,6 %
+relevés sur ce qui est bâti : le réglage par défaut vise juste.
+
+**Le nombre de cuboïdes par bloc-modèle ne l'était pas** — 3,58 contre 1,54,
+soit un bench **2,3 × trop pessimiste** sur le seul chiffre qui dimensionne la
+passe de modèles. Et la cause est précise : l'échantillon est stratifié sur le
+catalogue, donc il reflète ce qu'un pack CONTIENT. Un constructeur, lui, pose
+des dalles, des escaliers et des chemins de terre — les modèles bon marché — et
+n'a jamais posé un `red_pumpkin_treat_bag` à 82 cuboïdes. **La distribution de
+ce qui existe n'est pas celle de ce qu'on pose.** C'est la même erreur que
+celle déjà notée un cran plus haut (« un premier tirage forçait les plus lourds
+en tête »), qui avait survécu au niveau suivant.
+
+Elle n'est pas corrigée dans la fixture, et c'est délibéré : remplacer une
+estimation documentée par une mesure sous-échantillonnée — 42 chunks d'un seul
+monde — échangerait une erreur connue contre une erreur cachée. Ce qui la
+trancherait est un export de build DENSE, que `recenser_monde --zone` saura
+recenser tel quel.
+
+### Ce que ça a trouvé
+
+Le relevé de ce qui pèse dans la passe de modèles mettait
+`minecraft:mushroom_stem` en tête avec **38 %** du total. Un bloc plein du jeu,
+en tête d'un classement de blocs-modèles : c'est ce qui a sorti une rotation de
+variante jamais appliquée, et donc tous les escaliers d'un build dessinés dans
+la même direction (`tf-assets/rotation.rs`).
+
+C'est l'argument de cette page : une fixture ne peut pas trouver ça, parce
+qu'elle est faite de ce qu'on savait déjà.
 
 ## Le catalogue
 
