@@ -43,9 +43,11 @@ struct Origine {
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var atlas: texture_2d_array<f32>;
 @group(0) @binding(2) var echantillonneur: sampler;
+// La table des origines est PARTAGÉE avec la passe gloutonne : deux tables se
+// décaleraient le jour où l'une saute une section vide.
+@group(0) @binding(3) var<storage, read> origines: array<Origine>;
 @group(1) @binding(0) var<storage, read> faces: array<FaceModele>;
 @group(1) @binding(1) var<storage, read> poses: array<Pose>;
-@group(1) @binding(2) var<storage, read> origines: array<Origine>;
 
 struct Sortie {
     @builtin(position) clip: vec4<f32>,

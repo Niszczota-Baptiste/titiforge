@@ -73,6 +73,21 @@ impl Scene {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        // UNE table d'origines pour les deux passes. Deux se décaleraient le
+        // jour où l'une saute une section vide, et tout un pan du build se
+        // dessinerait ailleurs — sans la moindre erreur.
+        let origines = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("origines de section"),
+            // Un tampon de stockage VIDE est refusé par wgpu, et une scène
+            // vide est un cas de test parfaitement légitime.
+            contents: if arene.origines.is_empty() {
+                &[0u8; 16]
+            } else {
+                bytemuck::cast_slice(&arene.origines)
+            },
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
         let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scène"),
             entries: &[
@@ -105,6 +120,16 @@ impl Scene {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -123,6 +148,10 @@ impl Scene {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&atlas.echantillonneur),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: origines.as_entire_binding(),
                 },
             ],
         });
@@ -149,8 +178,7 @@ impl Scene {
                     array_stride: std::mem::size_of::<crate::arene::InstanceQuad>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, 1 => Float32x2, 2 => Uint32, 3 => Uint32,
-                        4 => Unorm8x4
+                        0 => Uint32, 1 => Uint32, 2 => Unorm8x4, 3 => Uint32
                     ],
                 }],
             },
@@ -290,8 +318,6 @@ impl PasseModeles {
         };
         let faces = tampon("faces de modèle", bytemuck::cast_slice(&a.faces));
         let poses = tampon("poses", bytemuck::cast_slice(&a.poses));
-        let origines = tampon("origines de section", bytemuck::cast_slice(&a.origines));
-
         let lecture = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX,
@@ -304,7 +330,7 @@ impl PasseModeles {
         };
         let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("modèles"),
-            entries: &[lecture(0), lecture(1), lecture(2)],
+            entries: &[lecture(0), lecture(1)],
         });
         let liaison = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("modèles"),
@@ -317,10 +343,6 @@ impl PasseModeles {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: poses.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: origines.as_entire_binding(),
                 },
             ],
         });

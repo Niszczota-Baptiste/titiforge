@@ -8,21 +8,25 @@ struct Camera {
     _pad: f32,
 };
 
+struct Origine {
+    position: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var atlas: texture_2d_array<f32>;
 @group(0) @binding(2) var echantillonneur: sampler;
+@group(0) @binding(3) var<storage, read> origines: array<Origine>;
 
 struct Instance {
-    // Coin de plus petites coordonnées, en SEIZIÈMES de bloc, en monde.
-    @location(0) position: vec3<f32>,
-    // Étendue dans les deux axes du plan, en seizièmes.
-    @location(1) taille: vec2<f32>,
-    // 0 = −X, 1 = +X, 2 = −Y, 3 = +Y, 4 = −Z, 5 = +Z.
-    // L'ordre est `axe * 2 + (positif ? 1 : 0)` — la face NÉGATIVE d'abord.
-    @location(2) face: u32,
-    @location(3) couche: u32,
+    // `x | y<<5 | z<<10 | (l−1)<<15 | (h−1)<<19 | face<<23`, en BLOCS et
+    // LOCAL à la section. Seize octets par quad au lieu de trente-deux : sur
+    // une région bâtie, l'arène passe de 132 Mo à 66. La fenêtre de résidence
+    // est plafonnée en octets, donc c'est autant de monde en plus.
+    @location(0) geo: u32,
+    @location(1) couche: u32,
     // Un FACTEUR par canal, pas une couleur : 1 sur une face non teintée.
-    @location(4) teinte: vec4<f32>,
+    @location(2) teinte: vec4<f32>,
+    @location(3) section: u32,
 };
 
 struct Sortie {
@@ -71,7 +75,19 @@ fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
     // Deux triangles, quatre coins : 0,1,2, 2,1,3 côté indices.
     let u = f32(i & 1u);
     let v = f32((i >> 1u) & 1u);
-    let p = inst.position + coin(inst.face, inst.taille, u, v);
+
+    let face = (inst.geo >> 23u) & 7u;
+    // Blocs → seizièmes, l'unité du mailleur et des modèles.
+    let bloc = vec3<f32>(
+        f32(inst.geo & 31u),
+        f32((inst.geo >> 5u) & 31u),
+        f32((inst.geo >> 10u) & 31u),
+    );
+    let taille = vec2<f32>(
+        f32(((inst.geo >> 15u) & 15u) + 1u) * 16.0,
+        f32(((inst.geo >> 19u) & 15u) + 1u) * 16.0,
+    );
+    let p = origines[inst.section].position.xyz + bloc * 16.0 + coin(face, taille, u, v);
 
     var out: Sortie;
     // Seizièmes → blocs.
@@ -81,9 +97,9 @@ fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
     // La texture se RÉPÈTE par bloc : un quad de 4 blocs montre quatre fois
     // sa texture. C'est pour ça que l'atlas est un TABLEAU — sur une planche,
     // la répétition mordrait sur la tuile voisine.
-    out.uv = vec2<f32>(u * inst.taille.x, v * inst.taille.y) / 16.0;
+    out.uv = vec2<f32>(u * taille.x, v * taille.y) / 16.0;
     out.couche = inst.couche;
-    out.ombre = ombre_de(inst.face);
+    out.ombre = ombre_de(face);
     out.teinte = inst.teinte.rgb;
     return out;
 }

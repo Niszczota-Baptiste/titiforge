@@ -13,7 +13,7 @@ pub mod modeles;
 pub mod scene;
 
 pub use appareil::{Appareil, AppareilError};
-pub use arene::{Arene, InstanceQuad, Tranche};
+pub use arene::{depaqueter, empaqueter, Arene, InstanceQuad, Tranche};
 pub use camera::Camera;
-pub use modeles::{faces_de, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
+pub use modeles::{faces_de, origines, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
 pub use scene::{AtlasGpu, Cible, Compte, Scene};

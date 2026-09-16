@@ -12,17 +12,29 @@
 use bytemuck::{Pod, Zeroable};
 use tf_mesh::{Adresse, Chantier};
 
-/// Ce qu'une instance porte au GPU. **32 octets**, et pas un de plus.
+/// Ce qu'une instance porte au GPU. **16 octets**, et pas un de plus.
+///
+/// Elle en faisait 32, et c'est la mesure qui a désigné ce champ : sur une
+/// région bâtie, l'arène gloutonne pèse 132 Mo — **trois fois** la passe de
+/// modèles, qu'on venait pourtant d'optimiser. Le raisonnement est celui de la
+/// pose : un quad tient dans sa SECTION, il n'a aucun besoin d'une position en
+/// flottants monde.
+///
+/// La mémoire n'est pas un confort ici : la fenêtre de résidence est plafonnée
+/// en OCTETS (invariant n° 7), donc diviser l'arène par deux double ce qu'on
+/// peut tenir résident.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 pub struct InstanceQuad {
-    /// Coin de plus petites coordonnées, en seizièmes de bloc, en MONDE.
+    /// `x | y<<5 | z<<10 | (l−1)<<15 | (h−1)<<19 | face<<23`.
     ///
-    /// Une région fait 512 blocs, soit 8 192 seizièmes : exact en flottant, et
-    /// très loin du premier entier que `f32` ne sait plus représenter.
-    pub position: [f32; 3],
-    pub taille: [f32; 2],
-    pub face: u32,
+    /// Positions et tailles en **BLOCS**, locales à la section : 0..16 tient
+    /// sur cinq bits, une taille de 1..16 sur quatre, la face sur trois — 26
+    /// bits en tout. Un quad glouton tombe toujours sur des bords de bloc,
+    /// c'est ce qui rend l'entier possible ; la passe de modèles, elle, garde
+    /// ses flottants parce que 17 % des coordonnées du pack ne sont pas
+    /// entières.
+    pub geo: u32,
     pub couche: u32,
     /// Ce par quoi multiplier le texel, en RGBA8. **Pas une couleur** : un
     /// FACTEUR, qui vaut `0xFFFFFFFF` sur une face non teintée.
@@ -32,6 +44,39 @@ pub struct InstanceQuad {
     /// biome. Sans ce champ, le sol de tout terrain sort blanchâtre : la
     /// texture s'affiche, simplement pas de la bonne couleur.
     pub teinte: u32,
+    /// Quelle section — donc quelle origine. Le même index que la passe de
+    /// modèles : les deux arènes parcourent les lots du chantier dans le même
+    /// ordre, et un test le fige.
+    pub section: u32,
+}
+
+/// Empaquette la géométrie d'un quad glouton.
+///
+/// Les seizièmes du mailleur redeviennent des blocs. Un quad qui ne tomberait
+/// pas sur un bord de bloc serait TRONQUÉ ici, silencieusement — d'où
+/// l'assertion : c'est une propriété de la passe gloutonne, pas une chance.
+pub fn empaqueter(min: [f32; 3], taille: [f32; 2], face: u32) -> u32 {
+    let bloc = |v: f32| {
+        debug_assert!(
+            (0.0..=256.0).contains(&v) && (v / 16.0).fract() == 0.0,
+            "un quad glouton tombe sur un bord de bloc, pas sur {v} seizièmes"
+        );
+        (v / 16.0) as u32
+    };
+    let (x, y, z) = (bloc(min[0]), bloc(min[1]), bloc(min[2]));
+    let (l, h) = (bloc(taille[0]), bloc(taille[1]));
+    debug_assert!(l >= 1 && h >= 1 && l <= 16 && h <= 16, "taille {l} × {h}");
+    x | (y << 5) | (z << 10) | ((l - 1) << 15) | ((h - 1) << 19) | (face << 23)
+}
+
+/// L'inverse, pour les bornes et les tests. Rend
+/// `(position en blocs, taille en blocs, face)`.
+pub fn depaqueter(geo: u32) -> ([u32; 3], [u32; 2], u32) {
+    (
+        [geo & 31, (geo >> 5) & 31, (geo >> 10) & 31],
+        [((geo >> 15) & 15) + 1, ((geo >> 19) & 15) + 1],
+        (geo >> 23) & 7,
+    )
 }
 
 /// Un facteur `0..1` par canal, empaqueté en RGBA8.
@@ -61,6 +106,12 @@ impl Tranche {
 pub struct Arene {
     pub instances: Vec<InstanceQuad>,
     pub tranches: Vec<Tranche>,
+    /// L'origine de chaque section, indexée comme les lots du chantier.
+    ///
+    /// Partagée avec la passe de modèles : deux tables se décaleraient le jour
+    /// où l'une saute une section vide, et tout un pan du build se dessinerait
+    /// ailleurs.
+    pub origines: Vec<crate::modeles::Origine>,
 }
 
 impl Arene {
@@ -74,24 +125,21 @@ impl Arene {
         chantier: &Chantier,
         apparence: &dyn Fn(tf_anvil::StateId, tf_mesh::forme::Face) -> (u32, [f32; 3]),
     ) -> Arene {
-        let mut a = Arene::default();
-        for lot in &chantier.lots {
+        let mut a = Arene {
+            origines: crate::modeles::origines(chantier),
+            ..Arene::default()
+        };
+        for (section, lot) in chantier.lots.iter().enumerate() {
             let debut = a.instances.len() as u32;
-            let [ox, oy, oz] = lot.origine();
             for q in &lot.quads.quads {
                 let (couche, teinte) = apparence(q.id, q.face);
                 a.instances.push(InstanceQuad {
-                    // Le quad est LOCAL à sa section : sans l'origine, tout le
-                    // monde se dessinerait empilé sur la section zéro.
-                    position: [
-                        ox as f32 * 16.0 + q.min[0],
-                        oy as f32 * 16.0 + q.min[1],
-                        oz as f32 * 16.0 + q.min[2],
-                    ],
-                    taille: q.taille,
-                    face: q.face as u32,
+                    geo: empaqueter(q.min, q.taille, q.face as u32),
                     couche,
                     teinte: en_rgba8(teinte),
+                    // Le quad est LOCAL à sa section : sans l'origine, tout le
+                    // monde se dessinerait empilé sur la section zéro.
+                    section: section as u32,
                 });
             }
             a.tranches.push(Tranche {
@@ -120,9 +168,15 @@ impl Arene {
         let mut min = [f32::MAX; 3];
         let mut max = [f32::MIN; 3];
         for i in &self.instances {
+            let (p, _, _) = depaqueter(i.geo);
+            let o = match self.origines.get(i.section as usize) {
+                Some(o) => o.position,
+                None => continue,
+            };
             for k in 0..3 {
-                min[k] = min[k].min(i.position[k] / 16.0);
-                max[k] = max[k].max(i.position[k] / 16.0);
+                let v = o[k] / 16.0 + p[k] as f32;
+                min[k] = min[k].min(v);
+                max[k] = max[k].max(v);
             }
         }
         if min[0] > max[0] {

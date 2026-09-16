@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (403 tests aujourd'hui)
+cargo test            # tous les crates (407 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -713,6 +713,15 @@ propres à ce dépôt.
   incomplète reste une image plausible. C'est le pendant visuel de
   « déclaré, branché, testé — et inatteignable », et ça demande le même
   remède : un test qui exige la présence, pas un coup d'œil.
+- **Optimiser la passe qu'on vient d'optimiser.** La pose a ramené les
+  blocs-modèles de 1 552 Mo à 39 sur une région bâtie — et la mesure suivante a
+  désigné la passe GLOUTONNE, restée à 132 Mo, soit trois fois plus. Un quad
+  tombe toujours sur un bord de bloc et tient dans sa section : cinq bits par
+  axe, quatre par dimension, trois pour la face — 26 bits, et l'instance passe
+  de 32 octets à 16. On ne devine pas où est le poids, même juste après l'avoir
+  déplacé soi-même. Corollaire : un empaquetage se vérifie par l'IMAGE — la
+  capture d'un vrai build doit être identique octet pour octet, parce qu'une
+  troncature d'un bloc ne plante rien, elle déplace un mur.
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que

@@ -646,11 +646,35 @@ Le chiffre qui tranche est 1 552 Mo. En quads, une région bâtie ne tient tout
 simplement pas : ce n'est pas « plus lent », c'est impossible. En poses elle
 fait 39 Mo, et la table de géométrie 868 ko.
 
-**Ce que la mesure désigne pour la suite**, et ce n'est pas ce qu'on aurait
-parié : la passe gloutonne pèse maintenant **132 Mo**, trois fois la passe de
-modèles. `InstanceQuad` fait 32 octets et porte une position en flottants
-MONDE, alors qu'un quad tient dans sa section — le même raisonnement que la
-pose. C'est là qu'ira la prochaine optimisation de mémoire, pas ailleurs.
+**Ce que la mesure a désigné pour la suite**, et ce n'est pas ce qu'on aurait
+parié : la passe gloutonne pesait **132 Mo**, trois fois la passe de modèles.
+`InstanceQuad` faisait 32 octets et portait une position en flottants MONDE,
+alors qu'un quad tient dans sa section — le même raisonnement que la pose.
+
+### Ce que ça a donné
+
+Un quad glouton tombe toujours sur un bord de bloc : sa position locale tient
+sur cinq bits par axe, sa taille sur quatre, sa face sur trois — **26 bits**.
+Avec la couche, la teinte et l'index de section, l'instance fait **16 octets**.
+
+| | avant | après |
+|---|---:|---:|
+| arène gloutonne, région pleine | 132,54 Mo | **66,27 Mo** |
+| arène gloutonne, quart de région | 16,54 Mo | **8,27 Mo** |
+| GPU total d'une région bâtie (55 %) | 1 685 Mo | **105 Mo** |
+
+Et la vérification qui compte : la capture d'un vrai build est **identique
+octet pour octet** avant et après. Un empaquetage qui tronquerait d'un bloc ne
+planterait rien — il déplacerait un mur, et une capture le montrerait
+« plausible ». L'aller-retour est balayé sur tout son domaine par un test.
+
+Au passage, les deux passes partagent désormais **une seule** table d'origines,
+indexée par le rang du lot. Deux tables se décaleraient le jour où l'une saute
+une section vide, et tout un pan du build se dessinerait ailleurs.
+
+*(La colonne « en quads » ci-dessus compare à une instance de 32 octets ; avec
+l'instance à 16, le rapport devient 19,9 × au lieu de 39,4 — même géométrie,
+même conclusion.)*
 
 ### Une garde qui manquait
 

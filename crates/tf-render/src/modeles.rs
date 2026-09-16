@@ -99,7 +99,6 @@ pub struct Origine {
 pub struct AreneModeles {
     pub faces: Vec<FaceModele>,
     pub poses: Vec<Pose>,
-    pub origines: Vec<Origine>,
     /// Les tranches, pour un remaillage partiel plus tard.
     pub tranches: Vec<(Adresse, u32, u32)>,
     /// Total des faces à dessiner. C'est le nombre d'INSTANCES.
@@ -114,7 +113,6 @@ impl AreneModeles {
     pub fn octets(&self) -> usize {
         self.faces.len() * std::mem::size_of::<FaceModele>()
             + self.poses.len() * std::mem::size_of::<Pose>()
-            + self.origines.len() * std::mem::size_of::<Origine>()
     }
 
     /// Empile la passe de modèles d'un chantier.
@@ -132,10 +130,8 @@ impl AreneModeles {
         let mut connus: std::collections::HashMap<StateId, (u32, u32)> =
             std::collections::HashMap::new();
 
-        for lot in &chantier.lots {
+        for (section, lot) in chantier.lots.iter().enumerate() {
             let debut_pose = a.poses.len() as u32;
-            let [ox, oy, oz] = lot.origine();
-            let section = a.origines.len() as u32;
             for p in &lot.poses.poses {
                 let (debut_modele, nombre) = *connus.entry(p.id).or_insert_with(|| {
                     let f = modele(p.id);
@@ -151,18 +147,15 @@ impl AreneModeles {
                         | (p.pos[1] as u32) << 8
                         | (p.pos[2] as u32) << 16
                         | (p.voisins_opaques as u32) << 24,
-                    section,
+                    section: section as u32,
                     debut_face: a.faces_a_dessiner,
                     debut_modele,
                 });
                 a.faces_a_dessiner += nombre;
             }
             if a.poses.len() as u32 == debut_pose {
-                continue; // section sans bloc-modèle : pas d'origine à garder
+                continue; // section sans bloc-modèle : rien à noter
             }
-            a.origines.push(Origine {
-                position: [ox as f32 * 16.0, oy as f32 * 16.0, oz as f32 * 16.0, 0.0],
-            });
             a.tranches
                 .push((lot.adresse, debut_pose, a.poses.len() as u32 - debut_pose));
         }
@@ -176,6 +169,25 @@ impl AreneModeles {
 /// d'un lecteur de packs pour savoir ce qu'est une couche de texture. C'est la
 /// même raison qui garde `Formes` en trait plutôt qu'en table concrète.
 pub type HabillageFaces = [(u32, [f32; 3], [f32; 4]); 6];
+
+/// L'origine de chaque lot du chantier, dans l'ORDRE DES LOTS.
+///
+/// Une seule table pour les deux passes. Deux se décaleraient le jour où l'une
+/// saute une section vide — et tout un pan du build se dessinerait ailleurs,
+/// sans la moindre erreur. L'index d'une section EST son rang de lot ; c'est
+/// la seule chose que les deux arènes ont à partager, et un test le fige.
+pub fn origines(chantier: &Chantier) -> Vec<Origine> {
+    chantier
+        .lots
+        .iter()
+        .map(|lot| {
+            let [x, y, z] = lot.origine();
+            Origine {
+                position: [x as f32 * 16.0, y as f32 * 16.0, z as f32 * 16.0, 0.0],
+            }
+        })
+        .collect()
+}
 
 /// Les faces d'un état, prêtes pour le GPU.
 ///

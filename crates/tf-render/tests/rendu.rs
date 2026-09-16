@@ -629,3 +629,124 @@ fn mille_dalles_ne_stockent_qu_un_seul_modele() {
         );
     }
 }
+
+// ── l'empaquetage d'un quad glouton ─────────────────────────────────────────
+
+use tf_render::{depaqueter, empaqueter};
+
+/// **Un quad glouton tient dans 26 bits, et l'aller-retour est EXACT.**
+///
+/// Seize octets par quad au lieu de trente-deux : sur une région bâtie, l'arène
+/// passe de 132 Mo à 66. Ce n'est pas un confort — la fenêtre de résidence est
+/// plafonnée en octets (invariant n° 7), donc c'est autant de monde en plus.
+///
+/// L'exactitude n'est pas négociable : une position tronquée d'un bloc ne
+/// planterait rien, elle déplacerait un mur.
+#[test]
+fn l_aller_retour_d_un_quad_est_exact_sur_tout_le_domaine() {
+    let mut vus = 0;
+    for x in 0..=16u32 {
+        for y in [0u32, 1, 7, 15, 16] {
+            for z in [0u32, 1, 8, 16] {
+                for l in 1..=16u32 {
+                    for h in [1u32, 2, 9, 16] {
+                        for face in 0..6u32 {
+                            let geo = empaqueter(
+                                [x as f32 * 16.0, y as f32 * 16.0, z as f32 * 16.0],
+                                [l as f32 * 16.0, h as f32 * 16.0],
+                                face,
+                            );
+                            assert_eq!(
+                                depaqueter(geo),
+                                ([x, y, z], [l, h], face),
+                                "x{x} y{y} z{z} {l}×{h} face{face}"
+                            );
+                            vus += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(vus > 20_000, "le domaine doit être balayé, pas effleuré");
+}
+
+/// Les 26 bits utilisés ne débordent pas les uns sur les autres.
+///
+/// Un décalage d'un bit ferait passer une taille dans la position : le quad
+/// serait au bon endroit à un bloc près, ce qui est exactement le genre de
+/// défaut qu'on ne voit pas sur une capture.
+#[test]
+fn les_champs_empaquetes_ne_se_marchent_pas_dessus() {
+    // Tout au maximum : x = y = z = 16, taille 16 × 16, face 5.
+    let geo = empaqueter([256.0, 256.0, 256.0], [256.0, 256.0], 5);
+    assert_eq!(depaqueter(geo), ([16, 16, 16], [16, 16], 5));
+    assert_eq!(geo >> 26, 0, "rien au-delà du 26e bit");
+    // Et un seul champ à la fois.
+    assert_eq!(
+        depaqueter(empaqueter([256.0, 0.0, 0.0], [16.0, 16.0], 0)).0,
+        [16, 0, 0]
+    );
+    assert_eq!(
+        depaqueter(empaqueter([0.0, 0.0, 0.0], [256.0, 16.0], 0)).1,
+        [16, 1]
+    );
+    assert_eq!(
+        depaqueter(empaqueter([0.0, 0.0, 0.0], [16.0, 16.0], 5)).2,
+        5
+    );
+}
+
+#[test]
+fn une_instance_de_quad_fait_seize_octets() {
+    assert_eq!(std::mem::size_of::<tf_render::InstanceQuad>(), 16);
+}
+
+/// **Les deux arènes indexent la MÊME table d'origines.**
+///
+/// Deux tables se décaleraient le jour où l'une saute une section vide, et tout
+/// un pan du build se dessinerait ailleurs — sans la moindre erreur. L'index
+/// d'une section EST son rang de lot, et ce test le fige : la passe de modèles
+/// saute les sections sans pose, donc rien ne garantit l'accord sauf cette
+/// règle.
+#[test]
+fn les_deux_arenes_designent_la_meme_section() {
+    let t = table();
+    let mut g = Grille::new();
+    // Une section de cubes SEULS — donc aucune pose, donc un lot que la passe
+    // de modèles n'aurait pas compté si elle numérotait de son côté.
+    g.poser(
+        0,
+        0,
+        section(0, |x, y, z| if x + y + z == 0 { CUBE } else { AIR }),
+    );
+    // Puis une section de dalles, loin de là.
+    g.poser(
+        4,
+        7,
+        section(3, |x, y, z| if x + y + z == 0 { 2 } else { AIR }),
+    );
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let modeles = AreneModeles::depuis(&chantier, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+
+    assert!(!arene.instances.is_empty() && !modeles.poses.is_empty());
+    let origines = tf_render::origines(&chantier);
+    assert_eq!(arene.origines, origines, "l'arène porte la table partagée");
+
+    // La dalle est en chunk (4, 7), section y = 3 : son origine doit le dire.
+    let p = modeles.poses[0];
+    let o = origines[p.section as usize].position;
+    assert_eq!(
+        [o[0] / 16.0, o[2] / 16.0],
+        [4.0 * 16.0, 7.0 * 16.0],
+        "la pose désigne l'origine de SON chunk, pas celle du lot précédent"
+    );
+    // Et le cube est bien dans l'autre.
+    let q = arene.instances[0];
+    let o = origines[q.section as usize].position;
+    assert_eq!([o[0], o[2]], [0.0, 0.0]);
+}
