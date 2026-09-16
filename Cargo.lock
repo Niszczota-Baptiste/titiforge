@@ -1156,6 +1156,7 @@ dependencies = [
 name = "tf-assets"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "png",
  "serde_json",
  "tf-anvil",

@@ -40,6 +40,17 @@ pub trait Source: Send + Sync {
 
     /// Un nom lisible, pour les messages.
     fn nom(&self) -> &str;
+
+    /// Les entrées sous un préfixe, triées.
+    ///
+    /// **Vide par défaut, et c'est délibéré** : une source n'est pas tenue de
+    /// savoir se parcourir. Le codex n'a rien à lister — un seul
+    /// `blockstates.json` porte tout — et c'est seulement pour un pack
+    /// Minecraft, où chaque bloc a son fichier, qu'il faut découvrir ce qui
+    /// est là.
+    fn lister(&self, _prefixe: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Un dossier de pack déjà dépaqueté.
@@ -79,6 +90,30 @@ fn sous_la_racine(chemin: &str) -> bool {
             .all(|s| s != ".." && s != "." && !s.is_empty())
 }
 
+/// Les fichiers d'un dossier, récursivement, en chemins RELATIFS à la racine.
+///
+/// Les liens symboliques ne sont pas suivis : un pack vient du disque d'un
+/// utilisateur, et un lien vers `/` ferait parcourir la machine entière.
+fn parcourir(racine: &Path, dossier: &Path, out: &mut Vec<String>) {
+    let Ok(entrees) = fs::read_dir(dossier) else {
+        return;
+    };
+    for e in entrees.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        if t.is_symlink() {
+            continue;
+        }
+        let p = e.path();
+        if t.is_dir() {
+            parcourir(racine, &p, out);
+        } else if let Ok(rel) = p.strip_prefix(racine) {
+            if let Some(s) = rel.to_str() {
+                out.push(s.replace('\\', "/"));
+            }
+        }
+    }
+}
+
 impl Source for Dossier {
     fn lire(&self, chemin: &str) -> Result<Vec<u8>> {
         if !sous_la_racine(chemin) {
@@ -96,6 +131,16 @@ impl Source for Dossier {
 
     fn nom(&self) -> &str {
         &self.nom
+    }
+
+    fn lister(&self, prefixe: &str) -> Vec<String> {
+        if !prefixe.is_empty() && !sous_la_racine(prefixe.trim_end_matches('/')) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        parcourir(&self.racine, &self.racine.join(prefixe), &mut out);
+        out.sort();
+        out
     }
 }
 
@@ -147,6 +192,20 @@ impl Source for Pile {
 
     fn nom(&self) -> &str {
         &self.nom
+    }
+
+    /// L'UNION de ce que les sources listent. Une seule ne suffirait pas : le
+    /// pack du serveur porte les blocs `minefield:*`, le jeu porte les
+    /// vanilla, et un catalogue ne doit manquer ni les uns ni les autres.
+    fn lister(&self, prefixe: &str) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .sources
+            .iter()
+            .flat_map(|s| s.lister(prefixe))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 }
 

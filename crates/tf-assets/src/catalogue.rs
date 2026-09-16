@@ -155,6 +155,43 @@ impl Catalogue {
         Ok(n)
     }
 
+    /// Charge TOUT ce qu'un pack Minecraft déclare, namespace par namespace.
+    ///
+    /// Un pack n'a pas de `blockstates.json` global : chaque bloc a son
+    /// fichier, sous `assets/<ns>/blockstates/`. On ne peut donc pas savoir
+    /// d'avance quoi charger — il faut LISTER, et c'est la seule raison pour
+    /// laquelle `Source` sait le faire.
+    ///
+    /// Les namespaces sortent de ce qui est là, jamais d'une liste écrite à la
+    /// main : le pack d'un serveur en apporte un que personne n'a prévu, et
+    /// c'est exactement le cas qui compte ici.
+    pub fn charger_pack<S: Source + ?Sized>(&mut self, src: &S) -> Result<usize, String> {
+        let mut n = 0;
+        for chemin in src.lister("assets/") {
+            let Some(reste) = chemin.strip_prefix("assets/") else {
+                continue;
+            };
+            let mut morceaux = reste.splitn(3, '/');
+            let (Some(ns), Some("blockstates"), Some(feuille)) =
+                (morceaux.next(), morceaux.next(), morceaux.next())
+            else {
+                continue;
+            };
+            // `blockstates/` est plat dans un pack : un `/` de plus veut dire
+            // qu'on regarde autre chose.
+            let Some(nom) = feuille.strip_suffix(".json").filter(|f| !f.contains('/')) else {
+                continue;
+            };
+            if self.charger_bloc(src, &format!("{ns}:{nom}")).is_ok() {
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return Err("aucun blockstate sous `assets/*/blockstates/`".into());
+        }
+        Ok(n)
+    }
+
     /// Charge le blockstate d'UN bloc, disposition `Pack`.
     pub fn charger_bloc<S: Source + ?Sized>(&mut self, src: &S, nom: &str) -> Result<(), String> {
         let id = Id::parse(nom);

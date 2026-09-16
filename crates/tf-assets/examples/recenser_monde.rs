@@ -23,8 +23,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use tf_anvil::{decode_section, inflate, read, scan, Interner, StateId, VOL};
-use tf_assets::catalogue::{blocs_translucides, table_formes, textures_citees, Disposition};
-use tf_assets::{Atlas, Catalogue, Dossier};
+use tf_assets::catalogue::{blocs_translucides, table_formes, textures_citees};
+use tf_assets::Atlas;
 use tf_mesh::forme::Formes;
 use tf_mesh::Grille;
 
@@ -402,28 +402,25 @@ fn main() {
         println!("\n(pas de pack donné — la part de blocs-modèles demande le codex)");
         return;
     };
-    let src = match Dossier::ouvrir(&pack) {
-        Ok(s) => s,
+    let tp = std::time::Instant::now();
+    // Codex, pack, ou INSTALLATION de launcher — le genre se reconnaît au
+    // contenu, pas à ce que l'utilisateur en dit.
+    let (cat, src, genre) = match tf_assets::jeu::catalogue(&pack) {
+        Ok(t) => t,
         Err(e) => {
-            eprintln!("{e}");
+            eprintln!("assets illisibles : {e}");
             std::process::exit(1);
         }
     };
-    let tp = std::time::Instant::now();
-    let mut cat = Catalogue::new(Disposition::Codex);
-    if let Err(e) = cat.charger_codex(&src) {
-        eprintln!("codex illisible : {e}");
-        std::process::exit(1);
-    }
-    cat.resoudre_modeles(&src);
+    let disposition = genre.disposition();
     let citees = textures_citees(&cat);
     let atlas = Atlas::batir(&src, citees.iter().cloned(), &|n| {
-        Disposition::Codex.chemins_texture(n)
+        disposition.chemins_texture(n)
     });
     let translucides = blocs_translucides(&cat, &atlas);
     let table = table_formes(&cat, cles.iter().cloned(), &|n| translucides.contains(n));
     println!(
-        "\npack : {} blocs, {} modèles, {} introuvables, {:.0} ms",
+        "\nassets : {genre:?} · {} blocs, {} modèles, {} introuvables, {:.0} ms",
         cat.nb_blocs(),
         cat.nb_modeles(),
         cat.introuvables.len(),

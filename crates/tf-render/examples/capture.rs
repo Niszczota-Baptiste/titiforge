@@ -13,8 +13,8 @@
 use std::time::Instant;
 
 use tf_anvil::{decode_section, inflate, read, scan, Interner, StateId};
-use tf_assets::catalogue::{blocs_translucides, textures_citees, Disposition};
-use tf_assets::{Atlas, Catalogue, Dossier};
+use tf_assets::catalogue::{blocs_translucides, textures_citees};
+use tf_assets::Atlas;
 use tf_bench::{build, Build};
 use tf_mesh::forme::Formes;
 use tf_mesh::Grille;
@@ -53,10 +53,22 @@ fn main() {
         }
     }
 
-    let src = Dossier::ouvrir(&racine).expect("pack lisible");
-    let mut cat = Catalogue::new(Disposition::Codex);
-    cat.charger_codex(&src).expect("blockstates");
-    cat.resoudre_modeles(&src);
+    // Codex, pack, ou INSTALLATION de launcher : le genre se reconnaît au
+    // contenu. Demander à l'utilisateur de choisir serait lui demander de
+    // connaître nos formats.
+    let (cat, src, genre) = match tf_assets::jeu::catalogue(&racine) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("assets illisibles : {e}");
+            std::process::exit(1);
+        }
+    };
+    let disposition = genre.disposition();
+    println!(
+        "assets : {racine} ({genre:?}) · {} blocs, {} modèles",
+        cat.nb_blocs(),
+        cat.nb_modeles()
+    );
 
     // ── la scène : une vraie save, ou la fixture
     let mut grille = Grille::new();
@@ -129,14 +141,12 @@ fn main() {
         .map(|i| interner.resolve(i).unwrap().to_string())
         .collect();
     let voulues = tf_assets::textures_des_etats(&cat, cles.iter().cloned());
-    let atlas = Atlas::batir(&src, voulues.clone(), &|n| {
-        Disposition::Codex.chemins_texture(n)
-    });
+    let atlas = Atlas::batir(&src, voulues.clone(), &|n| disposition.chemins_texture(n));
 
     // Pour la translucidité, il faut l'atlas COMPLET du catalogue : un bloc
     // absent de la scène peut quand même être cité par un voisin.
     let atlas_complet = Atlas::batir(&src, textures_citees(&cat), &|n| {
-        Disposition::Codex.chemins_texture(n)
+        disposition.chemins_texture(n)
     });
     let translucides = blocs_translucides(&cat, &atlas_complet);
 

@@ -17,18 +17,22 @@
 #![forbid(unsafe_code)]
 
 pub mod apparence;
+pub mod archive;
 pub mod atlas;
 pub mod blockstates;
 pub mod catalogue;
+pub mod jeu;
 pub mod modele;
 pub mod rotation;
 pub mod source;
 pub mod texture;
 
 pub use apparence::{textures_des_etats, Apparence, Habillage, Teintes};
+pub use archive::Archive;
 pub use atlas::Atlas;
 pub use blockstates::{Blockstate, Variante};
 pub use catalogue::{table_rendu, Catalogue, Classement};
+pub use jeu::{catalogue, est_une_installation, inspecter, Genre, Installation, Version};
 pub use modele::{cuboides, resoudre, Element, Modele, ModeleError, ModeleResolu};
 pub use rotation::{axes, tourner, Axes};
 pub use source::{Dossier, Id, Pile, Source, SourceError};

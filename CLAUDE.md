@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (407 tests aujourd'hui)
+cargo test            # tous les crates (417 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -190,6 +190,13 @@ cargo run --release -p tf-ops --example compression        # ce que coûte chaqu
 cargo run --release -p tf-ops --example empreinte
 cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
+
+# Les outils acceptent les TROIS formes d'assets, reconnues au contenu :
+#   un codex extrait (un seul blockstates.json), un pack (assets/<ns>/...,
+#   en dossier ou en .zip), ou une INSTALLATION de launcher (versions/ +
+#   resourcepacks/ + server-resource-packs/ — c'est là que vivent les vraies
+#   textures minefield:*). Exemple :
+#   capture.exe %APPDATA%\.minefield_1_18 vue.png 1600 --monde D:\monde
 
 # le pack RÉEL du serveur (rien n'est copié dans le dépôt)
 cargo run --release -p tf-assets --example recenser     -- ../titisite/public/codex
@@ -252,7 +259,7 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅ · prédicats
   tf-formats/  .schem · .schematic · .litematic · .nbt
-  tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
+  tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
   tf-app/      coque winit + egui, outils, commandes
@@ -722,6 +729,13 @@ propres à ce dépôt.
   déplacé soi-même. Corollaire : un empaquetage se vérifie par l'IMAGE — la
   capture d'un vrai build doit être identique octet pour octet, parce qu'une
   troncature d'un bloc ne plante rien, elle déplace un mur.
+- **Un lecteur de ZIP se fie au répertoire CENTRAL, pas aux en-têtes locaux.**
+  Un en-tête local peut annoncer des tailles nulles et renvoyer à un
+  descripteur placé APRÈS les données, qu'on ne saurait pas trouver. Mais il
+  porte ses PROPRES longueurs de nom et de champ supplémentaire, qui peuvent
+  différer de celles du répertoire : prendre celles du répertoire décale la
+  lecture de quelques octets, ce qui donne une charge illisible et aucune
+  explication. Les deux tables servent, chacune à ce qu'elle décrit.
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que
