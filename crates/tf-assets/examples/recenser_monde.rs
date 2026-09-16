@@ -232,7 +232,12 @@ fn main() {
                 eprintln!("--zone attend quatre entiers : cx0,cz0,cx1,cz1");
                 std::process::exit(2);
             }
-            zone = Some([v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]);
+            zone = Some([
+                v[0].min(v[2]),
+                v[1].min(v[3]),
+                v[0].max(v[2]),
+                v[1].max(v[3]),
+            ]);
         } else if o == "--mailler" {
             mailler = true;
         } else {
@@ -255,16 +260,17 @@ fn main() {
 
     println!("monde : {monde}");
     if let Some([x0, z0, x1, z1]) = zone {
-        println!("  zone : chunks {x0}..{x1} × {z0}..{z1} (blocs {}..{} × {}..{})",
-                 x0 * 16, x1 * 16 + 15, z0 * 16, z1 * 16 + 15);
+        println!(
+            "  zone : chunks {x0}..{x1} × {z0}..{z1} (blocs {}..{} × {}..{})",
+            x0 * 16,
+            x1 * 16 + 15,
+            z0 * 16,
+            z1 * 16 + 15
+        );
     }
     println!(
         "  {} régions · {} chunks · {} sections ({} homogènes, {} sans blocs)",
-        rel.regions,
-        rel.chunks,
-        rel.sections,
-        rel.sections_homogenes,
-        rel.sections_sans_blocs
+        rel.regions, rel.chunks, rel.sections, rel.sections_homogenes, rel.sections_sans_blocs
     );
     if rel.illisibles > 0 {
         println!("  {} charges illisibles (ignorées)", rel.illisibles);
@@ -355,7 +361,11 @@ fn main() {
         "  sections portant un bloc : {} / {} · médiane {} · p90 {} · max {} (sur 4096)",
         sec.len(),
         rel.sections,
-        if sec.is_empty() { 0 } else { sec[sec.len() / 2] },
+        if sec.is_empty() {
+            0
+        } else {
+            sec[sec.len() / 2]
+        },
         if sec.is_empty() {
             0
         } else {
@@ -367,7 +377,11 @@ fn main() {
     chunks.sort_unstable_by(|a, b| b.2.cmp(&a.2));
     println!("  les huit chunks les plus chargés :");
     for &(cx, cz, n) in chunks.iter().take(8) {
-        println!("    chunk {cx:5},{cz:5} (bloc {:7},{:7}) : {n:6} posés", cx * 16, cz * 16);
+        println!(
+            "    chunk {cx:5},{cz:5} (bloc {:7},{:7}) : {n:6} posés",
+            cx * 16,
+            cz * 16
+        );
     }
 
     let mut top: Vec<(u64, &str)> = rel
@@ -480,6 +494,34 @@ fn main() {
             pourcent(n_modele, connus)
         );
     }
+    // ── ce qui PÈSE dans la passe de modèles
+    //
+    // La moyenne du pack (3,5 cuboïdes par modèle) n'est pas celle de ce
+    // qu'on POSE. Un pack contient un sac de friandises à 82 cuboïdes ; un
+    // build est fait de dalles et d'escaliers. Ce qui dimensionne le rendu
+    // est le produit blocs × cuboïdes, pas l'un ou l'autre.
+    let mut poids: Vec<(u64, u64, usize, &str)> = Vec::new();
+    for (i, &n) in rel.par_etat.iter().enumerate() {
+        let id = i as StateId;
+        if n == 0 || est_air(&cles[i]) || table.opaque(id) || table.est_air(id) {
+            continue;
+        }
+        let k = table.cuboides(id).len();
+        if k > 0 {
+            poids.push((n * k as u64, n, k, cles[i].as_str()));
+        }
+    }
+    poids.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    if !poids.is_empty() {
+        println!("\n  ce qui pèse dans la passe de modèles :");
+        for (p, n, k, c) in poids.iter().take(10) {
+            println!(
+                "    {p:9} cuboïdes ({:4.1} %) = {n:7} × {k:3} · {c}",
+                pourcent(*p, cuboides)
+            );
+        }
+    }
+
     inconnus.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     if !inconnus.is_empty() {
         println!("\n  les dix plus posés que le pack ne connaît pas :");

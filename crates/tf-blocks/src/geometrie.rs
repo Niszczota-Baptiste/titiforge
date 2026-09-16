@@ -17,6 +17,7 @@
 //! elle, est INVARIANTE par rotation — et ça se mesure.
 
 use tf_assets::modele::cuboides;
+use tf_assets::rotation;
 use tf_assets::{Catalogue, Id};
 
 use crate::transfo::Transfo;
@@ -39,20 +40,20 @@ fn en_entier(v: f32) -> i32 {
 ///
 /// Un cuboïde tourné d'un multiple de 90° reste un cuboïde : il suffit de
 /// transformer ses deux coins et de les remettre dans l'ordre.
+///
+/// La rotation de la VARIANTE vient de `tf_assets::rotation` et n'est pas
+/// réécrite ici. Elle l'a été, et les deux copies avaient divergé : celle-ci
+/// tournait autour de X dans le sens inverse de celle du rendu. Le format
+/// applique `x` puis `y`, dans le sens négatif — ancré sur `mushroom_stem`,
+/// dont les six parts doivent atterrir sur ses six faces, et vérifié par un
+/// test de `tf-assets`.
 fn transformer(b: Boite, x: u16, y: u16, apres: Option<Transfo>) -> Boite {
+    let a = rotation::axes(x, y);
     let mut coins = [[b[0], b[1], b[2]], [b[3], b[4], b[5]]];
     for c in coins.iter_mut() {
-        // Inclinaison autour de X, puis rotation autour de Y — l'ordre du
-        // format : `x` s'applique avant `y`.
-        for _ in 0..(x / 90) % 4 {
-            let (dy, dz) = (c[1] - CENTRE, c[2] - CENTRE);
-            c[1] = CENTRE - dz;
-            c[2] = CENTRE + dy;
-        }
-        for _ in 0..(y / 90) % 4 {
-            let (dx, dz) = (c[0] - CENTRE, c[2] - CENTRE);
-            c[0] = CENTRE - dz;
-            c[2] = CENTRE + dx;
+        let depart = *c;
+        for (i, &(j, s)) in a.iter().enumerate() {
+            c[j] = CENTRE + (depart[i] - CENTRE) * s as i32;
         }
         // La transformation du BUILD, appliquée après celle du bloc.
         if let Some(t) = apres {

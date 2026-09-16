@@ -20,6 +20,7 @@ pub mod atlas;
 pub mod blockstates;
 pub mod catalogue;
 pub mod modele;
+pub mod rotation;
 pub mod source;
 pub mod texture;
 
@@ -27,5 +28,6 @@ pub use atlas::Atlas;
 pub use blockstates::{Blockstate, Variante};
 pub use catalogue::{Catalogue, Classement};
 pub use modele::{cuboides, resoudre, Element, Modele, ModeleError, ModeleResolu};
+pub use rotation::{axes, tourner, Axes};
 pub use source::{Dossier, Id, Pile, Source, SourceError};
 pub use texture::{TextureError, Tuile};

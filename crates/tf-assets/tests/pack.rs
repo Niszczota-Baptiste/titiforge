@@ -8,10 +8,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tf_assets::blockstates::Blockstate;
-use tf_assets::catalogue::{classer, indice_cube_plein, Classement, Disposition};
+use tf_assets::catalogue::{classer, indice_cube_plein, table_formes, Classement, Disposition};
 use tf_assets::modele::{resoudre, uv_de};
 use tf_assets::{cuboides, Catalogue, Dossier, Id, Pile, Source, SourceError};
-use tf_mesh::forme::Face;
+use tf_mesh::forme::{Face, Formes};
 
 // ── un dossier temporaire, sans dépendance ─────────────────────────────────
 
@@ -539,5 +539,142 @@ fn un_modele_partage_n_est_resolu_qu_une_fois() {
         1,
         "vingt escaliers renvoient au même parent : les résoudre par ÉTAT les \
          relirait des milliers de fois"
+    );
+}
+
+// ── la rotation d'une variante, de bout en bout ─────────────────────────────
+
+/// Un pack qui reproduit le cas DIFFICILE, et non un cas commode.
+///
+/// Deux blocs, tous deux tirés de vanilla parce qu'ils ont cassé pour de vrai :
+///
+/// - un escalier, dont un pack ne décrit qu'UNE orientation et tourne les
+///   trois autres ;
+/// - un `mushroom_stem`, dont le modèle est un simple PLAN sur la face nord et
+///   dont le `blockstates` multipart pose une copie tournée par face exposée.
+///
+/// Le second est celui qui a rendu le défaut visible : relevé sur une vraie
+/// save, ses six parts se superposaient en un seul plan et pesaient à elles
+/// seules 38 % de la passe de modèles.
+fn pack_des_rotations() -> TempDir {
+    let d = TempDir::new("rotations");
+    // L'escalier de base regarde l'EST : sa marche est du côté +X.
+    d.ecrire(
+        "assets/minecraft/models/block/stairs.json",
+        r##"{"elements":[
+             {"from":[0,0,0],"to":[16,8,16],"faces":{"down":{"texture":"#t","cullface":"down"}}},
+             {"from":[8,8,0],"to":[16,16,16],"faces":{"up":{"texture":"#t","cullface":"up"}}}
+           ]}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/blockstates/stairs.json",
+        r##"{"variants":{
+             "facing=east":{"model":"minecraft:block/stairs"},
+             "facing=south":{"model":"minecraft:block/stairs","y":90},
+             "facing=west":{"model":"minecraft:block/stairs","y":180},
+             "facing=north":{"model":"minecraft:block/stairs","y":270}
+           }}"##,
+    );
+    // Un plan sur la face nord, et six règles qui le posent sur les six faces.
+    d.ecrire(
+        "assets/minecraft/models/block/champignon.json",
+        r##"{"elements":[
+             {"from":[0,0,0],"to":[16,16,0],"faces":{"north":{"texture":"#t","cullface":"north"}}}
+           ]}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/blockstates/champignon.json",
+        r##"{"multipart":[
+             {"when":{"north":"true"},"apply":{"model":"minecraft:block/champignon"}},
+             {"when":{"east":"true"},"apply":{"model":"minecraft:block/champignon","y":90}},
+             {"when":{"south":"true"},"apply":{"model":"minecraft:block/champignon","y":180}},
+             {"when":{"west":"true"},"apply":{"model":"minecraft:block/champignon","y":270}},
+             {"when":{"up":"true"},"apply":{"model":"minecraft:block/champignon","x":270}},
+             {"when":{"down":"true"},"apply":{"model":"minecraft:block/champignon","x":90}}
+           ]}"##,
+    );
+    d
+}
+
+fn catalogue_des_rotations(d: &TempDir) -> Catalogue {
+    let src = Dossier::ouvrir(d.path()).unwrap();
+    let mut cat = Catalogue::new(Disposition::Pack);
+    cat.charger_bloc(&src, "minecraft:stairs").unwrap();
+    cat.charger_bloc(&src, "minecraft:champignon").unwrap();
+    cat.resoudre_modeles(&src);
+    cat
+}
+
+/// **Quatre escaliers qui regardent ailleurs doivent avoir quatre géométries.**
+///
+/// Sans la rotation de la variante, les quatre rendaient exactement les mêmes
+/// cuboïdes : tous les escaliers d'un build sortaient tournés vers l'est, sans
+/// la moindre erreur à l'écran. C'est le défaut que ce test tient fermé.
+#[test]
+fn quatre_orientations_d_escalier_donnent_quatre_geometries() {
+    let d = pack_des_rotations();
+    let cat = catalogue_des_rotations(&d);
+    let cles: Vec<String> = ["east", "south", "west", "north"]
+        .iter()
+        .map(|f| format!("minecraft:stairs|facing={f}"))
+        .collect();
+    let t = table_formes(&cat, cles.iter().cloned(), &|_| false);
+
+    let mut vues: Vec<Vec<tf_mesh::forme::Cuboide>> = Vec::new();
+    for (i, cle) in cles.iter().enumerate() {
+        let c = t.cuboides(i as u32).to_vec();
+        assert_eq!(c.len(), 2, "{cle} : deux cuboïdes");
+        assert!(
+            !vues.contains(&c),
+            "{cle} rend la même géométrie qu'une autre orientation"
+        );
+        vues.push(c);
+    }
+
+    // Et la marche doit être du bon côté : l'est regarde +X, l'ouest −X.
+    let marche = |i: usize| {
+        let c = t.cuboides(i as u32);
+        // la marche est le cuboïde qui ne touche pas le sol
+        *c.iter().find(|c| c.min[1] > 0.0).expect("une marche")
+    };
+    assert_eq!(marche(0).min[0], 8.0, "facing=east : marche du côté +X");
+    assert_eq!(marche(2).max[0], 8.0, "facing=west : marche du côté −X");
+    assert_eq!(marche(1).min[2], 8.0, "facing=south : marche du côté +Z");
+    assert_eq!(marche(3).max[2], 8.0, "facing=north : marche du côté −Z");
+}
+
+/// Les six parts d'un `mushroom_stem` doivent couvrir ses six faces.
+///
+/// Superposées, elles ne dessinaient qu'un plan — et le bloc, qui est plein
+/// dans le jeu, apparaissait comme une feuille de papier.
+#[test]
+fn les_six_parts_du_champignon_couvrent_ses_six_faces() {
+    let d = pack_des_rotations();
+    let cat = catalogue_des_rotations(&d);
+    let cle = "minecraft:champignon|down=true,east=true,north=true,south=true,up=true,west=true";
+    let t = table_formes(&cat, [cle.to_string()].into_iter(), &|_| false);
+    let c = t.cuboides(0);
+    assert_eq!(c.len(), 6, "six règles, six cuboïdes");
+
+    let mut faces: Vec<Face> = Vec::new();
+    for cub in c {
+        for f in tf_mesh::forme::FACES {
+            if cub.faces & f.bit() != 0 {
+                assert!(cub.au_bord(f), "{f:?} : la part doit être à ras du bord");
+                faces.push(f);
+            }
+        }
+    }
+    faces.sort();
+    let distinctes = {
+        let mut v = faces.clone();
+        v.dedup();
+        v
+    };
+    assert_eq!(
+        distinctes.len(),
+        6,
+        "les six parts doivent viser six faces distinctes, elles en visent {:?}",
+        distinctes
     );
 }

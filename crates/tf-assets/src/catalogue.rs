@@ -291,13 +291,20 @@ pub fn table_formes(
         // L'état décide du MODÈLE : un escalier tourné n'a pas la même
         // géométrie, et prendre le premier modèle déclaré les dessinerait tous
         // dans la même direction.
+        //
+        // Et le modèle ne suffit pas : un pack ne décrit pas seize escaliers,
+        // il en décrit UN et le TOURNE. La rotation vit sur la variante, et
+        // l'oublier dessinait tous les escaliers d'un build vers l'est —
+        // relevé sur une vraie save, avec un `mushroom_stem` dont les six
+        // parts se superposaient en un seul plan, à lui seul 38 % de la passe
+        // de modèles.
         let mut cub: Vec<Cuboide> = Vec::new();
         let mut plein = false;
         for v in bs.pour(&etat) {
             let Some(m) = cat.modele(&v.modele) else {
                 continue;
             };
-            let c = modele::cuboides(m);
+            let c = crate::rotation::tourner(modele::cuboides(m), v.x, v.y);
             plein |= indice_cube_plein(&c).is_some();
             cub.extend(c);
         }

@@ -35,11 +35,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tf_anvil::{inflate, read, splice, Interner};
-use tf_world::journal::empreinte as empreinte_de;
 use tf_ops::edition::appliquer;
 use tf_ops::plan::Plan;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos};
+use tf_world::journal::empreinte as empreinte_de;
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::{FsSource, Staging};
 
@@ -123,8 +123,16 @@ fn main() {
         ov.regions.iter().map(|r| r.pos.z).max().unwrap() * 512 + 511,
     );
     let tout = BBox::new(
-        BlockPos { x: x0, y: -64, z: z0 },
-        BlockPos { x: x1, y: 319, z: z1 },
+        BlockPos {
+            x: x0,
+            y: -64,
+            z: z0,
+        },
+        BlockPos {
+            x: x1,
+            y: 319,
+            z: z1,
+        },
     );
 
     let essais: Vec<(&str, Plan, BBox)> = vec![
@@ -135,11 +143,8 @@ fn main() {
         ),
         (
             "bloc — 4096 indices repackés, motif dépendant de la position",
-            Plan::nouveau(
-                Masque::Tout,
-                Motif::melange(vec![(1, pierre), (1, terre)]),
-            )
-            .en_comptant(),
+            Plan::nouveau(Masque::Tout, Motif::melange(vec![(1, pierre), (1, terre)]))
+                .en_comptant(),
             tout,
         ),
     ];
@@ -238,7 +243,10 @@ fn main() {
         let mut intacts = 0usize;
         let mut reecrits = 0usize;
         for info in &ov.regions {
-            let Ok(octets) = staging.overlay().read_region(&dim, Folder::Region, info.pos) else {
+            let Ok(octets) = staging
+                .overlay()
+                .read_region(&dim, Folder::Region, info.pos)
+            else {
                 continue; // région jamais réécrite : rien à comparer
             };
             reecrits += 1;
