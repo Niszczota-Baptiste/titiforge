@@ -628,3 +628,34 @@ Aplatir côté processeur annulerait le gain ci-dessus ; un appel par nombre de
 faces distinct en ferait une quinzaine. La pose porte le RANG de sa première
 face dans le flot global, et le sommet retrouve la sienne par dichotomie :
 vingt itérations sur un million de poses, zéro octet par face.
+
+### À l'échelle d'une région PLEINE
+
+Le même essai sur `Build::default()` — 1 024 chunks, 100 663 296 blocs — parce
+qu'un quart de région ne prouve rien sur les limites d'un pilote.
+
+| décor | quads | arène | poses | faces | modèles | en quads | gain |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 % | 4 141 777 | 132,54 Mo | 1 001 000 | 20 381 981 | 17,26 Mo | 652,22 Mo | **37,8 ×** |
+| 55 % | 4 141 777 | 132,54 Mo | 2 385 953 | 48 520 638 | 39,42 Mo | **1 552,66 Mo** | **39,4 ×** |
+
+Maillage 556 à 601 ms, arènes 242 à 270 ms, montée GPU 101 à 177 ms, et
+**deux appels de dessin** pour 52 662 415 instances.
+
+Le chiffre qui tranche est 1 552 Mo. En quads, une région bâtie ne tient tout
+simplement pas : ce n'est pas « plus lent », c'est impossible. En poses elle
+fait 39 Mo, et la table de géométrie 868 ko.
+
+**Ce que la mesure désigne pour la suite**, et ce n'est pas ce qu'on aurait
+parié : la passe gloutonne pèse maintenant **132 Mo**, trois fois la passe de
+modèles. `InstanceQuad` fait 32 octets et porte une position en flottants
+MONDE, alors qu'un quad tient dans sa section — le même raisonnement que la
+pose. C'est là qu'ira la prochaine optimisation de mémoire, pas ailleurs.
+
+### Une garde qui manquait
+
+Un tableau de textures est plafonné à **2 048 couches**, et le pack du serveur
+en cite 2 207. Monter tout le catalogue lève une erreur de VALIDATION wgpu qui
+parle de `depth_or_array_layers` : exacte, et illisible pour qui vient
+d'ouvrir une save. `AtlasGpu` vérifie le plafond et dit quoi faire — ne monter
+que les textures des blocs PRÉSENTS.

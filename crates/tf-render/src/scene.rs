@@ -407,6 +407,21 @@ impl AtlasGpu {
         pyramide: &[(u32, Vec<u8>)],
     ) -> AtlasGpu {
         let couches = couches.max(1);
+        // **Un tableau de textures est plafonné**, et pas très haut : 2 048
+        // couches sur la carte comme sur le pilote logiciel. Le pack du
+        // serveur en cite 2 207 — monter tout le catalogue dépasse la limite
+        // ET paie des tuiles qu'aucun bloc de la scène n'emploie.
+        //
+        // Sans cette garde, wgpu lève une erreur de VALIDATION qui parle de
+        // `depth_or_array_layers` : exact, et illisible pour qui vient de
+        // charger une save. On dit ce qui dépasse et quoi faire.
+        let plafond = app.device.limits().max_texture_array_layers;
+        assert!(
+            couches <= plafond,
+            "atlas de {couches} couches pour un plafond de {plafond} : ne montez \
+             que les textures des blocs PRÉSENTS (`textures_des_etats`), pas \
+             tout le catalogue"
+        );
         let niveaux = pyramide.len().max(1) as u32;
         let texture = app.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("atlas"),
