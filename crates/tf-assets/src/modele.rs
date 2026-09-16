@@ -247,7 +247,7 @@ impl From<SourceError> for ModeleError {
 pub fn resoudre<S: Source + ?Sized>(
     src: &S,
     id: &Id,
-    chemin: &dyn Fn(&Id) -> String,
+    chemins: &dyn Fn(&Id) -> Vec<String>,
 ) -> std::result::Result<ModeleResolu, ModeleError> {
     let mut chaine = Vec::new();
     let mut elements: Option<Vec<Element>> = None;
@@ -259,7 +259,24 @@ pub fn resoudre<S: Source + ?Sized>(
         if chaine.len() >= PROFONDEUR_MAX || chaine.contains(&c) {
             return Err(ModeleError::Boucle(c.to_string()));
         }
-        let octets = src.lire(&chemin(&c))?;
+        // Les chemins du MAILLON COURANT, pas ceux de la racine. Un modèle
+        // vanilla nomme son parent (`block/dirt` → `block/cube_all` →
+        // `block/cube`), et chercher le parent à l'adresse de l'enfant relit
+        // le même fichier — la chaîne se referme sur elle-même et se solde en
+        // `Boucle`. Résultat : ZÉRO modèle résolu sur un vrai `.jar`, alors
+        // que le codex, dont les modèles sont aplatis, ne montrait rien.
+        //
+        // Plusieurs chemins parce qu'un codex range ses modèles dans deux
+        // dossiers ; le premier qui répond l'emporte.
+        let candidats = chemins(&c);
+        let octets = candidats
+            .iter()
+            .find_map(|p| src.lire(p).ok())
+            .ok_or_else(|| {
+                ModeleError::Source(SourceError::Absent(
+                    candidats.first().cloned().unwrap_or_else(|| c.to_string()),
+                ))
+            })?;
         let v: Value =
             serde_json::from_slice(&octets).map_err(|_| ModeleError::Illisible(c.to_string()))?;
         let m = Modele::depuis_json(&v);

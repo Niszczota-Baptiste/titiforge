@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (417 tests aujourd'hui)
+cargo test            # tous les crates (419 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -729,6 +729,16 @@ propres à ce dépôt.
   déplacé soi-même. Corollaire : un empaquetage se vérifie par l'IMAGE — la
   capture d'un vrai build doit être identique octet pour octet, parce qu'une
   troncature d'un bloc ne plante rien, elle déplace un mur.
+- **Une fonction de chemin qui ignore ce qu'on lui demande.** `Catalogue`
+  passait au résolveur de modèles une fonction rendant TOUJOURS le chemin de la
+  racine, quel que soit le maillon de la chaîne. Chercher le parent à l'adresse
+  de l'enfant relit le même fichier : la chaîne se referme sur elle-même et
+  tout se solde en `Boucle`. Résultat, **zéro modèle résolu sur un vrai
+  `.jar`** — où chaque bloc vanilla descend de `block/cube_all` puis
+  `block/cube`. Invisible sur le codex, dont les modèles sont APLATIS, donc
+  invisible sur TOUT ce que le dépôt mesurait : il a fallu monter une fausse
+  installation de launcher pour le voir. Deuxième fois de la séance qu'un
+  format réel sort un défaut qu'aucune fixture ne pouvait montrer.
 - **Un lecteur de ZIP se fie au répertoire CENTRAL, pas aux en-têtes locaux.**
   Un en-tête local peut annoncer des tailles nulles et renvoyer à un
   descripteur placé APRÈS les données, qu'on ne saurait pas trouver. Mais il

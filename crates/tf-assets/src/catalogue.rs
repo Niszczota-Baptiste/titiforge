@@ -236,19 +236,12 @@ impl Catalogue {
             if self.modeles.contains_key(&id) {
                 continue;
             }
-            let mut trouve = None;
-            for chemin in self.disposition.chemins_modele(&id) {
-                let f = move |_: &Id| chemin.clone();
-                if let Ok(m) = modele::resoudre(src, &id, &f) {
-                    trouve = Some(m);
-                    break;
-                }
-            }
-            match trouve {
-                Some(m) => {
+            let d = self.disposition;
+            match modele::resoudre(src, &id, &move |c: &Id| d.chemins_modele(c)) {
+                Ok(m) => {
                     self.modeles.insert(id, m);
                 }
-                None => self.introuvables.push(id),
+                Err(_) => self.introuvables.push(id),
             }
         }
     }

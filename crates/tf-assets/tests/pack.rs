@@ -46,8 +46,8 @@ impl Drop for TempDir {
     }
 }
 
-fn chemin_pack(id: &Id) -> String {
-    id.modele()
+fn chemin_pack(id: &Id) -> Vec<String> {
+    vec![id.modele()]
 }
 
 // ── les identifiants ────────────────────────────────────────────────────────
@@ -677,4 +677,94 @@ fn les_six_parts_du_champignon_couvrent_ses_six_faces() {
         "les six parts doivent viser six faces distinctes, elles en visent {:?}",
         distinctes
     );
+}
+
+/// **Un catalogue en disposition `Pack` doit suivre les chaînes de parents.**
+///
+/// `resoudre` les suit — ses tests le prouvent. Mais `Catalogue` lui passait
+/// une fonction de chemin qui IGNORAIT l'identifiant demandé et rendait
+/// toujours celui de la racine : chercher le parent à l'adresse de l'enfant
+/// relit le même fichier, la chaîne se referme sur elle-même, et tout se solde
+/// en `Boucle`.
+///
+/// Résultat : **zéro modèle résolu sur un vrai `.jar`**, où chaque bloc
+/// vanilla descend de `block/cube_all` puis `block/cube`. Et invisible sur le
+/// codex, dont les modèles sont APLATIS — donc invisible sur tout ce que le
+/// dépôt mesurait. Il a fallu monter une fausse installation pour le voir.
+#[test]
+fn un_catalogue_pack_suit_les_chaines_de_parents() {
+    let d = TempDir::new("chaine-catalogue");
+    d.ecrire(
+        "assets/minecraft/models/block/cube.json",
+        r##"{"elements":[{"from":[0,0,0],"to":[16,16,16],
+             "faces":{"up":{"texture":"#up"},"down":{"texture":"#down"},
+                      "north":{"texture":"#north"},"south":{"texture":"#south"},
+                      "east":{"texture":"#east"},"west":{"texture":"#west"}}}]}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/models/block/cube_all.json",
+        r##"{"parent":"minecraft:block/cube","textures":{
+             "up":"#all","down":"#all","north":"#all",
+             "south":"#all","east":"#all","west":"#all"}}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/models/block/dirt.json",
+        r##"{"parent":"minecraft:block/cube_all","textures":{"all":"minecraft:block/dirt"}}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/blockstates/dirt.json",
+        r##"{"variants":{"":{"model":"minecraft:block/dirt"}}}"##,
+    );
+
+    let src = Dossier::ouvrir(d.path()).unwrap();
+    let mut cat = Catalogue::new(Disposition::Pack);
+    // Le pack se DÉCOUVRE : un `.jar` n'a pas de catalogue global, chaque bloc
+    // a son fichier.
+    assert_eq!(cat.charger_pack(&src).unwrap(), 1);
+    cat.resoudre_modeles(&src);
+    assert!(
+        cat.introuvables.is_empty(),
+        "la chaîne dirt → cube_all → cube doit se résoudre : {:?}",
+        cat.introuvables
+    );
+    assert_eq!(cat.nb_modeles(), 1);
+
+    // Et la géométrie doit venir du GRAND-PARENT, la texture de l'enfant.
+    let m = cat.modele_de("minecraft:dirt").expect("modèle résolu");
+    assert_eq!(m.elements.len(), 1, "le cube vient de `block/cube`");
+    assert_eq!(classer(m), Classement::Cube);
+    let f = &m.elements[0].faces[&Face::PlusY];
+    assert_eq!(
+        f.texture, "minecraft:block/dirt",
+        "`#up` → `#all` → la texture de l'enfant : la chaîne de variables aussi"
+    );
+}
+
+/// Un pack apporte ses propres NAMESPACES, et on ne peut pas les deviner.
+///
+/// Le pack d'un serveur en ajoute un que personne n'a prévu — c'est tout
+/// l'intérêt de lire l'installation plutôt qu'un catalogue préparé.
+#[test]
+fn le_chargement_d_un_pack_decouvre_ses_namespaces() {
+    let d = TempDir::new("namespaces");
+    for (ns, nom) in [("minecraft", "stone"), ("minefield", "marbre_blanc")] {
+        d.ecrire(
+            &format!("assets/{ns}/blockstates/{nom}.json"),
+            &format!(r##"{{"variants":{{"":{{"model":"{ns}:block/{nom}"}}}}}}"##),
+        );
+        d.ecrire(
+            &format!("assets/{ns}/models/block/{nom}.json"),
+            r##"{"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"t"}}}]}"##,
+        );
+    }
+    // Du bruit qui ne doit rien charger : ni un modèle, ni un sous-dossier.
+    d.ecrire("assets/minecraft/models/block/autre.json", "{}");
+    d.ecrire("assets/minecraft/blockstates/sous/dossier.json", "{}");
+
+    let src = Dossier::ouvrir(d.path()).unwrap();
+    let mut cat = Catalogue::new(Disposition::Pack);
+    assert_eq!(cat.charger_pack(&src).unwrap(), 2);
+    let mut noms: Vec<&str> = cat.blocs().map(|(n, _)| n.as_str()).collect();
+    noms.sort();
+    assert_eq!(noms, vec!["minecraft:stone", "minefield:marbre_blanc"]);
 }
