@@ -219,6 +219,17 @@ fn zlib(bytes: &[u8]) -> Vec<u8> {
 
 /// Construit un `.mca` complet.
 pub fn region(t: &Terrain) -> Vec<u8> {
+    region_en(t, 0, 0)
+}
+
+/// La même région, mais POSÉE quelque part dans le monde.
+///
+/// `region` écrit `xPos`/`zPos` comme si la région était `r.0.0` : ses chunks
+/// annoncent (0, 0), (1, 0)… quel que soit le fichier où on la range. C'est
+/// sans conséquence tant qu'un test n'a qu'une région, et c'est un piège dès
+/// qu'il en a deux — le contenu d'un `.mca` porte ses propres coordonnées, et
+/// tout ce qui les lit trouverait quatre régions empilées au même endroit.
+pub fn region_en(t: &Terrain, rx: i32, rz: i32) -> Vec<u8> {
     let mut rng = Rng::new(t.seed);
     let mut locations = vec![0u8; 4096];
     let mut timestamps = vec![0u8; 4096];
@@ -227,7 +238,12 @@ pub fn region(t: &Terrain) -> Vec<u8> {
 
     for cz in 0..t.side {
         for cx in 0..t.side {
-            let payload = zlib(&chunk_nbt(cx as i32, cz as i32, t, &mut rng));
+            let payload = zlib(&chunk_nbt(
+                rx * 32 + cx as i32,
+                rz * 32 + cz as i32,
+                t,
+                &mut rng,
+            ));
             let len = payload.len() + 1;
             let total = 4 + len;
             let sectors = total.div_ceil(SECTOR);

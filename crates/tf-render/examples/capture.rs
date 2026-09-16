@@ -2,7 +2,13 @@
 //!
 //! ```text
 //! cargo run --release -p tf-render --example capture -- ../titisite/public/codex sortie.png
+//! cargo run --release -p tf-render --example capture -- ../titisite/public/codex sortie.png --monde D:\\monde --zone "4,7,10,12"
 //! ```
+//!
+//! Sans `--monde`, c'est la fixture `Build` qui est rendue. Avec, c'est une
+//! VRAIE save — et `--zone` la borne au chunk près, parce qu'il n'existe aucun
+//! état « le monde est chargé » : une région pleine fait déjà 100 millions de
+//! blocs.
 
 use std::time::Instant;
 
@@ -12,42 +18,105 @@ use tf_assets::{Atlas, Catalogue, Dossier};
 use tf_bench::{build, Build};
 use tf_mesh::Grille;
 use tf_render::{Appareil, Arene, AtlasGpu, Camera, Cible, Scene};
+use tf_world::{sections_de, BBox, BlockPos, Dimension, Folder, FsSource};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let racine = args
-        .next()
-        .expect("usage : capture <codex> <sortie.png> [côté]");
+    let racine = args.next().expect(
+        "usage : capture <codex> <sortie.png> [côté] [--monde <dir>] [--zone \"cx0,cz0,cx1,cz1\"]",
+    );
     let sortie = args.next().unwrap_or_else(|| "capture.png".into());
-    let cote: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(1000);
+    let mut cote: u32 = 1000;
+    let mut monde: Option<String> = None;
+    let mut zone: Option<[i32; 4]> = None;
+    while let Some(o) = args.next() {
+        match o.as_str() {
+            "--monde" => monde = args.next(),
+            "--zone" => {
+                let v: Vec<i32> = args
+                    .next()
+                    .unwrap_or_default()
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
+                assert_eq!(v.len(), 4, "--zone attend cx0,cz0,cx1,cz1");
+                zone = Some([
+                    v[0].min(v[2]),
+                    v[1].min(v[3]),
+                    v[0].max(v[2]),
+                    v[1].max(v[3]),
+                ]);
+            }
+            autre => cote = autre.parse().unwrap_or(cote),
+        }
+    }
 
     let src = Dossier::ouvrir(&racine).expect("pack lisible");
     let mut cat = Catalogue::new(Disposition::Codex);
     cat.charger_codex(&src).expect("blockstates");
     cat.resoudre_modeles(&src);
 
-    // ── le build : un morceau, pas une région entière
-    let b = Build {
-        side: 4,
-        sections: 5,
-        ..Build::default()
-    };
-    let octets = build::region(&b);
-    let r = read(&octets, 0, 0).unwrap();
+    // ── la scène : une vraie save, ou la fixture
     let mut grille = Grille::new();
     let mut interner = Interner::new();
-    for cz in 0..b.side as i32 {
-        for cx in 0..b.side as i32 {
-            let brut = r.get(cx, cz).unwrap();
-            let inflated = inflate(&brut.payload, brut.compression).unwrap();
-            let sc = scan(&inflated).unwrap();
-            for s in &sc.sections {
-                if let Some(sec) = decode_section(&inflated, &sc, s, &mut interner).unwrap() {
-                    grille.poser(cx, cz, sec);
+    let quoi = match &monde {
+        Some(dir) => {
+            let src = FsSource::open(dir).expect("monde lisible");
+            // Une emprise BORNÉE, toujours : il n'existe aucun état « le monde
+            // est chargé ». Sans --zone, on prend le premier 2 × 2 chunks, ce
+            // qui est un aperçu et pas un défaut à étendre.
+            let [x0, z0, x1, z1] = zone.unwrap_or([0, 0, 1, 1]);
+            let sel = BBox::new(
+                BlockPos {
+                    x: x0 * 16,
+                    y: -64,
+                    z: z0 * 16,
+                },
+                BlockPos {
+                    x: x1 * 16 + 15,
+                    y: 319,
+                    z: z1 * 16 + 15,
+                },
+            );
+            let bilan = sections_de(
+                &src,
+                &Dimension::Overworld,
+                Folder::Region,
+                &sel,
+                &mut interner,
+                |s| grille.poser(s.chunk.x, s.chunk.z, s.section),
+            );
+            println!(
+                "monde : {dir} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections lues",
+                bilan.chunks, bilan.sections
+            );
+            format!("{} × {} blocs", (x1 - x0 + 1) * 16, (z1 - z0 + 1) * 16)
+        }
+        None => {
+            let b = Build {
+                side: 4,
+                sections: 5,
+                ..Build::default()
+            };
+            let octets = build::region(&b);
+            let r = read(&octets, 0, 0).unwrap();
+            for cz in 0..b.side as i32 {
+                for cx in 0..b.side as i32 {
+                    let brut = r.get(cx, cz).unwrap();
+                    let inflated = inflate(&brut.payload, brut.compression).unwrap();
+                    let sc = scan(&inflated).unwrap();
+                    for s in &sc.sections {
+                        if let Some(sec) = decode_section(&inflated, &sc, s, &mut interner).unwrap()
+                        {
+                            grille.poser(cx, cz, sec);
+                        }
+                    }
                 }
             }
+            format!("fixture · {} × {} blocs", b.side * 16, b.side * 16)
         }
-    }
+    };
 
     // ── l'atlas : SEULEMENT les textures des blocs présents
     //
@@ -156,7 +225,7 @@ fn main() {
     let (pixels, compte) = scene.rendre(&cible, &camera);
     let t_rendu = t.elapsed();
 
-    println!("build            : {} × {} blocs", b.side * 16, b.side * 16);
+    println!("scène            : {quoi}");
     println!(
         "atlas            : {} couches de {}",
         atlas.len(),

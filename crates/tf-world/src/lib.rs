@@ -10,6 +10,7 @@
 pub mod coords;
 pub mod fs_source;
 pub mod journal;
+pub mod lecture;
 pub mod residency;
 pub mod source;
 pub mod staging;
@@ -21,6 +22,7 @@ pub use fs_source::FsSource;
 pub use journal::{
     Chemin, ChunkPatch, Cible, Correction, Entree, Genre, Journal, JournalError, Record,
 };
+pub use lecture::{sections_de, Bilan, SectionLue};
 pub use residency::{Editing, Evicted, Residency, State, Weighed};
 pub use source::{
     Dimension, Folder, LockProbe, MemorySource, Overview, RegionInfo, RegionSink, RegionSource,

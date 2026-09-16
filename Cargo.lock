@@ -1229,6 +1229,7 @@ dependencies = [
  "tf-assets",
  "tf-bench",
  "tf-mesh",
+ "tf-world",
  "wgpu",
 ]
 

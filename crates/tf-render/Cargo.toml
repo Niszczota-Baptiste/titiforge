@@ -17,3 +17,4 @@ bytemuck = { version = "1", features = ["derive"] }
 png = "0.17"
 tf-assets = { path = "../tf-assets" }
 tf-bench = { path = "../tf-bench" }
+tf-world = { path = "../tf-world" }
