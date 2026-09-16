@@ -171,7 +171,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (389 tests aujourd'hui)
+cargo test            # tous les crates (403 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -224,6 +224,9 @@ cargo build --release --target x86_64-pc-windows-gnu -p tf-ops --example editer 
 # une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
 cargo run --release -p tf-render --example adaptateur
 cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 1000
+# le même, sur une VRAIE save — --zone borne au chunk près, parce qu'il
+# n'existe aucun état « le monde est chargé »
+cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 1400 --monde D:\monde --zone "4,7,10,12" 
 TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/public/codex pres.png
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
@@ -251,7 +254,7 @@ crates/
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs : blockstates ✅ · modèles+parents ✅ · textures ✅ · atlas ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
-  tf-render/   wgpu : arène ✅ · rendu hors écran ✅ · indirect, HZB à venir
+  tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
@@ -682,6 +685,34 @@ propres à ce dépôt.
   escaliers, jamais le sac de friandises à 82 cuboïdes. *La distribution de ce
   qui existe n'est pas celle de ce qu'on pose* — même erreur que le premier
   tirage du catalogue, survivant au niveau suivant (`docs/fixtures.md`).
+- **Un `vec3<f32>` s'aligne sur SEIZE octets en WGSL, pas sur quatre.** Une
+  structure Rust en `[f32; 3]` mise en face décale tout ce qui suit d'un champ
+  sur deux, et le shader lit des bornes prises au hasard dans la table voisine.
+  Mesuré : des traînées qui filent à l'infini depuis le build, et **aucune
+  erreur de validation** — les deux côtés sont valides séparément, c'est leur
+  RACCORD qui est faux. Tout ce qui traverse la frontière est en `vec4`, ce qui
+  rend la correspondance LISIBLE au lieu de la faire reposer sur des règles de
+  bourrage ; un test fige les tailles et les décalages.
+- **Une teinte de bloc se rate de deux façons, et il faut éviter les deux.**
+  Les textures teintées du jeu sont GRISES (`grass_block_top.png` vaut 147) :
+  c'est le jeu qui les multiplie par une couleur de biome, ce que la face
+  signale avec `tintindex`. En l'ignorant, tout le sol sort blanchâtre.
+  Ensuite : **(a)** compenser le gris de la tuile pour retrouver la couleur de
+  biome pleine fait monter le canal vert à 1,286, donc écrêter à 1 — une teinte
+  ne peut qu'assombrir — pendant que le rouge passe à 0,987 sans être touché :
+  le vert perd son avance et le sol sort OLIVE, (145, 147, 89). Un écrêtage par
+  canal ne conserve pas une teinte, il la déplace. **(b)** une couleur de biome
+  est en sRGB et le mélange se fait en LINÉAIRE (`Rgba8UnormSrgb` des deux
+  bouts) : passée telle quelle elle délave, (113, 128, 90). Les deux ont du
+  vert en tête ; seul le rapport au ROUGE les sépare. La règle est celle du
+  jeu, `texel × teinte`, la teinte convertie en linéaire — mesuré (82, 109, 48)
+  contre (84, 109, 51) dans le jeu.
+- **Une absence ne se voit pas.** Les blocs-modèles étaient maillés, comptés,
+  affichés dans le rapport — et jamais dessinés. Sur la première capture d'une
+  vraie save, 3 957 blocs manquaient sans que rien ne le dise : une image
+  incomplète reste une image plausible. C'est le pendant visuel de
+  « déclaré, branché, testé — et inatteignable », et ça demande le même
+  remède : un test qui exige la présence, pas un coup d'œil.
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que
