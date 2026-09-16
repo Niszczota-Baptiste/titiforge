@@ -572,3 +572,33 @@ fn seul_un_nom_de_charge_deportee_canonique_est_liste() {
         "seul r.0.0.mca est une région"
     );
 }
+
+/// **Un fichier plus court que l'en-tête Anvil n'est pas une région**, quel que
+/// soit son nom — et c'est différent d'une région VIDE, que le jeu écrit
+/// vraiment.
+///
+/// Le cas est réel : un `.mca` de 2,7 Kio commençant par `bplist00` est un
+/// ALIAS macOS ou iOS, envoyé à la place du fichier quand celui-ci n'est pas
+/// matérialisé localement. L'aperçu ne lit aucun contenu — une save ne s'ouvre
+/// jamais en entier — mais il connaît déjà la taille, donc le dire est gratuit.
+/// Sans ça l'outil annonce « 5 régions · 0,0 Mo » et laisse chercher.
+#[test]
+fn un_fichier_plus_court_que_l_entete_n_est_pas_une_region() {
+    let entete = tf_anvil::HEADER as u64;
+    let cas = [
+        (0u64, true, true),
+        (2_700, true, true),
+        (entete - 1, true, true),
+        // Pile l'en-tête : une région VIDE, et c'est normal.
+        (entete, true, false),
+        (entete + 4_096, false, false),
+    ];
+    for (bytes, vide, tronquee) in cas {
+        let i = RegionInfo {
+            pos: RegionPos::new(0, 0),
+            bytes,
+        };
+        assert_eq!(i.is_empty(), vide, "{bytes} octets : vide ?");
+        assert_eq!(i.est_tronquee(), tronquee, "{bytes} octets : tronquée ?");
+    }
+}

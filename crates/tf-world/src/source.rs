@@ -172,6 +172,21 @@ impl RegionInfo {
     pub fn is_empty(&self) -> bool {
         self.bytes <= tf_anvil::HEADER as u64
     }
+
+    /// Vraie pour un fichier qui n'a même pas la taille de son EN-TÊTE, donc
+    /// qui n'est pas un fichier de région quoi que dise son nom.
+    ///
+    /// La distinction avec `is_empty` compte : une région vide est normale —
+    /// le jeu en écrit — alors qu'un fichier plus court que son en-tête est
+    /// forcément autre chose. Ça arrive vraiment : un `.mca` de 2,7 Kio
+    /// commençant par `bplist00` est un ALIAS iOS, envoyé à la place du
+    /// fichier quand celui-ci n'est pas matérialisé localement. L'aperçu ne lit
+    /// aucun contenu — par conception, une save ne s'ouvre jamais en entier —
+    /// mais il connaît déjà la taille, donc le dire est gratuit. Sans ça
+    /// l'outil annonce « 5 régions · 0,0 Mo » et laisse chercher.
+    pub fn est_tronquee(&self) -> bool {
+        self.bytes < tf_anvil::HEADER as u64
+    }
 }
 
 /// Carte d'une dimension, dressée sans rien décoder.

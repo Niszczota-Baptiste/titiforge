@@ -216,6 +216,15 @@ fn main() {
                 continue;
             }
             let octets: u64 = ov.regions.iter().map(|r| r.bytes).sum();
+            // Un fichier plus court que l'en-tête Anvil n'est pas une région,
+            // quel que soit son nom. On le dit ICI plutôt que de laisser
+            // l'utilisateur lire « 0,0 Mo » et chercher pourquoi.
+            let tronquees: Vec<String> = ov
+                .regions
+                .iter()
+                .filter(|r| r.est_tronquee())
+                .map(|r| format!("r.{}.{}.mca ({} o)", r.pos.x, r.pos.z, r.bytes))
+                .collect();
             let (x0, x1) = (
                 ov.regions.iter().map(|r| r.pos.x).min().unwrap(),
                 ov.regions.iter().map(|r| r.pos.x).max().unwrap(),
@@ -232,6 +241,18 @@ fn main() {
                 x0 * 512,
                 x1 * 512 + 511
             );
+            if !tronquees.is_empty() {
+                println!(
+                    "  ATTENTION : {} fichier(s) plus court(s) que l'en-tête Anvil de 8 Kio, \
+                     donc pas des régions — {}",
+                    tronquees.len(),
+                    tronquees.join(", ")
+                );
+                println!(
+                    "             (un `.mca` qui commence par `bplist00` est un ALIAS macOS \
+                     ou iOS : le fichier n'a pas été envoyé, seulement un raccourci vers lui)"
+                );
+            }
         }
     }
 
