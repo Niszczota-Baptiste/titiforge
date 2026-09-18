@@ -249,6 +249,9 @@ Le profil de test active `overflow-checks` : tout ce dépôt est de
 l'arithmétique d'indices, et un débordement silencieux y produit une corruption
 de save, pas un plantage.
 
+`docs/ETAT.md` est la page d'état : tests, mesures, trous, et **la commande qui
+rejoue chaque chiffre**. C'est là qu'on regarde avant de dire « c'est rapide ».
+
 ## Structure visée
 
 ```
