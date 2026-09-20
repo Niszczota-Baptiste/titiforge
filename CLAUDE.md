@@ -56,9 +56,19 @@ du catalogue — `ExeWorldEdit` le réextrayait par `npm run codex`.
 
 ## Où va ce projet
 
-Pas « un MCEdit moderne » : les fondations d'un **écosystème de création de
-contenu Minecraft**, dont la première mission — et le cœur permanent — est
-d'être le meilleur éditeur de mondes possible. PNJ, quêtes, routes, outils
+Pas « un MCEdit moderne » : **WorldEdit + MCEdit + SketchUp réunis**, et les
+fondations d'un écosystème de création de contenu Minecraft. WorldEdit donne
+les opérations de masse, MCEdit l'éditeur de monde, **SketchUp la
+CONSTRUCTION** — pousser-tirer, inférence, et des composants qu'on modifie une
+fois pour les mettre à jour partout. Les deux premiers transforment ce qui
+existe ; le troisième permet de concevoir, et il n'existe nulle part sur
+Minecraft.
+
+**Conséquence directe sur tout ce qui s'écrit dès maintenant :** un composant
+suppose qu'une opération soit REJOUABLE depuis ses paramètres, pas seulement
+annulable depuis ses octets. Toute opération nouvelle garde donc son `Plan`, et
+pas seulement ses éditions. La couture est détaillée dans `docs/ROADMAP.md` —
+ne pas la poser coûterait une refonte de la pile d'annulation. PNJ, quêtes, routes, outils
 cinématiques, génération procédurale, rendu shaders viendront par **greffons**,
 jamais dans le cœur.
 

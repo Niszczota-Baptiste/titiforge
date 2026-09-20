@@ -3,6 +3,64 @@
 Chaque phase se termine sur une **mesure**, pas sur une impression. Les durées
 supposent un développeur à temps plein.
 
+## Les trois héritages
+
+titiforge n'est pas « un WorldEdit en Rust ». C'est la réunion de trois outils
+qui n'ont jamais été réunis, et chacun apporte une chose que les deux autres
+n'ont pas :
+
+| | Ce qu'il apporte | Où on en est |
+|---|---|---|
+| **WorldEdit** | les opérations de masse : sélectionner, remplir, remplacer, tourner, copier. Le geste « change dix millions de blocs d'un coup » | le socle est là, les opérations de déplacement manquent |
+| **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | le rendu est là, la coque et les formats manquent |
+| **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | à faire — et c'est le plus structurant |
+
+Les deux premiers sont des outils d'ÉDITION : on prend ce qui existe et on le
+transforme. SketchUp est un outil de CONCEPTION : on part de rien et on
+construit. C'est pour ça qu'il est le plus important des trois à ne pas rater —
+un éditeur de blocs de plus n'intéresse personne, un outil où l'on *conçoit*
+un build n'existe pas encore sur Minecraft.
+
+## La couture à poser avant la coque
+
+**Un composant suppose que les blocs soient le RÉSULTAT d'un modèle, pas le
+modèle.** Aujourd'hui le monde EST le document : une opération écrit des
+blocs, le journal sait les défaire. Pour qu'une fenêtre posée quarante fois se
+mette à jour partout quand on modifie sa définition, il faut qu'elle soit
+**réévaluable**.
+
+La bonne nouvelle est que les deux coutures posées tôt sont exactement
+celles-là :
+
+- **les opérations sont des DONNÉES** (`Masque`, `Motif`, `Plan`), pas des
+  appels de fonction — donc elles se rejouent ;
+- **le journal est typé, en ajout seul**, avec un `op: String` opaque et des
+  corrections `Inconnu` qu'il traverse sans comprendre — donc il accueille des
+  entrées qu'il ne sait pas interpréter.
+
+Il manque trois choses, et elles ne sont pas petites :
+
+1. **rejouer une entrée depuis ses PARAMÈTRES**, pas seulement l'annuler depuis
+   ses octets — le journal garde les deux sens en octets, il devra garder aussi
+   le plan ;
+2. **une identité stable** par élément, pour que l'instance n° 37 reste la 37
+   après vingt modifications ;
+3. **l'invalidation par EMPRISE** — modifier l'élément 12 oblige à rejouer
+   12..N sur sa seule portée. L'invariant n° 8 (« une opération ne paie que sa
+   portée, et ses bornes décrivent ce qu'elle a vraiment écrit ») existe
+   précisément pour ça.
+
+Et une décision qui se prend **maintenant**, même si elle s'implémente plus
+tard : **le monde reste souverain.** Les composants sont une COUCHE qui s'y
+estampe, pas un modèle dont le monde serait la sortie. Sans ça on ne peut plus
+poser un bloc à la main, et ce n'est plus un éditeur de monde. Contrepartie
+assumée : une retouche manuelle à l'intérieur d'un composant est perdue à la
+réévaluation — SketchUp a exactement le même défaut, et personne ne s'en
+plaint.
+
+*« Une couture qu'on ne pose pas au départ devient une refonte »* — c'est le
+piège qu'on s'est déjà évité une fois avec le journal.
+
 ## Phase 0 — Socle mesurable · 2–3 semaines
 
 Workspace Cargo, `tf-nbt` (lecteur zéro-copie), `tf-anvil` en lecture **et
@@ -105,46 +163,144 @@ dégradé du premier.
 > **Sortie.** 60 FPS soutenus, rayon 512 blocs, sur un vrai monde Minefield.
 > < 5 appels de dessin (référence : 1 281).
 
-## Phase 3 — Opérations · 3–4 semaines
+## Phase 3 — Les opérations qui manquent · **en cours**
 
-Répartition à trois étages, sélections-prédicat (cuboïde, sphère, cylindre,
-polygone, libre en RLE), masques et motifs WorldEdit, `//set //replace
-//overlay //walls //stack //move`, undo/redo.
+Le socle est là : trois étages, masques booléens complets, motifs pondérés,
+staging, journal. Manque ce qui DÉPLACE.
 
-> **Sortie.** `//set` et `//replace` sur 100 M blocs en < 500 ms, **undo
-> compris**. Le prototype fait déjà 2,78 et 0,26 ms sans undo : toute la marge
-> restante est pour le journal et les sections de bordure.
+| | État |
+|---|---|
+| `//set`, `//replace`, mélange pondéré | ✅ mesurés à l'étage palette |
+| Masques `et` / `ou` / `non` / parmi | ✅ |
+| **Rotation et miroir** | ⬜ — *les règles sont dérivées et vérifiées à 99,3 %, mais `tf-ops` ne dépend même pas de `tf-blocks` : le savoir est là, rien ne l'appelle* |
+| Copier / coller / déplacer / empiler | ⬜ |
+| Formes : sphère, cylindre, pyramide | ⬜ |
+| Lissage, naturalisation, murs, creuser | ⬜ |
+| **Les coffres suivent les blocs** | ⬜ — un coffre déplacé perd son contenu ; `ExeWorldEdit` a payé ce piège, il n'est pas encore repayé ici |
+| Biomes (`//setbiome`, et la lecture pour la teinte) | ⬜ |
 
-## Phase 4 — Occlusion et LOD · 3–4 semaines
+C'est la phase la moins chère du lot : la partie difficile — savoir qu'un
+escalier `shape=outer` tourné devient tel autre état — est déjà faite et
+mesurée.
 
-HZB deux passes reprojetée depuis l'image précédente, mips d'octree par région
-construits par vote majoritaire sur la palette et mis en cache, éviction
-pilotée par le budget.
+> **Sortie.** Un build copié, tourné d'un quart de tour, recollé ailleurs :
+> les escaliers regardent au bon endroit, les coffres ont gardé leur contenu,
+> et un seul `Ctrl+Z` défait l'ensemble.
 
-> **Sortie.** 60 FPS à un rayon de 4 000 blocs. Sous terre, < 3 % des sections
-> résidentes effectivement dessinées.
+## Phase 4 — La coque, et le geste SketchUp · le tournant
 
-## Phase 5 — Versions et mods · 3–4 semaines
+`tf-app` n'existe pas. C'est ce qui transforme un moteur mesuré en outil.
 
-`ChunkFormat` par palier de `DataVersion` (détecté **par chunk**, jamais par
-monde), lecture de `mods/*.jar`, **règles** de rotation dérivées des propriétés
-plutôt qu'une table écrite à la main, blocs non reconnus signalés et laissés
-intacts.
+**Deux règles d'architecture, et elles ne se retrofitent pas :**
 
-> **Sortie.** Un monde Fabric et un monde NeoForge ouverts et affichés ; un
-> escalier moddé pivoté correctement ; round-trip lossless intact sur les deux.
+- **le moteur vit dans un fil à part, l'interface ne bloque jamais.** Une
+  opération de trois secondes ne doit pas figer la fenêtre ;
+- **les formulaires se GÉNÈRENT depuis les descripteurs d'opérations.**
+  `ExeWorldEdit` l'a prouvé : aucun formulaire n'y est écrit à la main, et
+  ajouter une opération n'y demande aucune ligne d'interface. Un test y relie
+  le descripteur du moteur à la palette d'outils.
 
-## Phase 6 — Formats et outils · 3 semaines
+Le socle de fenêtre : `winit` + `egui`, caméra, sélection au cuboïde avec
+poignées, palette de blocs avec icônes, historique visible et cliquable.
 
-`.mca`, `.schem` (Sponge v2 et v3), `.schematic` (avec la table d'aplatissement
-1.12 → 1.13), `.litematic` (v4–v6, packing **à chevauchement**), pinceaux,
-copier/coller avec block entities.
+**Et c'est ici qu'arrive le premier tiers de SketchUp**, parce que c'est un
+geste et pas une structure de données :
+
+| | Pourquoi maintenant |
+|---|---|
+| **Pousser-tirer** une face de la sélection | un geste + un remplissage. La sélection existe déjà, l'opération de remplissage aussi |
+| **L'inférence** — accrochage aux coins, arêtes, milieux, axes, plans et alignements de ce qui est déjà bâti | c'est ce qui FAIT SketchUp. Pure géométrie, zéro impact moteur : ça vit entièrement dans la coque |
+| **Saisie chiffrée** pendant le geste — taper `12` en tirant | trivial une fois le geste là, et c'est la moitié de la précision de SketchUp |
+
+L'inférence est le morceau le plus difficile à rendre JUSTE de toute la
+phase — pas à écrire, à régler. Sur une grille de blocs elle est plus simple
+qu'en CAO ; ce qui compte est d'accrocher à ce qui est *bâti* (le nu d'un mur,
+l'axe d'une colonne, la hauteur de la fenêtre d'à côté), pas seulement à la
+grille.
+
+> **Sortie.** Ouvrir une save, voler dedans, tirer un mur de vingt blocs à la
+> souris en accrochant au nu du bâtiment d'en face, annuler. Sans écrire une
+> seule commande.
+
+## Phase 5 — Le streaming piloté par la caméra
+
+La fenêtre de résidence existe et est testée ; rien ne la pilote. Tant qu'on
+affiche une zone choisie à la main, ça ne se voit pas — dès qu'on vole dans un
+monde de 800 régions, c'est bloquant.
+
+Avec ça viennent le remaillage INCRÉMENTAL (une opération ne remaille que ses
+bornes, plus une case de débordement) et l'arène GPU par tranches, déjà
+préparée.
+
+> **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
+> aucune pause > 8 ms sur le fil principal.
+
+## Phase 6 — Formats d'échange
+
+`tf-formats` : `.schem` (Sponge v2 et v3), `.schematic` (avec la table
+d'aplatissement 1.12 → 1.13), `.litematic` (v4–v6, packing **à
+chevauchement**), `.nbt` de structure.
+
+C'est ce qui manque pour la parité MCEdit, et c'est ce qui permet d'échanger
+un build avec quelqu'un qui n'a pas titiforge.
 
 > **Sortie.** Round-trip octet pour octet sur les quatre formats, vérifié
 > contre un fichier produit par l'outil d'origine.
 
+## Phase 7 — SketchUp : le document · **le morceau qui change tout**
+
+Le deuxième tiers de SketchUp, et le seul qui touche à l'architecture. Voir
+« La couture à poser avant la coque », en tête de ce document.
+
+| | |
+|---|---|
+| **Groupes** | une sélection nommée qu'on déplace et duplique d'un bloc |
+| **Composants** | une définition + N instances. Modifier la définition met à jour les N |
+| **Réévaluation** | une entrée de journal qu'on rejoue depuis ses paramètres, pas depuis ses octets |
+| **Identité stable** | l'instance n° 37 reste la 37 |
+| **Invalidation par emprise** | rejouer 12..N sur la seule portée de 12 |
+| **Calques** | organiser, masquer, verrouiller |
+
+Une maison faite de quatre composants « fenêtre », deux « porte » et un
+« toit », où changer la fenêtre change les quatre. C'est ce qu'aucun outil
+Minecraft ne sait faire, et c'est la raison d'être du projet.
+
+> **Sortie.** Poser vingt fois un composant, en modifier la définition, voir
+> les vingt se mettre à jour — et que `Ctrl+Z` défasse la modification, pas
+> les vingt poses.
+
+## Phase 8 — Finitions du rendu
+
+Ce qui a été laissé de côté sciemment, chiffré : les **fluides** (4,5 % des
+blocs posés de Mosslorn, dont 6,2 M d'eau, aujourd'hui invisibles), les
+**biomes** décodés pour la vraie teinte, l'**occlusion ambiante**, `uvlock`,
+le **LOD** par octree de région, et l'occlusion HZB.
+
+> **Sortie.** 60 FPS à un rayon de 4 000 blocs. Sous terre, < 3 % des sections
+> résidentes effectivement dessinées.
+
+## Phase 9 — Versions, mods, greffons
+
+`ChunkFormat` par palier de `DataVersion` (détecté **par chunk**, jamais par
+monde — déjà le cas), lecture de `mods/*.jar`, et la frontière de greffon en
+WASM (`docs/VISION.md`, § 6).
+
 ---
 
-**MVP = phases 0 à 3**, environ 3 à 4 mois. Ouvrir un vrai monde, y voler à
-60 FPS, sélectionner au cuboïde, `//set`, `//replace`, annuler, sauvegarder
-sans perte. C'est le point où l'outil devient utilisable sur Minefield.
+## L'ordre, et pourquoi
+
+**Phases 0 à 2 : faites.** Le moteur lit, écrit sans perte, opère à trois
+étages et dessine un vrai build en deux appels. Vérifié sur deux vraies saves,
+606 millions de blocs réécrits puis annulés au bit près.
+
+**La phase 3 est presque gratuite** vu ce qui est déjà dérivé, et elle complète
+le socle WorldEdit.
+
+**La phase 4 est le tournant** : sans coque, rien n'est utilisable ni jugeable,
+et c'est là que titiforge commence à ressembler à SketchUp plutôt qu'à une
+ligne de commande.
+
+**La phase 7 est la raison d'être.** Elle peut attendre, mais sa couture non :
+elle est décidée en tête de ce document, et les phases 3 et 4 doivent être
+écrites en la respectant — c'est-à-dire en gardant les paramètres des
+opérations, pas seulement leurs octets.

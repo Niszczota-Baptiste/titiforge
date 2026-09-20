@@ -27,9 +27,26 @@ Ce que ça impose, et qu'on ne découvrira pas en testant sur du terrain vanilla
 
 ## L'objectif
 
-Pas « un MCEdit moderne ». Les **fondations d'un écosystème de création de
-contenu Minecraft**, dont la première mission — et le cœur permanent — est
-d'être le meilleur éditeur de mondes possible.
+Pas « un MCEdit moderne ». **WorldEdit + MCEdit + SketchUp**, réunis — les
+fondations d'un écosystème de création de contenu Minecraft, dont la première
+mission et le cœur permanent est d'être le meilleur éditeur de mondes
+possible.
+
+Les trois apportent des choses différentes, et la troisième est celle qui
+n'existe nulle part :
+
+- **WorldEdit** donne les opérations de masse — changer dix millions de blocs
+  d'un coup ;
+- **MCEdit** donne l'éditeur de monde — ouvrir une save, y voler, voir ce
+  qu'on édite ;
+- **SketchUp** donne la CONSTRUCTION — pousser-tirer une face, l'inférence qui
+  accroche au bon endroit, et des **composants** qu'on modifie une fois pour
+  les mettre à jour partout.
+
+Les deux premiers TRANSFORMENT ce qui existe ; le troisième permet de
+CONCEVOIR. Un éditeur de blocs de plus n'intéresse personne ; un outil où l'on
+conçoit un build n'existe pas encore sur Minecraft. Voir `docs/ROADMAP.md`,
+« Les trois héritages » et « La couture à poser avant la coque ».
 
 Ordre de priorité, sans ambiguïté :
 
