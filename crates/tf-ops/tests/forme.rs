@@ -56,7 +56,28 @@ fn formes() -> Vec<(&'static str, Forme)> {
             "pyramide creuse",
             Forme::pyramide([40, -50, 40], 12.0, 13.0, false).creuse(2.0),
         ),
+        ("pavé", Forme::pave(pave((10, -40, 10), (53, -9, 61)))),
+        ("murs", Forme::murs(pave((10, -40, 10), (53, -9, 61)), 2.0)),
+        (
+            "faces",
+            Forme::faces(pave((10, -40, 10), (53, -9, 61)), 1.0),
+        ),
     ]
+}
+
+fn pave(a: (i32, i32, i32), b: (i32, i32, i32)) -> BBox {
+    BBox::new(
+        BlockPos {
+            x: a.0,
+            y: a.1,
+            z: a.2,
+        },
+        BlockPos {
+            x: b.0,
+            y: b.1,
+            z: b.2,
+        },
+    )
 }
 
 /// Les cases d'une boîte. Écrite ici et pas sur `BBox` : tout ce dépôt
@@ -392,4 +413,59 @@ fn le_coeur_d_une_grosse_sphere_garde_l_etage_palette() {
         "aucune section écartée : {:?}",
         r.etages
     );
+}
+
+// ── murs et faces ───────────────────────────────────────────────────────────
+
+/// **Un mur n'a pas de toit**, et c'est le sens qu'on veut : on entoure une
+/// cour, on ne l'enferme pas. `faces` ferme les six côtés.
+#[test]
+fn un_mur_est_ouvert_en_haut_et_en_bas_les_faces_non() {
+    let b = pave((0, 0, 0), (9, 9, 9));
+    let murs = Forme::murs(b, 1.0);
+    let faces = Forme::faces(b, 1.0);
+
+    // Le centre du plafond : dans les faces, pas dans les murs.
+    assert!(!murs.contient(5, 9, 5), "un mur n'a pas de toit");
+    assert!(faces.contient(5, 9, 5), "les faces en ont un");
+    assert!(!murs.contient(5, 0, 5), "ni de plancher");
+    assert!(faces.contient(5, 0, 5));
+
+    // La paroi verticale, elle, est dans les deux.
+    for f in [&murs, &faces] {
+        assert!(f.contient(0, 5, 5));
+        assert!(f.contient(9, 5, 5));
+        assert!(f.contient(5, 5, 0));
+        assert!(f.contient(5, 5, 9));
+        assert!(!f.contient(5, 5, 5), "le cœur est vide");
+    }
+}
+
+#[test]
+fn le_compte_d_un_mur_est_celui_qu_on_calcule_a_la_main() {
+    // Une boîte 10 × 10 × 10, paroi d'un bloc : le pourtour fait
+    // 10² − 8² = 36 cases par tranche, sur les dix tranches.
+    let murs = Forme::murs(pave((0, 0, 0), (9, 9, 9)), 1.0);
+    let n = cases(&murs.bornes().unwrap())
+        .filter(|p| murs.contient(p.x, p.y, p.z))
+        .count();
+    assert_eq!(n, 36 * 10);
+
+    // Et les six faces : le cube entier moins son intérieur 8³.
+    let faces = Forme::faces(pave((0, 0, 0), (9, 9, 9)), 1.0);
+    let n = cases(&faces.bornes().unwrap())
+        .filter(|p| faces.contient(p.x, p.y, p.z))
+        .count();
+    assert_eq!(n, 1000 - 512);
+}
+
+/// Une épaisseur plus grande que la boîte ne doit pas rendre un creux
+/// INVERSÉ — `min > max` — qui contiendrait tout, ou rien, selon le sens de
+/// la comparaison.
+#[test]
+fn une_epaisseur_plus_grande_que_la_boite_donne_un_bloc_plein() {
+    let b = pave((0, 0, 0), (4, 4, 4));
+    let murs = Forme::murs(b, 10.0);
+    let n = cases(&b).filter(|p| murs.contient(p.x, p.y, p.z)).count();
+    assert_eq!(n, 125, "tout est paroi, rien n'est creux");
 }

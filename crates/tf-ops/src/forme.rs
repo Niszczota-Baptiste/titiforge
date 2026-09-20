@@ -74,6 +74,13 @@ pub enum Forme {
         hauteur: f64,
         renversee: bool,
     },
+    /// Un pavé droit, bornes INCLUSES.
+    ///
+    /// Utile seul (restreindre une opération à un sous-volume), mais surtout
+    /// comme moitié d'une coque : `//walls` et `//faces` ne sont rien
+    /// d'autre qu'un pavé moins un pavé plus petit. Les écrire comme des
+    /// opérations à part aurait donné deux calculs de plus à tenir justes.
+    Pave { min: [i32; 3], max: [i32; 3] },
     /// Ce qui est dans l'une sans être dans l'autre : une coque.
     ///
     /// Écrit comme une composition plutôt qu'un drapeau `creux` sur chaque
@@ -119,6 +126,42 @@ impl Forme {
         }
     }
 
+    pub fn pave(b: BBox) -> Forme {
+        Forme::Pave {
+            min: [b.min.x, b.min.y, b.min.z],
+            max: [b.max.x, b.max.y, b.max.z],
+        }
+    }
+
+    /// Les quatre parois VERTICALES d'une boîte, sans plancher ni plafond.
+    ///
+    /// C'est `//walls`, et c'est le sens qu'on veut : on entoure une cour,
+    /// on ne l'enferme pas. Les six faces se demandent avec `faces`.
+    pub fn murs(b: BBox, epaisseur: f64) -> Forme {
+        let e = epaisseur.max(0.0) as i32;
+        Forme::Coque {
+            dehors: Box::new(Forme::pave(b)),
+            // Le creux garde TOUTE la hauteur : c'est ce qui fait qu'un mur
+            // n'a pas de toit.
+            dedans: Box::new(Forme::Pave {
+                min: [b.min.x + e, b.min.y, b.min.z + e],
+                max: [b.max.x - e, b.max.y, b.max.z - e],
+            }),
+        }
+    }
+
+    /// Les six faces d'une boîte — `//faces`.
+    pub fn faces(b: BBox, epaisseur: f64) -> Forme {
+        let e = epaisseur.max(0.0) as i32;
+        Forme::Coque {
+            dehors: Box::new(Forme::pave(b)),
+            dedans: Box::new(Forme::Pave {
+                min: [b.min.x + e, b.min.y + e, b.min.z + e],
+                max: [b.max.x - e, b.max.y - e, b.max.z - e],
+            }),
+        }
+    }
+
     /// La même, creusée d'une coque de `epaisseur` blocs.
     ///
     /// L'intérieur est la MÊME forme, rétrécie : c'est ce qui fait qu'une
@@ -138,6 +181,10 @@ impl Forme {
         let moins = |v: f64| (v - e).max(0.0);
         Some(match self {
             Forme::Boite | Forme::Coque { .. } => return None,
+            Forme::Pave { min, max } => Forme::Pave {
+                min: [min[0] + e as i32, min[1] + e as i32, min[2] + e as i32],
+                max: [max[0] - e as i32, max[1] - e as i32, max[2] - e as i32],
+            },
             Forme::Ellipsoide { centre, rayons } => Forme::Ellipsoide {
                 centre: *centre,
                 rayons: [moins(rayons[0]), moins(rayons[1]), moins(rayons[2])],
@@ -228,6 +275,18 @@ impl Forme {
                     },
                 )
             }
+            Forme::Pave { min, max } => BBox::new(
+                BlockPos {
+                    x: min[0],
+                    y: min[1],
+                    z: min[2],
+                },
+                BlockPos {
+                    x: max[0],
+                    y: max[1],
+                    z: max[2],
+                },
+            ),
             // La coque tient dans son extérieur.
             Forme::Coque { dehors, .. } => return dehors.bornes(),
         })
@@ -277,6 +336,14 @@ impl Forme {
                 }
                 let c = demi_cote_a(*demi_cote, *hauteur, dy);
                 ((x - base[0]) as f64).abs() <= c && ((z - base[2]) as f64).abs() <= c
+            }
+            Forme::Pave { min, max } => {
+                x >= min[0]
+                    && x <= max[0]
+                    && y >= min[1]
+                    && y <= max[1]
+                    && z >= min[2]
+                    && z <= max[2]
             }
             Forme::Coque { dehors, dedans } => {
                 dehors.contient(x, y, z) && !dedans.contient(x, y, z)
@@ -364,6 +431,13 @@ impl Forme {
                     return Couverture::Dedans;
                 }
                 Couverture::Partielle
+            }
+            Forme::Pave { min, max } => {
+                let mut r = Couverture::Dedans;
+                for i in 0..3 {
+                    r = croiser(r, intervalle(min[i] as f64, max[i] as f64, lo[i], hi[i]));
+                }
+                r
             }
             Forme::Coque { dehors, dedans } => {
                 match (

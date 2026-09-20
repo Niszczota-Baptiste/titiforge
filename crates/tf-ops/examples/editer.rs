@@ -67,6 +67,10 @@ enum Volume {
     Sphere(f64),
     Cylindre(f64, f64),
     Pyramide(f64, f64),
+    /// Les quatre parois verticales de la sélection — `//walls`.
+    Murs(f64),
+    /// Ses six faces — `//faces`.
+    Faces(f64),
 }
 
 enum Op {
@@ -115,6 +119,8 @@ fn usage() -> ! {
   --cylindre <rayon> <haut>  //cyl, axe vertical
   --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
   --creux <épaisseur>        creuse la forme (//hsphere, //hcyl…)
+  --murs <épaisseur>         //walls : les 4 parois VERTICALES de la sélection
+  --faces <épaisseur>        //faces : ses 6 faces, plancher et plafond compris
   Les formes sont CENTRÉES sur la sélection, et l'opération ne paie que la
   forme : une sphère de rayon 10 dans une sélection d'un million de blocs
   coûte une sphère de rayon 10.
@@ -268,6 +274,8 @@ fn lire_args() -> Args {
             "--cylindre" => args.volume = Volume::Cylindre(nombre(a.next()), nombre(a.next())),
             "--pyramide" => args.volume = Volume::Pyramide(nombre(a.next()), nombre(a.next())),
             "--creux" => args.creux = Some(nombre(a.next())),
+            "--murs" => args.volume = Volume::Murs(nombre(a.next())),
+            "--faces" => args.volume = Volume::Faces(nombre(a.next())),
             "--renversee" => args.renversee = true,
             "--tourner" => {
                 transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
@@ -519,6 +527,10 @@ fn main() {
             h,
             args.renversee,
         ),
+        // Les murs et les faces se prennent sur la SÉLECTION, pas sur un
+        // centre et un rayon : c'est une enveloppe, pas un volume posé.
+        Volume::Murs(e) => Forme::murs(sel, e),
+        Volume::Faces(e) => Forme::faces(sel, e),
     };
     let forme = match args.creux {
         Some(e) => forme.creuse(e),
@@ -527,10 +539,14 @@ fn main() {
     let plan = plan.dans(forme);
     if let Some(b) = plan.forme.bornes() {
         let (fx, fy, fz) = b.size();
-        println!(
-            "forme : {fx} × {fy} × {fz} · centrée sur {},{},{}",
-            centre[0], centre[1], centre[2]
-        );
+        // Une enveloppe n'est pas « centrée » : elle est PRISE sur la
+        // sélection. Le dire autrement laisserait croire qu'on peut la
+        // déplacer avec un centre.
+        let ou = match args.volume {
+            Volume::Murs(_) | Volume::Faces(_) => "prise sur la sélection".to_string(),
+            _ => format!("centrée sur {},{},{}", centre[0], centre[1], centre[2]),
+        };
+        println!("forme : {fx} × {fy} × {fz} · {ou}");
     }
 
     // La copie de travail vit à côté, dans un dossier temporaire. La save
