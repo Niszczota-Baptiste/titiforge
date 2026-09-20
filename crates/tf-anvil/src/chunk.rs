@@ -17,6 +17,7 @@
 
 use tf_nbt::{tag, Cur, Span, Trunc, R};
 
+use crate::biomes::{bits_biome, Biomes, VOL_BIOME};
 use crate::entites::{balayer_liste, champ_entites, nom_du_champ, Entite, ListeEntites};
 use crate::format::{detect_packing, packing_de_repli, Layout, Packing};
 use crate::section::{bits_for, Section, MAX_PALETTE, VOL};
@@ -94,6 +95,22 @@ pub enum SectionSpans {
     },
 }
 
+/// Où vivent les octets de biome d'une section (1.18+ seulement).
+///
+/// Même forme que `SectionSpans::Flat`, et pour la même raison : `palette` et
+/// `data` sont relevés SÉPARÉMENT, et `data` est le CHAMP entier pour qu'une
+/// section qui redevient monobiome puisse le faire DISPARAÎTRE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BiomeSpans {
+    pub palette: Span,
+    pub data: Option<Span>,
+    pub insert_at: usize,
+    /// Longueur de la palette, relevée au vol.
+    pub palette_len: usize,
+    /// Longueur du tableau d'indices. Zéro pour une section monobiome.
+    pub data_len: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScannedSection {
     pub y: i8,
@@ -106,6 +123,10 @@ pub struct ScannedSection {
     /// Nombre de longs d'indices, relevé au vol. Zéro pour une section
     /// homogène.
     pub data_len: usize,
+    /// Les biomes, quand la section en porte. `None` pour 1.13–1.17, où ils
+    /// vivent ailleurs et autrement — et où on préfère ne pas y toucher
+    /// plutôt que de deviner.
+    pub biomes: Option<BiomeSpans>,
 }
 
 /// Balaye un chunk inflaté. Ne descend que dans les champs de blocs ; tout le
@@ -239,9 +260,14 @@ fn scan_flat_section(c: &mut Cur) -> R<ScannedSection> {
     let mut spans = None;
     let mut palette_len = 0;
     let mut data_len = 0;
+    let mut biomes = None;
     while let Some((t, key)) = c.next_field()? {
         match (t, key) {
             (tag::BYTE, "Y") => y = c.i8()?,
+            (tag::COMPOUND, "biomes") => {
+                let bloc = c.span_of_payload(t)?;
+                biomes = scan_biomes(c.buf(), bloc.start)?;
+            }
             (tag::COMPOUND, "block_states") => {
                 let bloc = c.span_of_payload(t)?;
                 // Relecture des deux SEULS en-têtes, sans rien matérialiser :
@@ -298,7 +324,57 @@ fn scan_flat_section(c: &mut Cur) -> R<ScannedSection> {
         spans,
         palette_len,
         data_len,
+        biomes,
     })
+}
+
+/// Relit les deux en-têtes d'un compound `biomes`, sans rien matérialiser.
+///
+/// La palette est une liste de CHAÎNES : lui appliquer le lecteur d'entrées
+/// de bloc chercherait un champ `Name` qui n'existe pas, et rendrait une
+/// palette vide sans erreur.
+fn scan_biomes(buf: &[u8], debut: usize) -> R<Option<BiomeSpans>> {
+    let mut p = Cur::at(buf, debut);
+    let mut palette = None;
+    let mut data = None;
+    let mut palette_len = 0;
+    let mut data_len = 0;
+    let fin;
+    loop {
+        let avant = p.pos();
+        let Some((ft, fk)) = p.next_field()? else {
+            fin = avant;
+            break;
+        };
+        match (ft, fk) {
+            (tag::LIST, "palette") => {
+                let start = p.pos();
+                let (et, n) = p.list_header()?;
+                palette_len = n;
+                p.skip_list_body(et, n)?;
+                palette = Some(Span {
+                    start,
+                    end: p.pos(),
+                });
+            }
+            (tag::LONG_ARRAY, "data") => {
+                data_len = p.array_len()?;
+                p.skip(data_len * 8)?;
+                data = Some(Span {
+                    start: avant,
+                    end: p.pos(),
+                });
+            }
+            _ => p.skip_payload(ft)?,
+        }
+    }
+    Ok(palette.map(|palette| BiomeSpans {
+        palette,
+        data,
+        insert_at: fin,
+        palette_len,
+        data_len,
+    }))
 }
 
 fn scan_legacy_section(c: &mut Cur) -> R<ScannedSection> {
@@ -349,6 +425,11 @@ fn scan_legacy_section(c: &mut Cur) -> R<ScannedSection> {
         }),
         palette_len,
         data_len,
+        // 1.13–1.17 range ses biomes sous `Level`, et pas du tout de la même
+        // façon (un tableau d'entiers, sans palette). On ne les lit pas
+        // plutôt que de les deviner : les écrire de travers remplacerait la
+        // carte des biomes d'un monde entier.
+        biomes: None,
     })
 }
 
@@ -421,6 +502,109 @@ pub fn decode_section(
         data: data.into_boxed_slice(),
         packing,
     }))
+}
+
+/// Matérialise les biomes d'une section repérée.
+///
+/// `None` quand la section n'en porte pas — 1.13–1.17, ou une section
+/// d'éclairage. Ce n'est pas « pas de biome » : c'est « on ne sait pas », et
+/// l'appelant ne doit pas en inventer.
+pub fn decode_biomes(
+    inflated: &[u8],
+    scanned: &ScannedSection,
+    interner: &mut Interner,
+) -> R<Option<Biomes>> {
+    let Some(b) = scanned.biomes else {
+        return Ok(None);
+    };
+    let mut c = Cur::at(inflated, b.palette.start);
+    let (et, n) = c.list_header()?;
+    if n == 0 {
+        return Ok(None);
+    }
+    // Une palette de biomes est une liste de CHAÎNES. Un autre type est un
+    // format qu'on ne comprend pas : on n'y touche pas.
+    if et != tag::STRING {
+        return Ok(None);
+    }
+    let mut palette = Vec::with_capacity(n.min(64));
+    for _ in 0..n {
+        palette.push(interner.intern(c.str()?));
+    }
+
+    let data = match b.data {
+        Some(f) if palette.len() > 1 => {
+            let mut c = Cur::at(inflated, f.start);
+            c.next_field()?.ok_or(Trunc)?;
+            c.long_array()?
+        }
+        _ => Vec::new(),
+    };
+    // La longueur ATTENDUE se déduit de la palette. Une autre longueur est un
+    // tableau qu'on ne sait pas relire — et deviner écrirait la carte des
+    // biomes de travers sur toute une save.
+    let bits = bits_biome(palette.len());
+    let attendu =
+        crate::format::longs_for(VOL_BIOME, bits as usize, crate::format::Packing::NoStraddle);
+    let data = if palette.len() <= 1 || data.is_empty() {
+        Vec::new()
+    } else if data.len() == attendu {
+        data
+    } else {
+        return Err(Trunc);
+    };
+
+    Ok(Some(Biomes {
+        palette,
+        bits,
+        data: data.into_boxed_slice(),
+    }))
+}
+
+/// Les éditions qui réécrivent les biomes d'une section.
+///
+/// Même discipline que `section_edits` : ce qui ne change pas ne produit
+/// aucune édition, et la comparaison porte sur les OCTETS.
+pub fn biome_edits(
+    inflated: &[u8],
+    biomes: &Biomes,
+    scanned: &ScannedSection,
+    interner: &Interner,
+) -> Result<Vec<Edit>, EncodeError> {
+    let Some(b) = scanned.biomes else {
+        return Err(EncodeError::NoBlockFields);
+    };
+    let noms = biomes
+        .noms(interner)
+        .ok_or_else(|| EncodeError::UnknownState(biomes.palette[0]))?;
+
+    let mut out = vec![Edit {
+        span: b.palette,
+        bytes: tf_nbt::string_list_payload(&noms),
+    }];
+    let voulu = if biomes.palette.len() > 1 && !biomes.data.is_empty() {
+        Some(tf_nbt::named_long_array("data", &biomes.data))
+    } else {
+        None
+    };
+    match (b.data, voulu) {
+        (Some(span), Some(bytes)) => out.push(Edit { span, bytes }),
+        // La section redevient monobiome : le champ DISPARAÎT.
+        (Some(span), None) => out.push(Edit {
+            span,
+            bytes: Vec::new(),
+        }),
+        (None, Some(bytes)) => out.push(Edit {
+            span: Span {
+                start: b.insert_at,
+                end: b.insert_at,
+            },
+            bytes,
+        }),
+        (None, None) => {}
+    }
+    out.retain_mut(|e| trim_edit(inflated, e));
+    Ok(out)
 }
 
 /// Lit une liste de compounds de palette, le curseur étant sur son EN-TÊTE.

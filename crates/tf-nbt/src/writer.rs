@@ -157,6 +157,42 @@ pub fn palette_list_payload(palette: &[PaletteEntryRef<'_>]) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// Charge d'une liste de CHAÎNES, sans son nom.
+///
+/// C'est la palette des biomes : un biome n'a pas d'état, donc pas de
+/// compound `{ Name, Properties }` — juste un nom. Réutiliser l'écrivain de
+/// palette de blocs produirait des compounds que le jeu ne sait pas relire à
+/// cet endroit.
+pub fn string_list_payload(noms: &[&str]) -> Vec<u8> {
+    let poids: usize = noms.iter().map(|n| n.len() + 2).sum();
+    let mut w = Writer::with_capacity(8 + poids);
+    w.list_header(tag::STRING, noms.len());
+    for n in noms {
+        w.raw_str(n);
+    }
+    w.into_bytes()
+}
+
+/// Compose la CHARGE d'un compound `biomes`, palette et indices.
+///
+/// Palette d'une entrée → **pas de `data`**, exactement comme pour les blocs :
+/// c'est ce que le jeu écrit, et en laisser un de la mauvaise longueur casse
+/// le chargement du chunk.
+pub fn biomes_payload(noms: &[&str], data: &[u64]) -> Vec<u8> {
+    let mut w = Writer::with_capacity(32 + noms.len() * 24 + data.len() * 8);
+    w.field(tag::LIST, "palette");
+    w.list_header(tag::STRING, noms.len());
+    for n in noms {
+        w.raw_str(n);
+    }
+    if noms.len() > 1 && !data.is_empty() {
+        w.field(tag::LONG_ARRAY, "data");
+        w.long_array_payload(data);
+    }
+    w.end();
+    w.into_bytes()
+}
+
 /// Charge d'un `TAG_Long_Array`, sans son nom.
 pub fn long_array_payload(data: &[u64]) -> Vec<u8> {
     let mut w = Writer::with_capacity(4 + data.len() * 8);

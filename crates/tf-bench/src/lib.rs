@@ -95,6 +95,11 @@ pub struct Terrain {
     /// le demande pas. Il suit les CASES, jamais le `id` de l'entrée : une
     /// entité de mod que personne ne sait nommer se déplace comme les autres.
     pub coffres: u32,
+    /// Écrire les BIOMES des sections. **Faux par défaut**, même raison que
+    /// `coffres` : toutes les mesures publiées ont été prises sans, et
+    /// déplacer la fixture par défaut déplacerait la référence de tout ce qui
+    /// suit. Un vrai chunk 1.18+ en porte toujours.
+    pub biomes: bool,
 }
 
 impl Default for Terrain {
@@ -105,6 +110,7 @@ impl Default for Terrain {
             seed: 7,
             packing: Packing::NoStraddle,
             coffres: 0,
+            biomes: false,
         }
     }
 }
@@ -130,6 +136,29 @@ impl Terrain {
         Terrain {
             coffres,
             ..Terrain::petite()
+        }
+    }
+
+    /// La même, avec les biomes des sections.
+    pub fn avec_biomes() -> Self {
+        Terrain {
+            biomes: true,
+            ..Terrain::petite()
+        }
+    }
+
+    /// Les biomes d'une section, dans l'ordre de la palette. Une section sur
+    /// trois est MONOBIOME — le cas sans `data`, celui qu'on oublie.
+    pub fn biomes_de(sy: i8) -> &'static [&'static str] {
+        if sy % 3 == 0 {
+            &["minecraft:plains"]
+        } else {
+            &[
+                "minecraft:plains",
+                "minecraft:forest",
+                "minecraft:river",
+                "minecraft:desert",
+            ]
         }
     }
 
@@ -250,6 +279,20 @@ fn chunk_nbt(cx: i32, cz: i32, t: &Terrain, rng: &mut Rng) -> Vec<u8> {
         w.field(tag::BYTE, "Y").i8_payload(sy);
         w.field(tag::COMPOUND, "block_states");
         w.raw(&section_payload(sy, rng, t.packing));
+        if t.biomes {
+            let noms = Terrain::biomes_de(sy);
+            // Quatre entrées → DEUX bits. Le plancher de quatre bits des
+            // blocs n'existe pas ici, et l'appliquer écrirait un tableau
+            // deux fois trop long que le jeu refuse.
+            let data: Vec<u64> = if noms.len() > 1 {
+                let idx: Vec<u16> = (0..64).map(|i| (i % noms.len()) as u16).collect();
+                tf_anvil::pack(&idx, 2, Packing::NoStraddle)
+            } else {
+                Vec::new()
+            };
+            w.field(tag::COMPOUND, "biomes");
+            w.raw(&tf_nbt::biomes_payload(noms, &data));
+        }
         w.end();
     }
 

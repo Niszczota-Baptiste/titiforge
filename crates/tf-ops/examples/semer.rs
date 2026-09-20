@@ -27,7 +27,10 @@ fn main() {
     // Des coffres pleins : sans eux, rien n'exercerait le chemin qui fait
     // suivre les block entities, et une démonstration de `--copier-vers`
     // passerait à côté de ce qu'elle doit montrer.
-    let t = Terrain::peuplee(2);
+    let mut t = Terrain::peuplee(2);
+    // Un vrai chunk 1.18+ porte ses biomes : sans eux, `--biome` n'aurait
+    // rien à écrire et la démonstration passerait à côté.
+    t.biomes = true;
     let mut n = 0;
     let mut octets = 0usize;
     for x in 0..cote {

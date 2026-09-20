@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod biomes;
 pub mod chunk;
 pub mod codec;
 pub mod entites;
@@ -19,9 +20,11 @@ pub mod region;
 pub mod section;
 pub mod state;
 
+pub use biomes::{bits_biome, Biomes, VOL_BIOME};
 pub use chunk::{
-    decode_section, edition_entites, encode_section, inverse_edits, scan, section_edits, splice,
-    ChunkScan, Edit, EncodeError, ScannedSection, SectionSpans, SpliceError,
+    biome_edits, decode_biomes, decode_section, edition_entites, encode_section, inverse_edits,
+    scan, section_edits, splice, BiomeSpans, ChunkScan, Edit, EncodeError, ScannedSection,
+    SectionSpans, SpliceError,
 };
 pub use codec::{deflate, deflate_level, inflate, CodecError};
 pub use entites::{Ancrage, Entite, EntiteReperee, ListeEntites};

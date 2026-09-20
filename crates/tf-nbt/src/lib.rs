@@ -57,6 +57,6 @@ pub mod tag {
 }
 
 pub use writer::{
-    block_states_payload, long_array_payload, named_long_array, palette_list_payload,
-    PaletteEntryRef,
+    biomes_payload, block_states_payload, long_array_payload, named_long_array,
+    palette_list_payload, string_list_payload, PaletteEntryRef,
 };

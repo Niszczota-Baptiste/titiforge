@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (497 tests aujourd'hui)
+cargo test            # tous les crates (518 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -244,6 +244,7 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20 --creux 2
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,31,-21,31" --poser minecraft:stone --murs 1
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,255,60,255" --naturaliser
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,63,63,63" --biome minecraft:desert
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -278,13 +279,14 @@ rejoue chaque chiffre**. C'est là qu'on regarde avant de dire « c'est rapide �
 ```
 crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
-  tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
+  tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc ✅
+               block entities ✅ · biomes 1.18+ ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
-               //naturalize ✅ · lissage, creuser, biomes à venir
+               //naturalize ✅ · //setbiome ✅ · lissage, creuser à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -846,6 +848,17 @@ propres à ce dépôt.
   `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
   serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
   le centre exact, et c'est écrit explicitement.
+- **Un biome n'est pas un bloc, et copier le code des blocs le casse de trois
+  façons.** Sa palette est une liste de CHAÎNES (pas de compounds `{Name,
+  Properties}`) ; il n'y a que 64 cellules par section, une pour 4 × 4 × 4
+  blocs ; et surtout **il n'y a pas de plancher à quatre bits**. Cinq biomes
+  se lisent sur trois bits : reprendre `bits_for` des blocs écrirait un
+  tableau quatre fois trop long, valide pour personne, et le chunk ne se
+  charge plus — sans que rien ne le signale à l'écriture.
+- **La grille d'un biome se voit, et il faut le DIRE.** Une sélection d'un
+  seul bloc en peint quatre par axe, parce que c'est l'unité du format. Taire
+  le débordement ferait passer une propriété d'Anvil pour un bug de l'outil ;
+  le rapport l'annonce à chaque `//setbiome`.
 - **Une opération qui lit HORS de sa section ne peut pas être une opération de
   section.** « Où est la surface » est une propriété de la COLONNE : décidée
   section par section, la naturalisation poserait une bande d'herbe tous les

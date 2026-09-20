@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **497**, zéro échec |
+| Tests | **518**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
@@ -38,12 +38,13 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-497 tests, répartis par ce qu'ils PROUVENT :
+518 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
 | `tf-nbt` reader/writer | 29 | longueurs signées, profondeur, charges forgées |
 | `tf-anvil` region/section/lossless/versions/external/robustesse | 102 | round-trip octet pour octet, 1.13→1.21, `.mcc` |
+| `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 112 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée |
@@ -51,6 +52,7 @@ cargo test --workspace
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 57 | les trois étages, la jonction, le presse-papiers, le hachage par plan |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
+| `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
 | `tf-ops` naturaliser | 11 | la portée `Colonne`, et qu'une colonne n'a qu'UNE surface |
 | `tf-ops` forme | 12 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
@@ -450,7 +452,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | Manque | Ce que ça coûte aujourd'hui |
 |---|---|
 | **Les fluides ne sont pas dessinés** | 4,5 % des blocs posés de Mosslorn, dont 6,2 M d'eau. Les fluides n'ont pas de modèle de bloc dans le format : il leur faut leur propre passe |
-| **Les biomes ne sont pas décodés** | la couleur de teinte est un RÉGLAGE « plaines », pas une mesure. La vraie vit dans le chunk, par section |
+| **Les biomes ne sont pas branchés au rendu** | le moteur les lit et les écrit depuis `tf-anvil` ; `tf-render` s'en tient encore à un réglage « plaines ». Il ne manque plus que le câble |
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |

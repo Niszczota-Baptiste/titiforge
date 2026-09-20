@@ -33,6 +33,7 @@
 
 use tf_anvil::entites::Entite;
 use tf_anvil::section::VOL;
+use tf_anvil::Biomes;
 use tf_anvil::{Section, StateId};
 use tf_world::coords::{BBox, ChunkPos, LocalBox, SectionPos};
 
@@ -158,6 +159,28 @@ pub trait Operation: Sync {
     /// chemins rapides — à ne demander que pour ce qui en a vraiment besoin.
     fn portee(&self) -> Portee {
         Portee::Section
+    }
+
+    /// L'opération touche-t-elle les BIOMES ?
+    ///
+    /// Faux par défaut, et ce n'est pas de la paresse : les biomes sont une
+    /// seconde palette par section, et les décoder pour un `//replace` qui
+    /// n'y touchera pas serait payer deux fois la lecture d'un monde. Celles
+    /// qui répondent vrai voient `appliquer_biomes` appelée pour chaque
+    /// section que la sélection atteint.
+    fn touche_biomes(&self) -> bool {
+        false
+    }
+
+    /// Modifie les biomes d'une section. Rend vrai si quelque chose a changé.
+    ///
+    /// La grille est celle des biomes — 4 × 4 × 4 cellules par section, une
+    /// pour 4 × 4 × 4 blocs — et pas celle des blocs. Les confondre écrirait
+    /// un biome soixante-quatre fois trop petit, ce qui se voit comme un
+    /// damier et ne désigne pas la cause.
+    fn appliquer_biomes(&self, b: &mut Biomes, sel: &BBox, pos: SectionPos) -> bool {
+        let _ = (b, sel, pos);
+        false
     }
 
     /// Appliquée à tout un chunk, quand la portée l'exige.

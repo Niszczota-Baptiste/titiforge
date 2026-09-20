@@ -27,7 +27,9 @@
 
 use std::borrow::Cow;
 
-use tf_anvil::chunk::{decode_section, scan, section_edits, splice, EncodeError};
+use tf_anvil::chunk::{
+    biome_edits, decode_biomes, decode_section, scan, section_edits, splice, EncodeError,
+};
 use tf_anvil::codec::{deflate_level, inflate, CodecError};
 use tf_anvil::entites::Entite;
 use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
@@ -72,6 +74,12 @@ pub struct RapportRegion {
     /// le piège d'`ExeWorldEdit` reproche au format.
     pub entites_posees: u64,
     pub entites_retirees: u64,
+    /// Sections dont les BIOMES ont changé.
+    ///
+    /// Compté en sections et pas en blocs, parce qu'un biome ne se pose pas
+    /// au bloc : sa grille est de 4 × 4 × 4, et annoncer des blocs laisserait
+    /// croire à une précision que le format n'a pas.
+    pub biomes: u64,
 }
 
 impl RapportRegion {
@@ -98,6 +106,7 @@ impl RapportRegion {
         self.bornes = unir(self.bornes, autre.bornes);
         self.entites_posees += autre.entites_posees;
         self.entites_retirees += autre.entites_retirees;
+        self.biomes += autre.biomes;
     }
 }
 
@@ -190,6 +199,7 @@ struct Fait {
     bornes: Option<BBox>,
     entites_posees: u64,
     entites_retirees: u64,
+    biomes: u64,
 }
 
 /// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
@@ -222,6 +232,7 @@ fn un_chunk(
         bornes: None,
         entites_posees: 0,
         entites_retirees: 0,
+        biomes: 0,
     };
     let mut edits = Vec::new();
 
@@ -330,6 +341,49 @@ fn un_chunk(
             // section que l'opération n'a pas vraiment changée ne produit aucune
             // édition, donc aucune entrée de journal vide.
             edits.extend(section_edits(&avant, &section, sc, interner)?);
+        }
+    }
+
+    // ── Les biomes, quand l'opération les touche.
+    //
+    // Indépendant du chemin des blocs, et volontairement : un biome vit dans
+    // sa PROPRE palette, sur sa propre grille de 4 × 4 × 4 cellules. Le
+    // greffer sur la boucle des blocs l'aurait rendu solidaire de la portée,
+    // alors que les deux n'ont rien à voir.
+    if op.touche_biomes() {
+        for sc in &balayage.sections {
+            let spos = SectionPos::new(t.cpos.x, sc.y as i32, t.cpos.z);
+            let Some(coupe) = sel.clip_to_section(spos) else {
+                continue;
+            };
+            // `None` veut dire « cette section ne porte pas de biome qu'on
+            // sache lire » — 1.13–1.17, ou une palette d'un type inattendu.
+            // On passe : ne rien faire vaut mieux qu'écrire au jugé la carte
+            // des biomes de quelqu'un.
+            let Some(mut b) = decode_biomes(&avant, sc, interner)? else {
+                continue;
+            };
+            if !op.appliquer_biomes(&mut b, sel, spos) {
+                continue;
+            }
+            fait.biomes += 1;
+            let o = spos.min_block();
+            fait.bornes = unir(
+                fait.bornes,
+                Some(BBox::new(
+                    BlockPos {
+                        x: o.x + coupe.x0 as i32,
+                        y: o.y + coupe.y0 as i32,
+                        z: o.z + coupe.z0 as i32,
+                    },
+                    BlockPos {
+                        x: o.x + coupe.x1 as i32,
+                        y: o.y + coupe.y1 as i32,
+                        z: o.z + coupe.z1 as i32,
+                    },
+                )),
+            );
+            edits.extend(biome_edits(&avant, &b, sc, interner)?);
         }
     }
 
@@ -733,6 +787,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
         rap.bornes = unir(rap.bornes, f.bornes);
         rap.entites_posees += f.entites_posees;
         rap.entites_retirees += f.entites_retirees;
+        rap.biomes += f.biomes;
         if let Some((patch, charge)) = f.ecrit {
             let (lx, lz) = ((f.index % 32) as i32, (f.index / 32) as i32);
             if let Some(brut) = region.get_mut(lx, lz) {

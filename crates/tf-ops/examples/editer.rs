@@ -30,7 +30,7 @@ use tf_anvil::Interner;
 use tf_blocks::Transfo;
 use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
-use tf_ops::{Collage, Forme, Masque, Motif, Naturaliser, Pas};
+use tf_ops::{Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -100,6 +100,8 @@ enum Op {
     },
     /// `//naturalize` : refaire la stratigraphie, colonne par colonne.
     Naturaliser,
+    /// `//setbiome` : poser un biome. Grille de 4 × 4 × 4, pas de bloc.
+    Biome(String),
 }
 
 fn usage() -> ! {
@@ -125,6 +127,9 @@ fn usage() -> ! {
                              terre, le reste de la pierre
   --couches <s> <ss> <r>     les trois blocs (défaut grass_block, dirt, stone)
   --profondeur <n>           l'épaisseur du sous-sol (défaut 3)
+  --biome <nom>              //setbiome. ATTENTION : un biome se pose par
+                             CELLULE de 4 × 4 × 4 blocs — une sélection qui ne
+                             tombe pas sur un multiple de 4 déborde d'autant
   --sphere <rayon>           //sphere : restreint l'opération à une sphère
   --cylindre <rayon> <haut>  //cyl, axe vertical
   --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
@@ -287,6 +292,7 @@ fn lire_args() -> Args {
             }
             "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
             "--naturaliser" => args.op = Some(Op::Naturaliser),
+            "--biome" => args.op = Some(Op::Biome(a.next().unwrap_or_else(|| usage()))),
             "--couches" => {
                 args.couches = [
                     a.next().unwrap_or_else(|| usage()),
@@ -490,7 +496,7 @@ fn main() {
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
         println!(
             "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
-             --copier-vers / --deplacer / --empiler / --naturaliser)"
+             --copier-vers / --deplacer / --empiler / --naturaliser / --biome)"
         );
         return;
     };
@@ -512,9 +518,11 @@ fn main() {
         // Celles-là ne sont pas des plans : elles se construisent plus bas,
         // parce qu'elles demandent le staging ou une autre forme de travail
         // que « un masque et un motif ».
-        Op::CopierVers { .. } | Op::Deplacer { .. } | Op::Empiler { .. } | Op::Naturaliser => {
-            Plan::nouveau(Masque::Tout, Motif::Garder)
-        }
+        Op::CopierVers { .. }
+        | Op::Deplacer { .. }
+        | Op::Empiler { .. }
+        | Op::Naturaliser
+        | Op::Biome(_) => Plan::nouveau(Masque::Tout, Motif::Garder),
     }
     .avec_seed(args.seed);
     let plan = if args.compter {
@@ -714,6 +722,14 @@ fn main() {
                 &mut interner,
             )
         }
+        Op::Biome(nom) => {
+            let b = interner.intern(nom);
+            let op = PoserBiome {
+                biome: b,
+                compter: args.compter,
+            };
+            appliquer(&staging, &args.dim, Folder::Region, &sel, &op, &interner)
+        }
         Op::Naturaliser => {
             let mut n = Naturaliser::nouveau(
                 interner.intern(&args.couches[0]),
@@ -763,6 +779,13 @@ fn main() {
         println!(
             "block entities : {} posée(s) · {} retirée(s) (leur bloc a disparu)",
             rap.entites_posees, rap.entites_retirees
+        );
+    }
+    if rap.biomes > 0 {
+        println!(
+            "biomes : {} section(s) — la grille est de 4 × 4 × 4 blocs, la \
+             sélection a pu déborder d'autant",
+            rap.biomes
         );
     }
     match rap.bornes {

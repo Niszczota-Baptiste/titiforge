@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod biome;
 pub mod colonnes;
 pub mod edition;
 pub mod forme;
@@ -23,6 +24,7 @@ pub mod naturaliser;
 pub mod plan;
 pub mod presse;
 
+pub use biome::PoserBiome;
 pub use colonnes::{Colonnes, Portee};
 pub use edition::{deplacer, empiler, Pas};
 pub use forme::{Couverture, Forme};

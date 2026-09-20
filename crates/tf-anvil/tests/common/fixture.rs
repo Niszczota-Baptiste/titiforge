@@ -79,6 +79,19 @@ pub mod t {
 // ── packing d'indices, réimplémenté indépendamment ──────────────────────────
 
 /// Bits par indice — règle Minecraft, plancher à 4.
+/// Les bits d'un indice de BIOME. Pas de plancher à 4 : c'est la différence
+/// avec les blocs, et elle change la longueur du tableau écrit.
+///
+/// Réécrit ici plutôt qu'importé de `src/` : le producteur de fixtures doit
+/// rester indépendant de ce qu'il sert à tester.
+pub fn bits_biome(len: usize) -> usize {
+    let mut b = 1usize;
+    while (1usize << b) < len {
+        b += 1;
+    }
+    b
+}
+
 pub fn bits_for(len: usize) -> usize {
     let mut b = 4usize;
     while (1usize << b) < len {
@@ -192,6 +205,34 @@ fn write_section(nbt: &mut Nbt, s: &SectionSpec) {
             .longs(&pack(&s.indices, bits));
     }
     nbt.end(); // block_states
+
+    // Les biomes : 64 cellules de 4 × 4 × 4, palette de CHAÎNES, et **pas de
+    // plancher à 4 bits**. Une section sur trois est monobiome — le cas qui
+    // n'écrit aucun `data`, et celui qu'on oublie de tester.
+    let biomes: &[&str] = if s.y % 3 == 0 {
+        &["minecraft:plains"]
+    } else {
+        &[
+            "minecraft:plains",
+            "minecraft:forest",
+            "minecraft:river",
+            "minecraft:desert",
+            "minecraft:swamp",
+        ]
+    };
+    nbt.field(t::COMPOUND, "biomes");
+    nbt.field(t::LIST, "palette").list(t::STRING, biomes.len());
+    for b in biomes {
+        nbt.strv(b);
+    }
+    if biomes.len() > 1 {
+        // Cinq entrées → 3 bits, soit 3 longs pour 64 cellules. Un plancher
+        // à 4 bits en écrirait 4, et le chunk ne se chargerait plus.
+        let bits = bits_biome(biomes.len());
+        let cells: Vec<u16> = (0..64).map(|i| (i % biomes.len()) as u16).collect();
+        nbt.field(t::LONG_ARRAY, "data").longs(&pack(&cells, bits));
+    }
+    nbt.end(); // biomes
 
     // Un champ que le lecteur ne comprend pas, DANS la section : le splice doit
     // le laisser intact même quand il réécrit block_states juste à côté.
