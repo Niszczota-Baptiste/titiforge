@@ -12,6 +12,7 @@
 //! .\editer.exe D:\monde-essai
 //! .\editer.exe D:\monde-essai --remplacer minecraft:stone minecraft:dirt --sel "0,-64,0,511,320,511" --compter
 //! .\editer.exe D:\monde-essai --poser minecraft:air --sel "0,60,0,15,70,15" --ecrire
+//! .\editer.exe D:\monde-essai --sel "0,60,0,31,90,31" --copier-vers "100,0,0" --tourner 90 --pack %APPDATA%\.minefield_1_18
 //! ```
 //!
 //! Les guillemets autour de `--sel` ne sont pas décoratifs sous PowerShell :
@@ -26,9 +27,10 @@
 use std::path::{Path, PathBuf};
 
 use tf_anvil::Interner;
-use tf_ops::edition::appliquer;
-use tf_ops::plan::Plan;
-use tf_ops::{Masque, Motif};
+use tf_blocks::Transfo;
+use tf_ops::edition::{appliquer, copier};
+use tf_ops::plan::{Operation, Plan};
+use tf_ops::{Collage, Masque, Motif};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -42,12 +44,25 @@ struct Args {
     ecrire: bool,
     compter: bool,
     seed: u64,
+    /// Le pack d'où DÉRIVER les règles de rotation. Sans lui, un quart de
+    /// tour déplace les cases sans réécrire les états : les escaliers
+    /// regardent toujours dans l'ancienne direction. L'outil le DIT au lieu
+    /// de le laisser découvrir en jeu.
+    pack: Option<PathBuf>,
+    avec_air: bool,
 }
 
 enum Op {
     Poser(String),
     Remplacer(String, String),
     Melanger(Vec<(u32, String)>),
+    /// `//copy` + `//rotate` + `//paste` en un geste. Une ligne de commande ne
+    /// garde pas de presse-papiers entre deux appels : ce qui serait trois
+    /// commandes dans le jeu en fait une ici.
+    CopierVers {
+        d: [i32; 3],
+        transfo: Option<Transfo>,
+    },
 }
 
 fn usage() -> ! {
@@ -59,6 +74,13 @@ fn usage() -> ! {
   --poser <bloc>             //set
   --remplacer <de> <vers>    //replace
   --melanger p:bloc,p:bloc   un mélange pondéré, ex. 3:minecraft:stone,1:minecraft:dirt
+  --copier-vers \"dx,dy,dz\"   //copy puis //paste décalé de (dx, dy, dz)
+  --tourner 90|180|270       tourne l'extrait avant de le poser
+  --miroir x|z               le reflète
+  --avec-air                 l'air de l'extrait écrase ce qu'il recouvre
+  --pack <chemin>            le pack, l'installation ou le codex d'où DÉRIVER
+                             les règles de rotation. Sans lui, les cases
+                             bougent mais les états ne sont pas réécrits
   --dim nether|end           (défaut : le monde principal)
   --seed <n>                 la graine du mélange (défaut 0)
   --compter                  compter les blocs modifiés — coûte 31 × l'opération
@@ -94,7 +116,13 @@ fn lire_args() -> Args {
         ecrire: false,
         compter: false,
         seed: 0,
+        pack: None,
+        avec_air: false,
     };
+    // Rotation et miroir se donnent séparément de la destination : on les
+    // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
+    // sur la ligne de commande et que l'ordre des options n'a jamais de sens.
+    let mut transfo: Option<Transfo> = None;
     while let Some(o) = a.next() {
         match o.as_str() {
             "--sel" => {
@@ -139,6 +167,39 @@ fn lire_args() -> Args {
                     .collect();
                 args.op = Some(Op::Melanger(entrees));
             }
+            "--copier-vers" => {
+                let v: Vec<i32> = a
+                    .next()
+                    .unwrap_or_else(|| usage())
+                    .split(sep)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim().parse().unwrap_or_else(|_| usage()))
+                    .collect();
+                if v.len() != 3 {
+                    usage();
+                }
+                args.op = Some(Op::CopierVers {
+                    d: [v[0], v[1], v[2]],
+                    transfo: None,
+                });
+            }
+            "--tourner" => {
+                transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
+                    "90" => Transfo::Rot90,
+                    "180" => Transfo::Rot180,
+                    "270" => Transfo::Rot270,
+                    _ => usage(),
+                })
+            }
+            "--miroir" => {
+                transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
+                    "x" | "X" => Transfo::MiroirX,
+                    "z" | "Z" => Transfo::MiroirZ,
+                    _ => usage(),
+                })
+            }
+            "--avec-air" => args.avec_air = true,
+            "--pack" => args.pack = Some(PathBuf::from(a.next().unwrap_or_else(|| usage()))),
             "--dim" => {
                 args.dim = match a.next().unwrap_or_else(|| usage()).as_str() {
                     "nether" => Dimension::Nether,
@@ -152,7 +213,40 @@ fn lire_args() -> Args {
             _ => usage(),
         }
     }
+    if let (Some(Op::CopierVers { transfo: t, .. }), Some(v)) = (args.op.as_mut(), transfo) {
+        *t = Some(v);
+    }
     args
+}
+
+/// Les règles de rotation, dérivées du pack qu'on nous désigne.
+///
+/// **Rien n'est écrit à la main.** 910 blocs Minefield portent un état et
+/// 22 627 variantes déclarent une rotation : une table écrite à la main est
+/// impossible, et une table incomplète est pire qu'aucune — elle tourne la
+/// moitié d'un mur.
+///
+/// Sans pack, on rend `None` et le collage laisse les états TELS QUELS. C'est
+/// annoncé, pas subi : un build à moitié tourné est faux d'une façon qu'aucune
+/// capture d'écran ne montre.
+fn regles(pack: Option<&Path>) -> Option<tf_blocks::Table> {
+    let chemin = pack?;
+    match tf_assets::jeu::catalogue(chemin) {
+        Ok((cat, _, genre)) => {
+            let table = tf_blocks::Table::deriver(&cat);
+            println!(
+                "pack : {} ({genre:?}) · {} blocs, règles pour {} états au quart de tour",
+                chemin.display(),
+                cat.nb_blocs(),
+                table.couverture(Transfo::Rot90)
+            );
+            Some(table)
+        }
+        Err(e) => {
+            eprintln!("pack illisible ({e}) — les états ne seront PAS réécrits");
+            None
+        }
+    }
 }
 
 /// Une copie de sauvegarde du monde, à côté de lui.
@@ -267,11 +361,14 @@ fn main() {
     );
 
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
-        println!("\n(pas d'opération demandée — voir --poser / --remplacer / --melanger)");
+        println!(
+            "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / --copier-vers)"
+        );
         return;
     };
 
     let mut interner = Interner::new();
+    let air = interner.intern("minecraft:air");
     let plan = match &op {
         Op::Poser(b) => Plan::nouveau(Masque::Tout, Motif::Bloc(interner.intern(b))),
         Op::Remplacer(de, vers) => Plan::nouveau(
@@ -282,6 +379,9 @@ fn main() {
             Masque::Tout,
             Motif::melange(v.iter().map(|(p, b)| (*p, interner.intern(b))).collect()),
         ),
+        // Le collage se construit plus bas : il a besoin du staging pour
+        // lire ce qu'il va reposer.
+        Op::CopierVers { .. } => Plan::nouveau(Masque::Tout, Motif::Garder),
     }
     .avec_seed(args.seed);
     let plan = if args.compter {
@@ -310,8 +410,101 @@ fn main() {
     };
     let staging = Staging::new(src, overlay);
 
+    // ── Le presse-papiers, quand l'opération en demande un.
+    //
+    // `//copy` est la seule opération du crate qui n'écrit rien : elle lit à
+    // travers le staging et rend un extrait détaché. Rien n'est réservé au
+    // monde tant que le collage n'est pas appliqué.
+    let mut presse = None;
+    if let Op::CopierVers { transfo, .. } = &op {
+        let t0 = std::time::Instant::now();
+        let mut p = match copier(&staging, &args.dim, Folder::Region, &sel, &mut interner) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("copie refusée : {e}");
+                std::process::exit(1);
+            }
+        };
+        println!(
+            "copié : {} × {} × {} en {:.0} ms · {} état(s) distinct(s) · {} block entities",
+            p.taille[0],
+            p.taille[1],
+            p.taille[2],
+            t0.elapsed().as_secs_f64() * 1000.0,
+            p.palette().len(),
+            p.entites.len()
+        );
+        if let Some(t) = transfo {
+            let table = regles(args.pack.as_deref());
+            let r = p.transformer(*t, &mut interner, &|cle, t| {
+                table.as_ref().and_then(|tb| tb.transformer(cle, t))
+            });
+            // Ce qu'on n'a pas su transformer est NOMMÉ. Le taire produirait
+            // un build à moitié tourné, et rien à l'écran pour le dire.
+            //
+            // Sans pack, TOUT est intact et les nommer un par un noierait le
+            // message dans une liste de pierres qui n'auraient rien tourné de
+            // toute façon : la seule information utile est qu'il manque un
+            // pack. Avec pack, au contraire, chaque nom compte — c'est un
+            // trou de la table, et il se répare.
+            match (table.is_none(), r.intacts.len()) {
+                (_, 0) => {}
+                (true, n) => println!(
+                    "ATTENTION : aucun pack, donc AUCUN des {n} états n'est réécrit — \
+                     les cases bougent, pas les orientations. `--pack <chemin>` les dérive."
+                ),
+                (false, n) => {
+                    let exemples: Vec<&str> = r
+                        .intacts
+                        .iter()
+                        .filter_map(|id| interner.resolve(*id))
+                        .take(5)
+                        .collect();
+                    println!(
+                        "ATTENTION : {n} état(s) laissés TELS QUELS — {}{}",
+                        exemples.join(", "),
+                        if n > exemples.len() { ", …" } else { "" }
+                    );
+                }
+            }
+            p = r.presse;
+        }
+        presse = Some(p);
+    }
+
+    let collage = presse.as_ref().map(|p| {
+        let [dx, dy, dz] = match &op {
+            Op::CopierVers { d, .. } => *d,
+            _ => [0, 0, 0],
+        };
+        Collage {
+            presse: p,
+            coin: BlockPos {
+                x: sel.min.x + dx,
+                y: sel.min.y + dy,
+                z: sel.min.z + dz,
+            },
+            avec_air: args.avec_air,
+            air,
+            compter: args.compter,
+        }
+    });
+    // Une opération ne paie que sa PORTÉE : un collage paie son extrait, pas
+    // la sélection d'où il vient.
+    let (operation, portee): (&dyn Operation, BBox) = match &collage {
+        Some(c) => (c, c.bornes()),
+        None => (&plan, sel),
+    };
+
     let t0 = std::time::Instant::now();
-    let rap = match appliquer(&staging, &args.dim, Folder::Region, &sel, &plan, &interner) {
+    let rap = match appliquer(
+        &staging,
+        &args.dim,
+        Folder::Region,
+        &portee,
+        operation,
+        &interner,
+    ) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("opération refusée : {e}");
@@ -331,6 +524,12 @@ fn main() {
     match rap.blocs {
         Some(n) => println!("blocs modifiés : {n}"),
         None => println!("blocs modifiés : non comptés (--compter les compte, 31 × plus cher)"),
+    }
+    if rap.entites_posees > 0 || rap.entites_retirees > 0 {
+        println!(
+            "block entities : {} posée(s) · {} retirée(s) (leur bloc a disparu)",
+            rap.entites_posees, rap.entites_retirees
+        );
     }
     match rap.bornes {
         Some(b) => println!(

@@ -19,6 +19,25 @@ Vingt et une entrées de strates, et c'est un choix mesuré : ça demande
 packings du format produisent les mêmes octets. Une fixture à 16 entrées ne
 ferait jamais travailler le chemin intéressant.
 
+### Les coffres sont une OPTION, à zéro par défaut
+
+`Terrain::coffres` pose N block entities par chunk (`Terrain::peuplee(n)`).
+**Zéro par défaut**, parce que toutes les mesures publiées ont été prises sans
+et que déplacer la fixture par défaut déplacerait la référence de tout ce qui
+suit.
+
+Deux choix y sont délibérés, et tous deux se lisent dans le code :
+
+- **aucun bloc de coffre n'est posé sous l'entrée.** Le moteur ne le demande
+  pas : il suit les CASES, jamais le `id` de l'entrée — une entité de mod que
+  personne ne sait nommer se déplace comme les autres. Une fixture qui ferait
+  coïncider les deux testerait une règle plus étroite que celle qui existe ;
+- **les `y` DÉCROISSENT avec l'indice**, donc l'ordre du FICHIER est l'inverse
+  de l'ordre YZX. Le jeu écrit ses entrées dans l'ordre où elles sont
+  apparues, pas trié. Avec des `y` croissants, les deux ordres coïncidaient et
+  un collage qui AJOUTE ses entités au lieu de remplacer celle de sa case ne
+  faisait rougir aucun test — vérifié par mutation.
+
 ## `Build` — un bâtiment, pour mesurer le rendu
 
 `crates/tf-bench/src/build.rs`. Des salles, des murs, des piliers, des

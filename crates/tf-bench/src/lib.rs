@@ -87,6 +87,14 @@ pub struct Terrain {
     pub sections: usize,
     pub seed: u32,
     pub packing: Packing,
+    /// Block entities par chunk. **Zéro par défaut**, et c'est délibéré :
+    /// toutes les mesures publiées du dépôt ont été prises sans, et changer
+    /// la fixture par défaut déplacerait la référence de tout ce qui suit.
+    ///
+    /// La fixture ne pose PAS un bloc de coffre sous chacune — le moteur ne
+    /// le demande pas. Il suit les CASES, jamais le `id` de l'entrée : une
+    /// entité de mod que personne ne sait nommer se déplace comme les autres.
+    pub coffres: u32,
 }
 
 impl Default for Terrain {
@@ -96,6 +104,7 @@ impl Default for Terrain {
             sections: 24,
             seed: 7,
             packing: Packing::NoStraddle,
+            coffres: 0,
         }
     }
 }
@@ -113,6 +122,45 @@ impl Terrain {
             sections: 12,
             ..Terrain::default()
         }
+    }
+
+    /// La même, avec des block entities. Pour tout ce qui doit prouver qu'un
+    /// coffre suit son bloc.
+    pub fn peuplee(coffres: u32) -> Self {
+        Terrain {
+            coffres,
+            ..Terrain::petite()
+        }
+    }
+
+    /// Le nom du k-ième coffre d'un chunk. Il porte son CHUNK D'ORIGINE, et
+    /// c'est ce qui permet à un test de dire d'où vient celui qu'il relit :
+    /// sans ça, les coffres se ressemblent tous et un collage qui n'aurait
+    /// rien posé passerait pour une réussite.
+    pub fn nom_coffre(cx: i32, cz: i32, k: u32) -> String {
+        format!("{{\"text\":\"Coffre {cx}/{cz}#{k}\"}}")
+    }
+
+    /// La case du k-ième coffre d'un chunk, en coordonnées MONDE.
+    ///
+    /// Rendue par la fixture plutôt que recopiée dans chaque test : deux
+    /// constantes indépendantes finissent par diverger, et un test qui vise
+    /// la mauvaise case passerait en ne vérifiant rien.
+    ///
+    /// **Les `y` DÉCROISSENT avec `k`**, donc l'ordre du FICHIER est l'inverse
+    /// de l'ordre YZX. Ce n'est pas un détail : le jeu écrit ses entrées dans
+    /// l'ordre où elles sont apparues, pas trié. Une fixture dont les deux
+    /// ordres coïncident laisse passer un collage qui AJOUTE ses entités au
+    /// lieu de remplacer celle de la case — mêmes entrées, autre ordre, donc
+    /// d'autres octets et un correctif de journal pour zéro changement.
+    /// Vérifié par mutation : avec des `y` croissants, plus aucun test ne le
+    /// voyait.
+    pub fn case_coffre(cx: i32, cz: i32, k: u32) -> [i32; 3] {
+        [
+            cx * 16 + ((k * 5 + 1) % 16) as i32,
+            -30 - (k as i32 * 3),
+            cz * 16 + ((k * 7 + 2) % 16) as i32,
+        ]
     }
 
     pub fn blocs(&self) -> usize {
@@ -205,10 +253,46 @@ fn chunk_nbt(cx: i32, cz: i32, t: &Terrain, rng: &mut Rng) -> Vec<u8> {
         w.end();
     }
 
-    w.field(tag::LIST, "block_entities")
-        .list_header(tag::COMPOUND, 0);
+    if t.coffres == 0 {
+        w.field(tag::LIST, "block_entities")
+            .list_header(tag::COMPOUND, 0);
+    } else {
+        w.field(tag::LIST, "block_entities");
+        w.list_header(tag::COMPOUND, t.coffres as usize);
+        for k in 0..t.coffres {
+            coffre(
+                &mut w,
+                Terrain::case_coffre(cx, cz, k),
+                &Terrain::nom_coffre(cx, cz, k),
+            );
+        }
+    }
     w.end(); // racine
     w.into_bytes()
+}
+
+/// Un coffre plein, avec de quoi perdre.
+///
+/// Le contenu est là exprès : une entrée vide ne prouverait rien. Ce qu'on
+/// veut voir survivre à une rotation, c'est la pile d'objets et le nom
+/// personnalisé — précisément ce qu'un parseur qui ré-encoderait l'entrée
+/// aurait la possibilité d'abîmer.
+fn coffre(w: &mut Writer, [x, y, z]: [i32; 3], nom: &str) {
+    w.field(tag::STRING, "id").raw_str("minecraft:chest");
+    w.field(tag::INT, "x").i32_payload(x);
+    w.field(tag::INT, "y").i32_payload(y);
+    w.field(tag::INT, "z").i32_payload(z);
+    w.field(tag::STRING, "CustomName").raw_str(nom);
+    w.field(tag::LIST, "Items");
+    w.list_header(tag::COMPOUND, 2);
+    for (slot, item) in [(0u8, "minecraft:diamond"), (7, "minecraft:emerald")] {
+        w.field(tag::BYTE, "Slot").i8_payload(slot as i8);
+        w.field(tag::STRING, "id").raw_str(item);
+        w.field(tag::BYTE, "Count")
+            .i8_payload(1 + (nom.len() % 32) as i8);
+        w.end();
+    }
+    w.end();
 }
 
 fn zlib(bytes: &[u8]) -> Vec<u8> {

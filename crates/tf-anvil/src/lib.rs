@@ -13,16 +13,18 @@
 
 pub mod chunk;
 pub mod codec;
+pub mod entites;
 pub mod format;
 pub mod region;
 pub mod section;
 pub mod state;
 
 pub use chunk::{
-    decode_section, encode_section, inverse_edits, scan, section_edits, splice, ChunkScan, Edit,
-    EncodeError, ScannedSection, SectionSpans, SpliceError,
+    decode_section, edition_entites, encode_section, inverse_edits, scan, section_edits, splice,
+    ChunkScan, Edit, EncodeError, ScannedSection, SectionSpans, SpliceError,
 };
 pub use codec::{deflate, deflate_level, inflate, CodecError};
+pub use entites::{Ancrage, Entite, EntiteReperee, ListeEntites};
 pub use format::{
     detect_packing, longs_for, pack, packing_de_repli, unpack_into, version_label, Layout, Packing,
     DV_SANS_CHEVAUCHEMENT,

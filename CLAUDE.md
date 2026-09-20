@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (419 tests aujourd'hui)
+cargo test            # tous les crates (468 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -233,6 +233,9 @@ cargo run --release -p tf-ops --example verite_terrain -- D:\monde minecraft:dir
 cargo run --release -p tf-ops --example semer  -- D:\monde-essai
 cargo run --release -p tf-ops --example editer -- D:\monde-essai
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --remplacer minecraft:stone minecraft:dirt --sel "0,-64,0,511,320,511" --compter
+# copier / tourner / coller. Sans --pack, les cases bougent mais les états ne
+# sont PAS réécrits — l'outil le dit plutôt que de le laisser découvrir en jeu.
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --copier-vers "64,0,64" --tourner 90 --pack %APPDATA%\.minefield_1_18
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -270,7 +273,8 @@ crates/
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc  ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
-  tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅ · prédicats
+  tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
+               presse-papiers ✅ · rotation/miroir ✅ · block entities ✅ · prédicats
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -780,6 +784,39 @@ propres à ce dépôt.
   collage prenait 19 ms au lieu de 5. Une opération qui n'écrit rien doit
   rendre `Etage::Rien`, pas « bloc, zéro case ». Aucune fixture ne pouvait le
   montrer : elle écrit ses propriétés dans l'ordre où le décodeur les relit.
+- **Le contenu d'un coffre n'est pas dans la grille de blocs.** C'est une liste
+  à part du chunk, dont chaque entrée porte ses propres coordonnées MONDE. Rien
+  ne la fait suivre les blocs toute seule et le format ne signale aucune
+  incohérence : un build pivoté sort vide, et on l'apprend en ouvrant un
+  coffre. L'entrée voyage donc par ses OCTETS, et on ne réécrit que les douze
+  qui portent `x`, `y` et `z` — à une position que le balayage a relevée. Rien
+  n'est ré-encodé, donc les données d'un mod dans un coffre ne peuvent pas être
+  abîmées : c'est la propriété du splice, appliquée un cran plus bas.
+- **Le RETRAIT d'une entité se déduit de sa CASE, jamais de la boîte de
+  l'opération.** `Rapport::bornes` est une borne SUPÉRIEURE honnête : s'en
+  servir pour décider quel coffre effacer détruirait celui qu'un `//replace` a
+  seulement survolé. Le critère exact est « la case a-t-elle changé d'état ? »,
+  et il ne coûte rien — on relève l'état des cases habitées avant l'opération,
+  on le recompare après, et un chunk sans coffre ne paie pas un octet. Il vaut
+  aussi pour toute opération future, ce qu'une règle écrite dans chaque
+  opération ne ferait pas : c'est la JONCTION qui le fait, une fois.
+- **Une entité posée doit prendre la place EXACTE de celle qu'elle remplace.**
+  Ajoutée à la fin, elle réordonne la liste : mêmes entrées, autres octets,
+  donc un correctif de journal pour zéro changement. Troisième forme du même
+  piège, après le `position()` sur une palette dédoublonnée et l'étage bloc
+  annoncé pour rien.
+- **Une fixture dont deux ordres coïncident ne prouve pas qu'ils sont
+  distincts.** Les coffres de la fixture avaient des `y` CROISSANTS : l'ordre
+  du fichier était donc déjà l'ordre YZX, et la faute ci-dessus ne faisait
+  rougir aucun test. Trouvée par MUTATION — casser la pièce et exiger qu'un
+  test tombe — pas par relecture. Un test vert ne dit rien tant qu'on n'a pas
+  vu ce qui le fait rougir. Les `y` décroissent maintenant, et c'est écrit à
+  côté de la constante.
+- **`--quick` de criterion n'est pas une mesure.** L'A/B du suivi des block
+  entities annonçait **−25 %** sur le balayage, un gain qu'aucune ligne du
+  changement ne pouvait expliquer. Repris en runs complets, alternés, médiane
+  de trois : 6,04 ms contre 6,07, soit rien. Un chiffre qu'on ne sait pas
+  expliquer est un chiffre à re-mesurer, pas à publier.
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que

@@ -172,11 +172,12 @@ staging, journal. Manque ce qui DÉPLACE.
 |---|---|
 | `//set`, `//replace`, mélange pondéré | ✅ mesurés à l'étage palette |
 | Masques `et` / `ou` / `non` / parmi | ✅ |
-| **Rotation et miroir** | ⬜ — *les règles sont dérivées et vérifiées à 99,3 %, mais `tf-ops` ne dépend même pas de `tf-blocks` : le savoir est là, rien ne l'appelle* |
-| Copier / coller / déplacer / empiler | ⬜ |
+| **Rotation et miroir** | ✅ — appliquées sur la PALETTE de l'extrait, jamais par bloc ; ce que la règle ne sait pas transformer est laissé tel quel et NOMMÉ |
+| Copier / coller | ✅ — `copier` est la seule opération qui n'écrit rien ; `Collage` est à l'étage bloc par nature et ne paie que son extrait |
+| Déplacer (`//move`), empiler (`//stack`) | ⬜ — le collage est là, il manque l'effacement de la source et la répétition |
 | Formes : sphère, cylindre, pyramide | ⬜ |
 | Lissage, naturalisation, murs, creuser | ⬜ |
-| **Les coffres suivent les blocs** | ⬜ — un coffre déplacé perd son contenu ; `ExeWorldEdit` a payé ce piège, il n'est pas encore repayé ici |
+| **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes (`//setbiome`, et la lecture pour la teinte) | ⬜ |
 
 C'est la phase la moins chère du lot : la partie difficile — savoir qu'un
@@ -186,6 +187,12 @@ mesurée.
 > **Sortie.** Un build copié, tourné d'un quart de tour, recollé ailleurs :
 > les escaliers regardent au bon endroit, les coffres ont gardé leur contenu,
 > et un seul `Ctrl+Z` défait l'ensemble.
+>
+> Atteinte pour la rotation et les coffres, en ligne de commande :
+> `editer --sel "…" --copier-vers "64,0,64" --tourner 90 --pack <installation>`.
+> Le contrôle qui compte est le non-changement : copier, tourner quatre fois,
+> reposer à sa propre place doit rendre **zéro chunk modifié** — vérifié sur le
+> monde d'essai comme en test.
 
 ## Phase 4 — La coque, et le geste SketchUp · le tournant
 

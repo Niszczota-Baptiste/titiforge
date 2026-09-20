@@ -22,6 +22,7 @@
 //! SIGNALÉ. Le supposer symétrique produirait un build subtilement faux : une
 //! moitié tournée, l'autre non, et rien à l'écran pour le dire.
 
+use tf_anvil::entites::Entite;
 use tf_anvil::{Interner, StateId};
 use tf_blocks::Transfo;
 
@@ -44,6 +45,13 @@ pub struct Presse {
     /// cassé » et ne désigne pas la cause. Il peut sortir de la boîte — on
     /// copie souvent depuis l'extérieur de sa sélection.
     pub ancre: [i32; 3],
+    /// Les block entities de l'extrait, **en coordonnées LOCALES** — le même
+    /// repère que `blocs`, celui du coin de plus petites coordonnées.
+    ///
+    /// Elles ne sont pas dans la grille : un coffre est une entrée à part,
+    /// avec ses propres coordonnées. Les oublier fait qu'un build pivoté
+    /// abandonne ses coffres, et rien ne le signale avant qu'on en ouvre un.
+    pub entites: Vec<Entite>,
 }
 
 /// Ce qu'une transformation a produit, et ce qu'elle n'a pas su faire.
@@ -64,6 +72,7 @@ impl Presse {
             blocs: vec![id; Presse::volume(taille)],
             taille,
             ancre: [0, 0, 0],
+            entites: Vec::new(),
         }
     }
 
@@ -145,11 +154,29 @@ impl Presse {
             }
         }
 
+        // ── 3. les block entities
+        //
+        // Leur CASE suit la même formule que celle des blocs ; leur CONTENU
+        // n'est pas touché. Aucune block entity vanilla ne porte d'orientation
+        // — un coffre, un escalier, une bannière la portent dans leur état de
+        // bloc, donc la table de rotation s'en occupe déjà. Tourner en plus le
+        // contenu le ferait deux fois.
+        let entites = self
+            .entites
+            .iter()
+            .map(|e| Entite {
+                case: t.point_apres(e.case, self.taille),
+                nbt: e.nbt.clone(),
+                champs: e.champs,
+            })
+            .collect();
+
         Transforme {
             presse: Presse {
                 taille,
                 blocs,
                 ancre: t.point_apres(self.ancre, self.taille),
+                entites,
             },
             intacts,
         }
@@ -210,7 +237,7 @@ impl TransfoBoite for Transfo {
 // ── coller ──────────────────────────────────────────────────────────────────
 
 use tf_anvil::section::{in_section, Section, VOL};
-use tf_world::coords::{BBox, BlockPos, LocalBox, SectionPos};
+use tf_world::coords::{BBox, BlockPos, ChunkPos, LocalBox, SectionPos};
 
 use crate::plan::{Etage, Operation, Rapport};
 
@@ -367,6 +394,49 @@ impl Operation for Collage<'_> {
 
     fn compte(&self) -> bool {
         self.compter
+    }
+
+    /// Les coffres de l'extrait, traduits en MONDE et coupés à ce chunk.
+    ///
+    /// Une entité posée sur une case que le collage n'écrit pas serait un
+    /// fantôme — une entrée sans bloc pour la porter. C'est pourquoi l'air
+    /// sauté l'est ici aussi : sans ça, coller sans l'air un extrait dont un
+    /// coffre a été effacé y reposerait son contenu dans le vide.
+    fn entites_posees(&self, chunk: ChunkPos) -> Vec<Entite> {
+        self.presse
+            .entites
+            .iter()
+            .filter_map(|e| {
+                let case = [
+                    e.case[0] + self.coin.x,
+                    e.case[1] + self.coin.y,
+                    e.case[2] + self.coin.z,
+                ];
+                let p = BlockPos {
+                    x: case[0],
+                    y: case[1],
+                    z: case[2],
+                };
+                if p.chunk() != chunk {
+                    return None;
+                }
+                let (x, y, z) = (e.case[0], e.case[1], e.case[2]);
+                if x < 0 || y < 0 || z < 0 {
+                    return None;
+                }
+                match self.presse.get(x as u32, y as u32, z as u32) {
+                    // Hors de l'extrait, ou sur une case que le collage laisse
+                    // telle quelle : on ne pose rien.
+                    None => None,
+                    Some(id) if id == self.air && !self.avec_air => None,
+                    Some(_) => Some(Entite {
+                        case,
+                        nbt: e.nbt.clone(),
+                        champs: e.champs,
+                    }),
+                }
+            })
+            .collect()
     }
 }
 

@@ -21,12 +21,13 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **420**, zéro échec |
+| Tests | **468**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
 | Vraies saves vérifiées | 2 — Minefield 1.18, vanilla 1.20.1 |
 | Blocs réellement réécrits puis annulés au bit près | **606 M** |
+| Coût du suivi des block entities sur le balayage | **nul** (6,04 ms contre 6,07, médiane de 3) |
 | Appels de dessin, quelle que soit la scène | **2** |
 
 ---
@@ -37,22 +38,24 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-420 tests, répartis par ce qu'ils PROUVENT :
+468 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
-| `tf-nbt` reader/writer/robustesse | 42 | longueurs signées, profondeur, charges forgées |
-| `tf-anvil` region/section/lossless/versions/external | 89 | round-trip octet pour octet, 1.13→1.21, `.mcc` |
+| `tf-nbt` reader/writer | 29 | longueurs signées, profondeur, charges forgées |
+| `tf-anvil` region/section/lossless/versions/external/robustesse | 102 | round-trip octet pour octet, 1.13→1.21, `.mcc` |
+| `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 112 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
-| `tf-ops` etages/edition/tirage + 3 unitaires | 33 | les trois étages, la jonction, le hachage par plan |
+| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 57 | les trois étages, la jonction, le presse-papiers, le hachage par plan |
+| `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 17 | **au pixel** : ombrage, teinte, dalle, alignement WGSL |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
-Deux propriétés valent d'être nommées :
+Trois propriétés valent d'être nommées :
 
 - **Les tests de rendu comparent des PIXELS.** Un ombrage inversé a vécu des
   années dans `we-engine` parce qu'il était invisible sur un build gris.
@@ -60,6 +63,14 @@ Deux propriétés valent d'être nommées :
   (`TF_PACK=…`) et le `.mca` du moteur tiers (`TF_MCA_TIERS=…`). Un test qu'on
   ne peut pas jouer sans une donnée privée ne doit pas casser la suite de
   quelqu'un qui ne l'a pas, mais il doit EXISTER.
+- **Les tests de `coffres` ont été vérifiés PAR MUTATION.** Quatre pièces de la
+  chaîne ont été cassées une par une — la copie ne ramasse plus, le collage ne
+  pose plus, l'orphelin n'est plus détecté, la rotation ne déplace plus les
+  cases — et on a exigé qu'un test tombe à chaque fois. La quatrième
+  (« une entité posée s'AJOUTE au lieu de remplacer en place ») ne tombait
+  d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
+  croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
+  pas vu ce qui le fait rougir.
 
 ---
 
@@ -209,6 +220,49 @@ Et la sélection non alignée est la prochaine optimisation désignée — une
 sélection d'utilisateur ne tombe presque jamais sur un multiple de 16. Une
 section partiellement couverte dont la partie couverte est uniforme peut encore
 éviter le parcours.
+
+### Les coffres suivent les blocs, et ça ne coûte rien
+
+```bash
+cargo run --release -q -p tf-ops --example semer  -- /tmp/monde-essai 1
+cargo run --release -q -p tf-ops --example editer -- /tmp/monde-essai --sel "0,-40,0,31,-20,31" --copier-vers "0,0,0" --avec-air
+```
+
+Le contenu d'un coffre n'est pas dans la grille de blocs : c'est une liste à
+part du chunk, dont chaque entrée porte ses propres coordonnées MONDE. Une
+entrée voyage par ses OCTETS et **seules ses trois coordonnées sont réécrites**
+— douze octets, à une position que le balayage a relevée. Rien n'est ré-encodé,
+donc le contenu du coffre, le texte d'un panneau et les données d'un mod ne
+peuvent pas être abîmés : c'est la même propriété structurelle que le splice.
+
+| | |
+|---|---:|
+| Balayage d'une région pleine, sans le suivi | 6,07 ms |
+| Balayage d'une région pleine, avec | **6,04 ms** (médiane de 3, A/B dans la même séance) |
+
+L'écart est sous le bruit, et loin des 25 % qu'il faudrait pour annoncer quoi
+que ce soit. Mesuré à `--quick`, le même A/B annonçait **−25 %** : un raccourci
+de mesure n'est pas une mesure.
+
+Le contrôle qui compte n'est pas un temps, c'est un NON-changement. Copier un
+extrait, le tourner quatre fois — donc l'identité — et le reposer à sa propre
+place doit rendre **zéro chunk modifié**, coffres compris :
+
+```text
+copié : 32 × 21 × 32 en 2 ms · 21 état(s) distinct(s) · 8 block entities
+2 ms · 0 chunks modifiés · étages : rien 8 · section 0 · palette 0 · bloc 0
+block entities : 8 posée(s) · 0 retirée(s) (leur bloc a disparu)
+portée réelle : rien n'a été écrit
+```
+
+Deux règles tiennent ce zéro, et chacune a coûté une faute :
+
+- **une entité posée prend la place EXACTE de celle qu'elle remplace.**
+  Ajoutée à la fin, elle réordonnerait la liste : mêmes entrées, autres octets,
+  donc un correctif de journal pour rien ;
+- **le retrait se déduit de la CASE, jamais de la boîte.** Une entité dont la
+  case a changé d'état part avec son bloc ; juger sur les `bornes` de
+  l'opération détruirait le coffre qu'un `//replace` n'a pas touché.
 
 ---
 
@@ -368,6 +422,9 @@ cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
 cargo run --release -p tf-ops    --example verite_terrain  -- D:\monde minecraft:dirt
 cargo run --release -p tf-assets --example recenser_monde  -- D:\monde %APPDATA%\.minefield_1_18
 cargo run --release -p tf-render --example capture         -- %APPDATA%\.minefield_1_18 vue.png 1600 --monde D:\monde --zone "4,7,10,12"
+
+# copier, tourner, coller — sans --ecrire, la save n'est pas touchée
+cargo run --release -p tf-ops --example editer -- D:\monde --sel "0,60,0,31,90,31" --copier-vers "64,0,64" --tourner 90 --pack %APPDATA%\.minefield_1_18
 ```
 
 Les outils acceptent trois formes d'assets, reconnues au CONTENU : un codex

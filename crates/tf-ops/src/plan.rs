@@ -31,9 +31,10 @@
 //! fois. Tout ce qui y cherche un état doit chercher TOUTES les occurrences,
 //! jamais la première.
 
+use tf_anvil::entites::Entite;
 use tf_anvil::section::VOL;
 use tf_anvil::{Section, StateId};
-use tf_world::coords::{BBox, LocalBox, SectionPos};
+use tf_world::coords::{BBox, ChunkPos, LocalBox, SectionPos};
 
 use crate::masque::Masque;
 use crate::motif::Motif;
@@ -121,6 +122,24 @@ pub trait Operation: Sync {
     /// Compter coûte × 21 à l'étage palette : c'est un choix de l'appelant,
     /// jamais un service rendu d'office.
     fn compte(&self) -> bool;
+
+    /// Les block entities que l'opération POSE dans ce chunk, en coordonnées
+    /// MONDE. Chacune prend la place de celle qui occupait sa case.
+    ///
+    /// **Le RETRAIT n'est pas ici**, et c'est délibéré. Une entité dont la
+    /// case a changé d'état part avec son bloc : c'est vrai de toute opération
+    /// qui écrit, donc `edition.rs` le fait une fois pour toutes plutôt que de
+    /// le confier à chaque implémentation — où il finirait par manquer dans la
+    /// seule qui compte. Ce qu'une opération sait, et qu'elle seule sait,
+    /// c'est ce qu'elle APPORTE.
+    ///
+    /// Le défaut — rien — est le bon pour tout ce qui ne déplace pas de blocs :
+    /// `//set`, `//replace`, un lissage. Ces opérations écrasent des coffres,
+    /// elles n'en posent pas.
+    fn entites_posees(&self, chunk: ChunkPos) -> Vec<Entite> {
+        let _ = chunk;
+        Vec::new()
+    }
 }
 
 impl Operation for Plan {

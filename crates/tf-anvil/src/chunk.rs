@@ -17,6 +17,7 @@
 
 use tf_nbt::{tag, Cur, Span, Trunc, R};
 
+use crate::entites::{balayer_liste, champ_entites, nom_du_champ, Entite, ListeEntites};
 use crate::format::{detect_packing, packing_de_repli, Layout, Packing};
 use crate::section::{bits_for, Section, MAX_PALETTE, VOL};
 use crate::state::{split_key, state_key, Interner, StateId};
@@ -34,6 +35,10 @@ pub struct ChunkScan {
     pub x_pos: Option<i32>,
     pub z_pos: Option<i32>,
     pub sections: Vec<ScannedSection>,
+    /// Les block entities du chunk — le contenu des coffres, le texte des
+    /// panneaux. Elles ne sont PAS dans la grille de blocs et ne suivent donc
+    /// aucune opération toutes seules : voir `entites.rs`.
+    pub entites: ListeEntites,
     /// Packing du CHUNK, déduit de la première section qui porte des indices.
     ///
     /// C'est une propriété du chunk et non de la section : une section
@@ -52,6 +57,7 @@ impl Default for ChunkScan {
             x_pos: None,
             z_pos: None,
             sections: Vec::new(),
+            entites: ListeEntites::default(),
             packing: Packing::NoStraddle,
         }
     }
@@ -109,8 +115,17 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
     c.enter_root()?;
     let mut out = ChunkScan::default();
     let mut level: Option<Span> = None;
+    let racine_fin;
 
-    while let Some((t, key)) = c.next_field()? {
+    loop {
+        // La position AVANT l'en-tête : c'est le début du CHAMP, et si c'est
+        // le `TAG_End` de la racine, c'est là qu'il faudra insérer une liste
+        // de block entities absente.
+        let avant = c.pos();
+        let Some((t, key)) = c.next_field()? else {
+            racine_fin = avant;
+            break;
+        };
         match (t, key) {
             (tag::INT, "DataVersion") => out.data_version = c.i32()?,
             (tag::INT, "xPos") => out.x_pos = Some(c.i32()?),
@@ -118,6 +133,13 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
             (tag::LIST, "sections") => {
                 out.layout = Layout::Flat;
                 out.sections = scan_section_list(&mut c, Layout::Flat)?;
+            }
+            (tag::LIST, "block_entities") => {
+                out.entites.entrees = balayer_liste(&mut c)?;
+                out.entites.champ = Some(Span {
+                    start: avant,
+                    end: c.pos(),
+                });
             }
             // 1.13 – 1.17 : tout est sous `Level`. On note sa plage et on la
             // traite APRÈS, parce que `sections` à la racine doit gagner si les
@@ -127,17 +149,33 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
             _ => c.skip_payload(t)?,
         }
     }
+    out.entites.inserer_a = racine_fin;
 
     if out.sections.is_empty() {
         if let Some(span) = level {
             out.layout = Layout::Legacy;
             let mut lc = Cur::at(inflated, span.start);
-            while let Some((t, key)) = lc.next_field()? {
+            // La liste de 1.13–1.17 vit sous `Level` : c'est aussi là qu'il
+            // faut l'insérer si elle manque, et pas à la racine.
+            out.entites = ListeEntites::default();
+            loop {
+                let avant = lc.pos();
+                let Some((t, key)) = lc.next_field()? else {
+                    out.entites.inserer_a = avant;
+                    break;
+                };
                 match (t, key) {
                     (tag::INT, "xPos") => out.x_pos = Some(lc.i32()?),
                     (tag::INT, "zPos") => out.z_pos = Some(lc.i32()?),
                     (tag::LIST, "Sections") => {
                         out.sections = scan_section_list(&mut lc, Layout::Legacy)?;
+                    }
+                    (tag::LIST, "TileEntities") => {
+                        out.entites.entrees = balayer_liste(&mut lc)?;
+                        out.entites.champ = Some(Span {
+                            start: avant,
+                            end: lc.pos(),
+                        });
                     }
                     _ => lc.skip_payload(t)?,
                 }
@@ -604,6 +642,43 @@ fn trim_edit(inflated: &[u8], e: &mut Edit) -> bool {
         end: e.span.end - s,
     };
     true
+}
+
+/// L'édition qui remplace la liste de block entities du chunk.
+///
+/// Rend `None` quand rien ne change — même critère que `section_edits`, et
+/// pour la même raison : ce sont les OCTETS qui décident, pas un drapeau. Une
+/// opération qui ne déplace aucun coffre ne doit pas salir le chunk, sinon
+/// elle remplit le journal d'annulation d'entrées vides.
+///
+/// **Une liste vide qui le reste ne produit rien**, même si le fichier l'écrit
+/// sous une forme que nous n'écririons pas (type d'élément `TAG_Compound` avec
+/// une longueur nulle). Normaliser au passage changerait les octets d'un chunk
+/// que l'opération n'a pas touché — c'est exactement la faute que le collage a
+/// payée sur un vrai monde.
+pub fn edition_entites(
+    inflated: &[u8],
+    liste: &ListeEntites,
+    layout: Layout,
+    voulues: &[Entite],
+) -> Option<Edit> {
+    if voulues.is_empty() && liste.est_vide() {
+        return None;
+    }
+    let bytes = champ_entites(nom_du_champ(layout), voulues);
+    let mut e = match liste.champ {
+        Some(span) => Edit { span, bytes },
+        // Le chunk n'en portait pas et en reçoit : on insère le CHAMP entier
+        // juste avant le `TAG_End` de son compound hôte.
+        None => Edit {
+            span: Span {
+                start: liste.inserer_a,
+                end: liste.inserer_a,
+            },
+            bytes,
+        },
+    };
+    trim_edit(inflated, &mut e).then_some(e)
 }
 
 /// Recompose la charge d'un `block_states` (1.18+) depuis une section.

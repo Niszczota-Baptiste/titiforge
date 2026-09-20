@@ -29,9 +29,10 @@ use std::borrow::Cow;
 
 use tf_anvil::chunk::{decode_section, scan, section_edits, splice, EncodeError};
 use tf_anvil::codec::{deflate_level, inflate, CodecError};
+use tf_anvil::entites::Entite;
 use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
-use tf_anvil::Interner;
-use tf_world::coords::{BBox, ChunkPos, RegionPos, SectionPos};
+use tf_anvil::{edition_entites, Interner, StateId};
+use tf_world::coords::{BBox, BlockPos, ChunkPos, RegionPos, SectionPos};
 use tf_world::journal::{ChunkPatch, Cible};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
@@ -55,6 +56,15 @@ pub struct RapportRegion {
     pub blocs: Option<u64>,
     /// Ce que l'opération a écrit, en coordonnées monde.
     pub bornes: Option<BBox>,
+    /// Block entities posées, et retirées parce que leur bloc a disparu.
+    ///
+    /// Rendues d'office, contrairement au compte de blocs : elles sont
+    /// quelques dizaines par chunk, pas cent millions, et c'est le seul
+    /// endroit où l'on peut voir qu'un coffre a été effacé. Le taire ferait
+    /// de la perte de contenu un événement silencieux — exactement ce que
+    /// le piège d'`ExeWorldEdit` reproche au format.
+    pub entites_posees: u64,
+    pub entites_retirees: u64,
 }
 
 impl RapportRegion {
@@ -150,6 +160,8 @@ struct Fait {
     etages: [usize; 4],
     blocs: Option<u64>,
     bornes: Option<BBox>,
+    entites_posees: u64,
+    entites_retirees: u64,
 }
 
 /// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
@@ -180,8 +192,26 @@ fn un_chunk(
         etages: [0; 4],
         blocs: op.compte().then_some(0),
         bornes: None,
+        entites_posees: 0,
+        entites_retirees: 0,
     };
     let mut edits = Vec::new();
+
+    // ── Les block entities, avant toute chose.
+    //
+    // Elles ne sont PAS dans la grille de blocs : un coffre est une entrée à
+    // part du chunk, avec ses propres coordonnées. Rien ne les fait suivre les
+    // blocs tout seules, et le format ne signale pas l'incohérence — un build
+    // pivoté sort vide, et on l'apprend en ouvrant un coffre.
+    //
+    // Ce qu'une opération APPORTE, elle seule le sait. Ce qu'elle EFFACE se
+    // déduit ici : une entité dont la case a changé d'état part avec son bloc.
+    // Le critère est exact et vaut pour toute opération présente ou future —
+    // là où la boîte `bornes` serait une approximation qui détruirait le
+    // coffre qu'un `//replace` n'a pas touché.
+    let posees = op.entites_posees(t.cpos);
+    let habitees = !balayage.entites.est_vide();
+    let mut orphelines = vec![false; balayage.entites.entrees.len()];
 
     for sc in &balayage.sections {
         let spos = SectionPos {
@@ -195,7 +225,20 @@ fn un_chunk(
         let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
             continue;
         };
+        // Les cases habitées de CETTE section, telles qu'elles sont avant.
+        // Rien n'est alloué pour un chunk sans coffre, c'est-à-dire presque
+        // tous.
+        let temoins = if habitees {
+            temoins_de(&balayage.entites.entrees, &section, spos)
+        } else {
+            Vec::new()
+        };
         let r = op.appliquer(&mut section, sel, spos);
+        for (i, [lx, ly, lz], etat) in temoins {
+            if section.get(lx, ly, lz) != etat {
+                orphelines[i] = true;
+            }
+        }
         fait.etages[match r.etage {
             Etage::Rien => 0,
             Etage::Section => 1,
@@ -215,12 +258,94 @@ fn un_chunk(
         edits.extend(section_edits(&avant, &section, sc, interner)?);
     }
 
+    if !posees.is_empty() || orphelines.contains(&true) {
+        // Toute entité posée finit dans la liste : soit elle remplace celle
+        // de sa case, soit elle s'ajoute. Le compte se prend donc AVANT.
+        fait.entites_posees = posees.len() as u64;
+        let (voulues, retirees) =
+            liste_voulue(&avant, &balayage.entites.entrees, &orphelines, posees);
+        fait.entites_retirees = retirees as u64;
+        if let Some(e) = edition_entites(&avant, &balayage.entites, balayage.layout, &voulues) {
+            edits.push(e);
+        }
+    }
+
     if !edits.is_empty() {
         let apres = splice(&avant, &mut edits)?;
         let patch = ChunkPatch::record(cible, &avant, &apres, &edits)?;
         fait.ecrit = Some((patch, deflate_level(&apres, t.compression, NIVEAU_STAGING)?));
     }
     Ok(fait)
+}
+
+/// L'état des cases habitées d'une section, avec de quoi les retrouver.
+///
+/// Le rang dans la liste du chunk voyage avec : c'est lui qui désigne l'entrée
+/// à retirer, et retrouver une entrée par sa case obligerait à supposer qu'il
+/// n'y en a qu'une par case — ce que rien ne garantit dans un fichier réel.
+fn temoins_de(
+    entrees: &[tf_anvil::EntiteReperee],
+    section: &tf_anvil::Section,
+    pos: SectionPos,
+) -> Vec<(usize, [usize; 3], Option<StateId>)> {
+    let mut out = Vec::new();
+    for (i, e) in entrees.iter().enumerate() {
+        let Some(a) = e.ancrage else { continue };
+        // Division PLANCHER : le bloc −1 est dans la section −1. Un décalage
+        // arithmétique la fait, une division entière non.
+        if [a.case[0] >> 4, a.case[1] >> 4, a.case[2] >> 4] != [pos.x, pos.y, pos.z] {
+            continue;
+        }
+        let l = [
+            a.case[0].rem_euclid(16) as usize,
+            a.case[1].rem_euclid(16) as usize,
+            a.case[2].rem_euclid(16) as usize,
+        ];
+        out.push((i, l, section.get(l[0], l[1], l[2])));
+    }
+    out
+}
+
+/// La liste de block entities voulue pour ce chunk, et combien sont retirées.
+///
+/// **Une entité posée prend la place EXACTE de celle qu'elle remplace.** Si
+/// elle était simplement ajoutée à la fin, reposer un extrait à sa propre
+/// place réordonnerait la liste : mêmes entrées, autres octets, donc un
+/// correctif de journal pour zéro changement. C'est la faute que le collage a
+/// déjà payée deux fois sur un vrai monde, sous deux formes différentes.
+fn liste_voulue(
+    inflated: &[u8],
+    entrees: &[tf_anvil::EntiteReperee],
+    orphelines: &[bool],
+    posees: Vec<Entite>,
+) -> (Vec<Entite>, usize) {
+    let mut par_case: std::collections::HashMap<[i32; 3], Entite> =
+        posees.into_iter().map(|e| (e.case, e)).collect();
+    let mut voulues = Vec::with_capacity(entrees.len() + par_case.len());
+    let mut retirees = 0usize;
+
+    for (i, e) in entrees.iter().enumerate() {
+        match e.ancrage {
+            // Sans case, on ne sait ni la suivre ni la juger : elle reste.
+            None => voulues.push(Entite::intouchable(e.span.slice(inflated).to_vec())),
+            Some(a) => match par_case.remove(&a.case) {
+                Some(neuve) => voulues.push(neuve),
+                None if orphelines[i] => retirees += 1,
+                None => match Entite::depuis(inflated, e) {
+                    Some(gardee) => voulues.push(gardee),
+                    None => voulues.push(Entite::intouchable(e.span.slice(inflated).to_vec())),
+                },
+            },
+        }
+    }
+
+    // Celles qui atterrissent sur une case vide, dans l'ordre YZX du dépôt :
+    // une liste dont l'ordre dépendrait du parcours d'une table de hachage
+    // ferait deux fichiers différents pour la même opération.
+    let mut neuves: Vec<Entite> = par_case.into_values().collect();
+    neuves.sort_by_key(|e| (e.case[1], e.case[2], e.case[0]));
+    voulues.extend(neuves);
+    (voulues, retirees)
 }
 
 /// La plus petite boîte qui contient les deux.
@@ -311,6 +436,34 @@ pub fn copier<S: RegionSource, O: RegionStore>(
             }
             let avant = inflate(&brut.payload, brut.compression)?;
             let balayage = scan(&avant)?;
+
+            // Les coffres de ce chunk qui tombent DANS la sélection. Sans eux,
+            // un build copié puis reposé ailleurs arrive vide — le piège
+            // qu'`ExeWorldEdit` a payé, et que rien dans le format ne signale.
+            for e in &balayage.entites.entrees {
+                let Some(a) = e.ancrage else { continue };
+                let p = BlockPos {
+                    x: a.case[0],
+                    y: a.case[1],
+                    z: a.case[2],
+                };
+                if !sel.contains(p) {
+                    continue;
+                }
+                let Some(mut ent) = Entite::depuis(&avant, e) else {
+                    continue;
+                };
+                // MONDE → LOCAL, le même repère que `blocs`. Une unité qui
+                // traverse une frontière se vérifie EN TRAVERSANT : c'est le
+                // scénario copier → tourner → coller qui le fait.
+                ent.case = [
+                    a.case[0] - sel.min.x,
+                    a.case[1] - sel.min.y,
+                    a.case[2] - sel.min.z,
+                ];
+                presse.entites.push(ent);
+            }
+
             for sc in &balayage.sections {
                 let spos = SectionPos::new(cpos.x, sc.y as i32, cpos.z);
                 let Some(coupe) = sel.clip_to_section(spos) else {
@@ -345,6 +498,11 @@ pub fn copier<S: RegionSource, O: RegionStore>(
             }
         }
     }
+    // L'ordre du ramassage dépend du parcours des régions ; celui de l'extrait
+    // ne doit dépendre de rien. YZX, comme les cases.
+    presse
+        .entites
+        .sort_by_key(|e| (e.case[1], e.case[2], e.case[0]));
     Ok(presse)
 }
 
@@ -447,6 +605,8 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
             *c += n;
         }
         rap.bornes = unir(rap.bornes, f.bornes);
+        rap.entites_posees += f.entites_posees;
+        rap.entites_retirees += f.entites_retirees;
         if let Some((patch, charge)) = f.ecrit {
             let (lx, lz) = ((f.index % 32) as i32, (f.index / 32) as i32);
             if let Some(brut) = region.get_mut(lx, lz) {
@@ -497,6 +657,8 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
             *c += n;
         }
         total.bornes = unir(total.bornes, r.bornes);
+        total.entites_posees += r.entites_posees;
+        total.entites_retirees += r.entites_retirees;
     }
     total.blocs = compte;
     Ok(total)
