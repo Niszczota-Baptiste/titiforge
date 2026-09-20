@@ -37,6 +37,7 @@ use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
 use crate::plan::{Etage, Plan};
+use crate::presse::Presse;
 
 /// Ce qu'une opération a fait à une région.
 #[derive(Debug, Default)]
@@ -257,6 +258,96 @@ fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
 /// Rend les correctifs à pousser dans le journal. Ne les pousse pas lui-même :
 /// une opération qui porte sur plusieurs régions doit faire UNE entrée de
 /// journal, pas une par région — sinon `Ctrl+Z` défait un tiers du travail.
+/// Copie une sélection dans un presse-papiers.
+///
+/// C'est `//copy`, et c'est la seule opération du crate qui n'écrit RIEN :
+/// elle lit la source à travers le staging et rend un extrait détaché. Le
+/// monde n'est pas touché, donc aucun correctif de journal, donc rien à
+/// annuler.
+///
+/// **Ce qui n'existe pas vaut de l'air, et pas une erreur.** Une sélection
+/// déborde presque toujours de ce qui est généré — c'est même le cas normal
+/// quand on copie un bâtiment avec sa marge. Une région absente, un chunk
+/// jamais visité, une section hors du monde : l'extrait porte de l'air à ces
+/// places. Refuser rendrait `//copy` inutilisable au bord d'un build.
+///
+/// **Une charge illisible, en revanche, est une ERREUR.** La confondre avec de
+/// l'air ferait coller un trou à la place d'un mur, en silence — c'est le
+/// piège `cold_read` de l'étage bloc, sous une autre forme.
+pub fn copier<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+    interner: &mut Interner,
+) -> Result<Presse, Erreur> {
+    let (sx, sy, sz) = sel.size();
+    let air = interner.intern("minecraft:air");
+    let mut presse = Presse::uniforme([sx, sy, sz], air);
+
+    for pos in sel.regions() {
+        let octets = match staging.read_region(dim, folder, pos) {
+            Ok(b) => b,
+            // Région absente : de l'air, et c'est le cas normal.
+            Err(SourceError::NotFound) => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let mut region = read(&octets, pos.x, pos.z)?;
+        for cpos in chunks_de(sel, pos) {
+            let (lx, lz) = (cpos.x.rem_euclid(32), cpos.z.rem_euclid(32));
+            let Some(brut) = region.get_mut(lx, lz) else {
+                continue; // chunk jamais généré
+            };
+            // Une charge déportée arrive VIDE — le crate Anvil ne lit pas de
+            // fichiers. L'oublier ferait copier de l'air à la place du plus
+            // gros chunk de la sélection, en silence.
+            if brut.needs_external() {
+                let nom = external_file_name(cpos.x, cpos.z);
+                let charge = staging.read_external(dim, folder, &nom)?;
+                brut.resolve_external(charge);
+            }
+            if brut.payload.is_empty() {
+                continue;
+            }
+            let avant = inflate(&brut.payload, brut.compression)?;
+            let balayage = scan(&avant)?;
+            for sc in &balayage.sections {
+                let spos = SectionPos::new(cpos.x, sc.y as i32, cpos.z);
+                let Some(coupe) = sel.clip_to_section(spos) else {
+                    continue;
+                };
+                let Some(section) = decode_section(&avant, &balayage, sc, interner)? else {
+                    continue;
+                };
+                let coin = spos.min_block();
+                for ly in coupe.y0..=coupe.y1 {
+                    for lz in coupe.z0..=coupe.z1 {
+                        for lx in coupe.x0..=coupe.x1 {
+                            let Some(id) = section.get(lx, ly, lz) else {
+                                continue;
+                            };
+                            // Coordonnées MONDE, puis relatives au coin de la
+                            // sélection. Passer par le monde évite d'avoir à
+                            // raisonner sur deux origines à la fois.
+                            let (mx, my, mz) =
+                                (coin.x + lx as i32, coin.y + ly as i32, coin.z + lz as i32);
+                            let i = presse.index(
+                                (mx - sel.min.x) as u32,
+                                (my - sel.min.y) as u32,
+                                (mz - sel.min.z) as u32,
+                            );
+                            if let Some(i) = i {
+                                presse.blocs[i] = id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(presse)
+}
+
 pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,

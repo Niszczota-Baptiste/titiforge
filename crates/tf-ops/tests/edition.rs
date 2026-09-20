@@ -14,9 +14,9 @@
 use tf_anvil::chunk::{decode_section, scan};
 use tf_anvil::codec::inflate;
 use tf_anvil::region::read;
-use tf_anvil::Interner;
+use tf_anvil::{Interner, StateId};
 use tf_bench::{region, Terrain};
-use tf_ops::edition::{appliquer, appliquer_region};
+use tf_ops::edition::{appliquer, appliquer_region, copier};
 use tf_ops::plan::Plan;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
@@ -669,4 +669,147 @@ fn le_resultat_ne_depend_pas_du_nombre_de_coeurs() {
         resultats[0].1.len() > 1,
         "et toucher plusieurs chunks, sinon le test ne prouve rien"
     );
+}
+
+// ── copier : la seule opération qui n'écrit rien ────────────────────────────
+
+/// Ce que la source contient vraiment à une position MONDE, lu par un chemin
+/// indépendant de `copier` — sinon on comparerait la copie à elle-même.
+fn bloc_source(brut: &[u8], interner: &mut Interner, x: i32, y: i32, z: i32) -> Option<StateId> {
+    let r = read(brut, 0, 0).ok()?;
+    let c = r.get(x.div_euclid(16) & 31, z.div_euclid(16) & 31)?;
+    let inf = inflate(&c.payload, c.compression).ok()?;
+    let sc = scan(&inf).ok()?;
+    let sy = y.div_euclid(16) as i8;
+    let s = sc.sections.iter().find(|s| s.y == sy)?;
+    let section = decode_section(&inf, &sc, s, interner).ok()??;
+    section.get(
+        x.rem_euclid(16) as usize,
+        y.rem_euclid(16) as usize,
+        z.rem_euclid(16) as usize,
+    )
+}
+
+fn boite(x0: i32, y0: i32, z0: i32, x1: i32, y1: i32, z1: i32) -> BBox {
+    BBox::new(
+        BlockPos {
+            x: x0,
+            y: y0,
+            z: z0,
+        },
+        BlockPos {
+            x: x1,
+            y: y1,
+            z: z1,
+        },
+    )
+}
+
+/// La copie rend EXACTEMENT ce que la source contient, case par case.
+///
+/// Vérifié contre un décodage indépendant : comparer la copie à elle-même ne
+/// prouverait rien, et c'est exactement l'erreur que le croisement des étages
+/// existe pour éviter.
+#[test]
+fn copier_rend_ce_que_la_source_contient() {
+    let (src, brut) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    // Une boîte qui traverse deux sections en hauteur et deux chunks en X,
+    // pour que le recollage des morceaux compte.
+    let sel = boite(10, 4, 3, 21, 20, 9);
+    let p = copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
+
+    let (sx, sy, sz) = sel.size();
+    assert_eq!(p.taille, [sx, sy, sz]);
+    let mut compares = 0;
+    for dy in 0..sy {
+        for dz in 0..sz {
+            for dx in 0..sx {
+                let (x, y, z) = (
+                    sel.min.x + dx as i32,
+                    sel.min.y + dy as i32,
+                    sel.min.z + dz as i32,
+                );
+                if let Some(attendu) = bloc_source(&brut, &mut i, x, y, z) {
+                    assert_eq!(
+                        p.get(dx, dy, dz),
+                        Some(attendu),
+                        "case monde ({x}, {y}, {z})"
+                    );
+                    compares += 1;
+                }
+            }
+        }
+    }
+    assert!(compares > 500, "le test doit comparer pour de vrai");
+}
+
+/// **Ce qui n'existe pas vaut de l'air, pas une erreur.**
+///
+/// Une sélection déborde presque toujours de ce qui est généré — c'est le cas
+/// NORMAL quand on copie un bâtiment avec sa marge. Refuser rendrait `//copy`
+/// inutilisable au bord d'un build.
+#[test]
+fn copier_hors_du_monde_rend_de_l_air_et_pas_une_erreur() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    // Très loin de la seule région présente.
+    let sel = boite(100_000, 0, 100_000, 100_003, 2, 100_003);
+    let p = copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
+    assert_eq!(p.taille, [4, 3, 4]);
+    assert!(
+        p.blocs.iter().all(|&b| b == air),
+        "hors du monde généré, tout doit être de l'air"
+    );
+}
+
+/// Copier ne touche pas à la source, et ne salit pas la copie de travail : il
+/// n'y a donc rien à annuler.
+#[test]
+fn copier_n_ecrit_nulle_part() {
+    let (src, brut) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let _ = copier(&st, &SURFACE, DOSSIER, &boite(0, 0, 0, 31, 31, 31), &mut i).unwrap();
+    assert!(st.is_clean(), "aucune région ne doit être salie");
+    assert_eq!(
+        st.source().read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        brut,
+        "la source reste octet pour octet ce qu'elle était"
+    );
+}
+
+/// Une sélection d'un seul bloc est un cas limite qu'on écrit par erreur un
+/// jour sur deux : la boîte est inclusive des DEUX côtés.
+#[test]
+fn copier_un_seul_bloc_rend_une_case() {
+    let (src, brut) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let p = copier(&st, &SURFACE, DOSSIER, &boite(5, 7, 9, 5, 7, 9), &mut i).unwrap();
+    assert_eq!(p.taille, [1, 1, 1]);
+    assert_eq!(p.blocs.len(), 1);
+    if let Some(attendu) = bloc_source(&brut, &mut i, 5, 7, 9) {
+        assert_eq!(p.blocs[0], attendu);
+    }
+}
+
+/// Copier puis tourner quatre fois rend l'extrait de départ — la jonction
+/// entre la lecture du monde et la géométrie du presse-papiers.
+#[test]
+fn copier_puis_tourner_quatre_fois_revient_au_depart() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let depart = copier(&st, &SURFACE, DOSSIER, &boite(0, 0, 0, 9, 5, 13), &mut i).unwrap();
+    let mut p = depart.clone();
+    for _ in 0..4 {
+        p = p
+            .transformer(tf_blocks::Transfo::Rot90, &mut i, &|_, _| None)
+            .presse;
+    }
+    assert_eq!(p, depart);
 }
