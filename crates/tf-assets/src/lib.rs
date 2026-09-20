@@ -21,6 +21,7 @@ pub mod archive;
 pub mod atlas;
 pub mod blockstates;
 pub mod catalogue;
+pub mod climat;
 pub mod jeu;
 pub mod modele;
 pub mod rotation;

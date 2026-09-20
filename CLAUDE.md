@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (518 tests aujourd'hui)
+cargo test            # tous les crates (530 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -210,6 +210,8 @@ cargo run --release -p tf-mesh --example mailler_build     # la chaîne complèt
 
 # le pack RÉEL du serveur (rien n'est copié dans le dépôt)
 cargo run --release -p tf-assets --example recenser     -- ../titisite/public/codex
+# la COULEUR des biomes : il faut une INSTALLATION, un pack seul n'a pas `data/`
+cargo run --release -p tf-assets --example biomes       -- %APPDATA%\.minefield_1_18
 cargo run --release -p tf-assets --example mailler_reel -- ../titisite/public/codex
 # la table de tf-bench est ENGENDRÉE par le même code que l'application :
 cargo run --release -p tf-assets --example engendrer_catalogue -- ../titisite/public/codex \
@@ -289,6 +291,7 @@ crates/
                //naturalize ✅ · //setbiome ✅ · lissage, creuser à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
+               couleurs de biome DÉRIVÉES du jeu ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
   tf-app/      coque winit + egui, outils, commandes
@@ -848,6 +851,21 @@ propres à ce dépôt.
   `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
   serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
   le centre exact, et c'est écrit explicitement.
+- **La couleur d'un biome vit dans DEUX moitiés du jeu, pas une.** La table
+  `assets/minecraft/textures/colormap/grass.png` donne une couleur par couple
+  (température, humidité) ; les températures, elles, sont dans
+  `data/<ns>/worldgen/biome/*.json`. Ressources d'un côté, DONNÉES de l'autre :
+  un resource pack seul ne suffit pas, il faut une installation ou un
+  datapack. C'est la seconde fois que lire l'installation de l'utilisateur
+  paie — la première étant les textures `minefield:*`.
+- **La formule de couleur du jeu se copie à la LETTRE, troncature comprise.**
+  `(int)((1 − t) × 255)` sur `t = 0,8f` rend **50**, pas 51 : `0,8` vaut
+  0,800000011920929 en flottant, le produit fait 50,99999…, et Java tronque.
+  Arrondir « proprement » décalerait la table d'un pixel sur la moitié des
+  biomes. Et l'humidité se multiplie par la température AVANT d'être inversée.
+  Trois mutations, trois tests rouges — dont l'interversion des deux axes, qui
+  donne un désert vert et une jungle jaune, deux images parfaitement
+  plausibles.
 - **Un biome n'est pas un bloc, et copier le code des blocs le casse de trois
   façons.** Sa palette est une liste de CHAÎNES (pas de compounds `{Name,
   Properties}`) ; il n'y a que 64 cellules par section, une pour 4 × 4 × 4

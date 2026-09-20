@@ -182,7 +182,8 @@ staging, journal. Manque ce qui DÉPLACE.
 | Lissage, creuser | ⬜ — le lissage lit le voisin d'à CÔTÉ, donc au-delà du chunk ; creuser lit tout le volume. Il leur faut une portée de plus, et elle se mesurera avant d'être écrite |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes : lecture, écriture, `//setbiome` | ✅ — seconde palette par section, grille de 4 × 4 × 4 ; 1.18+ seulement, et 1.13–1.17 est REFUSÉ plutôt que deviné |
-| Les biomes branchés à la TEINTE du rendu | ⬜ — le moteur les lit maintenant ; `tf-render` s'en tient encore à un réglage « plaines » |
+| La COULEUR d'un biome, dérivée du jeu | ✅ — table `colormap/grass.png` × `worldgen/biome/*.json`, formule du jeu à la lettre ; le marais est annoncé APPROCHÉ |
+| Les biomes branchés à la teinte du rendu | ⬜ — les deux moitiés existent, il manque le câble : `tf-mesh` ne reçoit pas encore le biome d'une case |
 
 C'est la phase la moins chère du lot : la partie difficile — savoir qu'un
 escalier `shape=outer` tourné devient tel autre état — est déjà faite et
