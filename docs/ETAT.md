@@ -6,6 +6,12 @@ raisonnement ; celle-ci donne les chiffres et **la commande qui les rejoue**.
 Un chiffre sans sa commande n'est pas une mesure, c'est une affirmation.
 
 Machine de référence : Intel Xeon 2,10 GHz, **4 cœurs**, 15 Go, Linux.
+
+**Les temps ABSOLUS dérivent avec la charge de la machine** — mesuré le même
+jour, à code identique, un facteur **2,4** entre deux séances sur les six
+scénarios d'étages à la fois. Seule une comparaison A/B dans la MÊME séance
+prouve quelque chose ; c'est le seuil de 25 % du dépôt, en plus brutal que
+prévu.
 Adaptateur graphique : **llvmpipe** (rastériseur LOGICIEL) — les temps de rendu
 n'y valent rien, **les comptes si**.
 

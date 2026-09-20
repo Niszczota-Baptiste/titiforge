@@ -71,7 +71,7 @@ pub struct Rapport {
 }
 
 impl Rapport {
-    const RIEN: Rapport = Rapport {
+    pub const RIEN: Rapport = Rapport {
         etage: Etage::Rien,
         blocs: Some(0),
         bornes: None,
@@ -94,6 +94,43 @@ pub struct Plan {
     /// d'économiser. Laissé au choix de l'appelant : une interface qui affiche
     /// « 12 345 blocs » le veut, un script qui enchaîne vingt opérations non.
     pub compter: bool,
+}
+
+/// Ce qu'une opération sait faire d'une section.
+///
+/// Un `Plan` en est une, et c'est la seule qui sache choisir un étage : masque
+/// et motif sont des données, donc le cœur peut décider de NE PAS itérer. Mais
+/// toutes les opérations ne s'expriment pas ainsi — un collage lit un extrait,
+/// une déformation lit ses voisins — et celles-là ont quand même besoin du
+/// staging, du journal, du recollement par plages et de la parallélisation par
+/// chunk.
+///
+/// D'où ce trait : `tf-ops/src/edition.rs` est la jonction, et elle doit être
+/// écrite une fois. Le coût de la répartition dynamique est UNE indirection
+/// par section — 24 576 sur une région pleine, contre 1,38 ms de travail.
+///
+/// `Sync` parce que la chaîne tourne sur tous les cœurs, et que c'est cette
+/// parallélisation qui vaut × 3,65.
+pub trait Operation: Sync {
+    /// Applique l'opération à une section, et dit par quel étage elle est
+    /// passée. `sel` et `pos` sont en coordonnées MONDE.
+    fn appliquer(&self, section: &mut Section, sel: &BBox, pos: SectionPos) -> Rapport;
+
+    /// L'opération compte-t-elle les blocs modifiés ?
+    ///
+    /// Compter coûte × 21 à l'étage palette : c'est un choix de l'appelant,
+    /// jamais un service rendu d'office.
+    fn compte(&self) -> bool;
+}
+
+impl Operation for Plan {
+    fn appliquer(&self, section: &mut Section, sel: &BBox, pos: SectionPos) -> Rapport {
+        Plan::appliquer(self, section, sel, pos)
+    }
+
+    fn compte(&self) -> bool {
+        self.compter
+    }
 }
 
 impl Plan {

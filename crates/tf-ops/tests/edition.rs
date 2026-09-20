@@ -18,6 +18,7 @@ use tf_anvil::{Interner, StateId};
 use tf_bench::{region, Terrain};
 use tf_ops::edition::{appliquer, appliquer_region, copier};
 use tf_ops::plan::Plan;
+use tf_ops::Presse;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
 use tf_world::journal::{Genre, Journal};
@@ -812,4 +813,230 @@ fn copier_puis_tourner_quatre_fois_revient_au_depart() {
             .presse;
     }
     assert_eq!(p, depart);
+}
+
+// ── coller : le tour complet ────────────────────────────────────────────────
+
+/// Copier un morceau, le reposer ailleurs, et RELIRE le fichier écrit.
+///
+/// C'est la jonction que rien d'autre ne vérifie : le presse-papiers est juste
+/// de son côté, le splice aussi, et leur raccord peut ne pas l'être — deux
+/// moitiés justes qui produisent un résultat parfaitement plausible et faux.
+#[test]
+fn coller_repose_l_extrait_case_pour_case() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+
+    let depuis = boite(2, 3, 4, 9, 8, 11);
+    let p = copier(&st, &SURFACE, DOSSIER, &depuis, &mut i).unwrap();
+
+    // Loin de la source, pour qu'aucun recouvrement ne puisse masquer une
+    // erreur de coordonnées.
+    let coin = BlockPos {
+        x: 200,
+        y: 3,
+        z: 200,
+    };
+    let c = tf_ops::Collage {
+        presse: &p,
+        coin,
+        avec_air: true,
+        air,
+        compter: true,
+    };
+    let sel = c.bornes();
+    let r = appliquer(&st, &SURFACE, DOSSIER, &sel, &c, &i).unwrap();
+    assert!(
+        !r.patches.is_empty(),
+        "le collage doit écrire quelque chose"
+    );
+    assert_eq!(
+        r.etages[3],
+        r.etages.iter().sum::<usize>(),
+        "tout à l'étage bloc"
+    );
+
+    // On RELIT ce qui a été écrit, à travers le staging — pas la mémoire.
+    let relu = copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
+    assert_eq!(relu.taille, p.taille);
+    assert_eq!(relu.blocs, p.blocs, "l'extrait relu doit être l'original");
+}
+
+/// **L'air de l'extrait n'écrase pas ce qui est là**, sauf si on le demande.
+///
+/// C'est le défaut de WorldEdit et c'est le bon : on colle presque toujours un
+/// bâtiment sur un terrain, pas un cube d'air.
+#[test]
+fn coller_sans_air_laisse_le_terrain_en_place() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let marque = i.intern("minecraft:glowstone");
+
+    // Un extrait moitié air, moitié marque.
+    let mut p = Presse::uniforme([4, 2, 4], air);
+    for x in 0..4u32 {
+        for z in 0..4u32 {
+            let idx = p.index(x, 1, z).unwrap();
+            p.blocs[idx] = marque;
+        }
+    }
+    let coin = BlockPos { x: 4, y: 4, z: 4 };
+    let avant = copier(&st, &SURFACE, DOSSIER, &boite(4, 4, 4, 7, 5, 7), &mut i).unwrap();
+
+    let c = tf_ops::Collage {
+        presse: &p,
+        coin,
+        avec_air: false,
+        air,
+        compter: false,
+    };
+    appliquer(&st, &SURFACE, DOSSIER, &c.bornes(), &c, &i).unwrap();
+    let apres = copier(&st, &SURFACE, DOSSIER, &c.bornes(), &mut i).unwrap();
+
+    for x in 0..4u32 {
+        for z in 0..4u32 {
+            assert_eq!(
+                apres.get(x, 1, z),
+                Some(marque),
+                "la couche pleine doit être posée"
+            );
+            assert_eq!(
+                apres.get(x, 0, z),
+                avant.get(x, 0, z),
+                "la couche d'AIR de l'extrait ne doit rien écraser"
+            );
+        }
+    }
+}
+
+/// Copier, tourner d'un quart de tour, coller : l'extrait relu doit être
+/// exactement l'extrait tourné. C'est le tour complet de `//copy //rotate
+/// //paste`.
+#[test]
+fn copier_tourner_coller_rend_l_extrait_tourne() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+
+    // Non carré exprès : une rotation qui n'échangerait pas les dimensions
+    // passerait sur un cube.
+    let p = copier(&st, &SURFACE, DOSSIER, &boite(1, 2, 3, 12, 6, 7), &mut i).unwrap();
+    let tourne = p
+        .transformer(tf_blocks::Transfo::Rot90, &mut i, &|_, _| None)
+        .presse;
+    assert_ne!(tourne.taille, p.taille, "la fixture doit être non carrée");
+
+    let c = tf_ops::Collage {
+        presse: &tourne,
+        // Dans la zone GÉNÉRÉE de la fixture (chunks 0..15) : un collage
+        // n'engendre pas de chunk, voir le test qui suit.
+        coin: BlockPos {
+            x: 150,
+            y: 2,
+            z: 150,
+        },
+        avec_air: true,
+        air,
+        compter: false,
+    };
+    let sel = c.bornes();
+    appliquer(&st, &SURFACE, DOSSIER, &sel, &c, &i).unwrap();
+    let relu = copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
+    assert_eq!(relu.taille, tourne.taille);
+    assert_eq!(relu.blocs, tourne.blocs);
+}
+
+/// Un collage s'annule comme le reste : le journal ne sait pas qu'il est
+/// différent, et c'est exactement ce qu'on veut d'une couture.
+#[test]
+fn un_collage_s_annule_octet_pour_octet() {
+    let (src, brut) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let marque = i.intern("minecraft:glowstone");
+    let p = Presse::uniforme([6, 3, 6], marque);
+
+    let c = tf_ops::Collage {
+        presse: &p,
+        coin: BlockPos { x: 3, y: 5, z: 3 },
+        avec_air: true,
+        air,
+        compter: false,
+    };
+    let r = appliquer(&st, &SURFACE, DOSSIER, &c.bornes(), &c, &i).unwrap();
+    assert!(!r.patches.is_empty());
+
+    // Annuler en rejouant le sens « annuler » de chaque correctif.
+    let ecrit = st.overlay().read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let region = read(&ecrit, 0, 0).unwrap();
+    for patch in &r.patches {
+        let c = region
+            .get(
+                (patch.cible.chunk % 32) as i32,
+                (patch.cible.chunk / 32) as i32,
+            )
+            .unwrap();
+        let apres = inflate(&c.payload, c.compression).unwrap();
+        let mut e = patch.annuler.clone();
+        let retour = tf_anvil::splice(&apres, &mut e).unwrap();
+        assert_eq!(
+            tf_world::journal::empreinte(&retour),
+            patch.avant_hash,
+            "annuler doit rendre le chunk d'avant"
+        );
+    }
+    assert_eq!(
+        st.source().read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        brut,
+        "et la source n'a jamais bougé"
+    );
+}
+
+/// **Un collage n'ENGENDRE pas de chunk**, et il faut le savoir.
+///
+/// Coller là où le monde n'a jamais été généré n'écrit rien — pas d'erreur,
+/// pas de chunk créé, rien. C'est cohérent avec le reste du crate (on ne crée
+/// pas de terrain), mais ça se lit « j'ai collé et il ne s'est rien passé ».
+/// Le rapport le dit : aucun correctif.
+///
+/// Le jour où l'on voudra l'inverse, ce sera une opération à part — engendrer
+/// un chunk vide est une décision, pas un effet de bord d'un collage.
+#[test]
+fn coller_hors_des_chunks_generes_n_ecrit_rien_et_le_dit() {
+    let (src, brut) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let marque = i.intern("minecraft:glowstone");
+    let p = Presse::uniforme([4, 4, 4], marque);
+
+    // La fixture ne peuple que les chunks 0..15, soit les blocs 0..255.
+    let c = tf_ops::Collage {
+        presse: &p,
+        coin: BlockPos {
+            x: 400,
+            y: 4,
+            z: 400,
+        },
+        avec_air: true,
+        air,
+        compter: true,
+    };
+    let r = appliquer(&st, &SURFACE, DOSSIER, &c.bornes(), &c, &i).unwrap();
+    assert!(
+        r.patches.is_empty(),
+        "aucun chunk là-bas : rien à écrire, et le rapport doit le montrer"
+    );
+    assert_eq!(r.bornes, None, "rien n'a été écrit");
+    assert!(st.is_clean(), "et la copie de travail reste propre");
+    assert_eq!(
+        st.source().read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        brut
+    );
 }

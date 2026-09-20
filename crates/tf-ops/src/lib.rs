@@ -23,5 +23,5 @@ pub mod presse;
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};
-pub use plan::{Etage, Plan, Rapport};
-pub use presse::{Presse, TransfoBoite, Transforme};
+pub use plan::{Etage, Operation, Plan, Rapport};
+pub use presse::{Collage, Presse, TransfoBoite, Transforme};

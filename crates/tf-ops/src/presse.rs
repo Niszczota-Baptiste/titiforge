@@ -206,3 +206,159 @@ impl TransfoBoite for Transfo {
         [ax, y, az]
     }
 }
+
+// ── coller ──────────────────────────────────────────────────────────────────
+
+use tf_anvil::section::{in_section, Section, VOL};
+use tf_world::coords::{BBox, BlockPos, LocalBox, SectionPos};
+
+use crate::plan::{Etage, Operation, Rapport};
+
+/// Poser un extrait dans le monde. C'est `//paste`.
+///
+/// **Un collage est nécessairement à l'étage BLOC**, et c'est la seule
+/// opération du crate dont on peut le dire d'avance : ce qu'elle écrit dépend
+/// de la POSITION, pas de l'état qu'elle trouve. Aucun raisonnement sur la
+/// palette ne peut l'éviter — là où `//replace` réécrit un nom, un collage
+/// recopie un extrait.
+///
+/// La contrepartie est mesurée ailleurs : l'étage bloc traite 100 millions de
+/// cases en 951 ms. Un collage ne paie que la taille de son extrait, jamais
+/// celle de la sélection.
+///
+/// **Un collage n'ENGENDRE pas de chunk.** Coller là où le monde n'a jamais
+/// été généré n'écrit rien — pas d'erreur, pas de chunk créé. C'est cohérent
+/// avec le reste du crate, qui ne crée pas de terrain, mais ça se lit
+/// « j'ai collé et il ne s'est rien passé » : le rapport le dit en ne rendant
+/// aucun correctif, et un test fige le comportement. Le jour où l'on voudra
+/// l'inverse, ce sera une opération à part — engendrer un chunk vide est une
+/// décision, pas un effet de bord d'un collage.
+pub struct Collage<'a> {
+    pub presse: &'a Presse,
+    /// Où atterrit le coin de plus petites coordonnées de l'extrait, en MONDE.
+    pub coin: BlockPos,
+    /// L'air de l'extrait écrase-t-il ce qui est là ?
+    ///
+    /// `false` est le défaut de WorldEdit, et c'est le bon : on colle presque
+    /// toujours un bâtiment sur un terrain, pas un cube d'air. `true` sert à
+    /// reposer un extrait à l'identique, trous compris.
+    pub avec_air: bool,
+    /// Ce qui compte comme air DANS l'extrait.
+    ///
+    /// Passé plutôt que deviné : un `StateId` n'a de sens que relativement à
+    /// son interner, et chercher « minecraft:air » ici obligerait le collage à
+    /// en porter un.
+    pub air: StateId,
+    pub compter: bool,
+}
+
+impl Collage<'_> {
+    /// La boîte MONDE que l'extrait occupe. C'est la sélection à passer à
+    /// `appliquer` — un collage ne paie que son extrait.
+    pub fn bornes(&self) -> BBox {
+        let [sx, sy, sz] = self.presse.taille;
+        BBox::new(
+            self.coin,
+            BlockPos {
+                x: self.coin.x + sx as i32 - 1,
+                y: self.coin.y + sy as i32 - 1,
+                z: self.coin.z + sz as i32 - 1,
+            },
+        )
+    }
+}
+
+impl Operation for Collage<'_> {
+    fn appliquer(&self, section: &mut Section, sel: &BBox, pos: SectionPos) -> Rapport {
+        let Some(coupe) = sel.clip_to_section(pos) else {
+            return Rapport::RIEN;
+        };
+        let origine = pos.min_block();
+        let mut ecrits = 0u64;
+        let mut touche = false;
+
+        // Le dépack se fait UNE fois pour la section, pas par case : reposer
+        // la question à chaque bloc rendrait le collage quadratique en la
+        // taille de la palette.
+        let mut idx = section.unpack();
+        let mut palette = section.palette.clone();
+        let avant_palette = palette.len();
+
+        for ly in coupe.y0..=coupe.y1 {
+            for lz in coupe.z0..=coupe.z1 {
+                for lx in coupe.x0..=coupe.x1 {
+                    let (mx, my, mz) = (
+                        origine.x + lx as i32,
+                        origine.y + ly as i32,
+                        origine.z + lz as i32,
+                    );
+                    let (px, py, pz) = (mx - self.coin.x, my - self.coin.y, mz - self.coin.z);
+                    if px < 0 || py < 0 || pz < 0 {
+                        continue;
+                    }
+                    let Some(id) = self.presse.get(px as u32, py as u32, pz as u32) else {
+                        continue;
+                    };
+                    if id == self.air && !self.avec_air {
+                        continue;
+                    }
+                    debug_assert!(in_section(lx, ly, lz));
+                    let i = (ly * 256 + lz * 16 + lx).min(VOL - 1);
+                    let k = match palette.iter().position(|p| *p == id) {
+                        Some(k) => k,
+                        None => {
+                            palette.push(id);
+                            palette.len() - 1
+                        }
+                    };
+                    if idx[i] as usize != k {
+                        ecrits += 1;
+                    }
+                    idx[i] = k as u16;
+                    touche = true;
+                }
+            }
+        }
+
+        if !touche {
+            return Rapport::RIEN;
+        }
+        // Ne repacker que si la palette a bougé OU si des cases ont changé :
+        // `section_edits` compare les octets de toute façon, mais repacker
+        // pour rien coûte le dépack qu'on vient de payer.
+        section.palette = palette;
+        if ecrits > 0 || section.palette.len() != avant_palette {
+            section.repack(&idx);
+        }
+        Rapport {
+            etage: Etage::Bloc,
+            blocs: self.compter.then_some(ecrits),
+            bornes: bornes_collage(sel, pos, coupe),
+        }
+    }
+
+    fn compte(&self) -> bool {
+        self.compter
+    }
+}
+
+/// Les bornes MONDE de ce qu'une section a pu recevoir.
+///
+/// Une borne SUPÉRIEURE honnête : l'instantané d'annulation et le remaillage
+/// s'y fient, et `tf-anvil` compare les octets — une section qui n'a rien
+/// changé n'écrit rien même si ses bornes la couvrent.
+fn bornes_collage(_sel: &BBox, pos: SectionPos, coupe: LocalBox) -> Option<BBox> {
+    let o = pos.min_block();
+    Some(BBox::new(
+        BlockPos {
+            x: o.x + coupe.x0 as i32,
+            y: o.y + coupe.y0 as i32,
+            z: o.z + coupe.z0 as i32,
+        },
+        BlockPos {
+            x: o.x + coupe.x1 as i32,
+            y: o.y + coupe.y1 as i32,
+            z: o.z + coupe.z1 as i32,
+        },
+    ))
+}

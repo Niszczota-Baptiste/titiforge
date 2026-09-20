@@ -36,7 +36,7 @@ use tf_world::journal::{ChunkPatch, Cible};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
-use crate::plan::{Etage, Plan};
+use crate::plan::{Etage, Operation};
 use crate::presse::Presse;
 
 /// Ce qu'une opération a fait à une région.
@@ -168,7 +168,7 @@ struct Fait {
 fn un_chunk(
     t: &Travail,
     sel: &BBox,
-    plan: &Plan,
+    op: &dyn Operation,
     cible: Cible,
     interner: &mut Interner,
 ) -> Result<Fait, Erreur> {
@@ -178,7 +178,7 @@ fn un_chunk(
         index: t.index,
         ecrit: None,
         etages: [0; 4],
-        blocs: plan.compter.then_some(0),
+        blocs: op.compte().then_some(0),
         bornes: None,
     };
     let mut edits = Vec::new();
@@ -195,7 +195,7 @@ fn un_chunk(
         let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
             continue;
         };
-        let r = plan.appliquer(&mut section, sel, spos);
+        let r = op.appliquer(&mut section, sel, spos);
         fait.etages[match r.etage {
             Etage::Rien => 0,
             Etage::Section => 1,
@@ -354,7 +354,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     folder: Folder,
     pos: RegionPos,
     sel: &BBox,
-    plan: &Plan,
+    op: &dyn Operation,
     interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
     let bytes = match staging.read_region(dim, folder, pos) {
@@ -416,7 +416,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
                 .par_iter()
                 .map_init(
                     || interner.clone(),
-                    |local, t| un_chunk(t, sel, plan, cible(t.index), local),
+                    |local, t| un_chunk(t, sel, op, cible(t.index), local),
                 )
                 .collect()
         }
@@ -425,7 +425,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
             let mut local = interner.clone();
             travaux
                 .iter()
-                .map(|t| un_chunk(t, sel, plan, cible(t.index), &mut local))
+                .map(|t| un_chunk(t, sel, op, cible(t.index), &mut local))
                 .collect()
         }
     };
@@ -438,7 +438,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     // d'ordre selon la machine rendrait deux annulations différentes du même
     // travail.
     let mut rap = RapportRegion::default();
-    let mut compte = plan.compter.then_some(0u64);
+    let mut compte = op.compte().then_some(0u64);
     for f in faits {
         for (a, b) in rap.etages.iter_mut().zip(f.etages) {
             *a += b;
@@ -482,13 +482,13 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
     dim: &Dimension,
     folder: Folder,
     sel: &BBox,
-    plan: &Plan,
+    op: &dyn Operation,
     interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
     let mut total = RapportRegion::default();
-    let mut compte = plan.compter.then_some(0u64);
+    let mut compte = op.compte().then_some(0u64);
     for pos in sel.regions() {
-        let r = appliquer_region(staging, dim, folder, pos, sel, plan, interner)?;
+        let r = appliquer_region(staging, dim, folder, pos, sel, op, interner)?;
         total.patches.extend(r.patches);
         for (a, b) in total.etages.iter_mut().zip(r.etages) {
             *a += b;
