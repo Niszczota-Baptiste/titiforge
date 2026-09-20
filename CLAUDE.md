@@ -771,6 +771,15 @@ propres à ce dépôt.
   différer de celles du répertoire : prendre celles du répertoire décale la
   lecture de quelques octets, ce qui donne une charge illisible et aucune
   explication. Les deux tables servent, chacune à ce qu'elle décrit.
+- **Toucher une section qu'on n'a pas changée la fait RÉÉCRIRE.** Annoncer
+  l'étage bloc la fait passer par `section_edits`, qui la ré-encode pour la
+  comparer — et le ré-encodage ne reproduit pas toujours les octets d'origine :
+  une propriété d'état que le jeu écrit dans un autre ordre ressort
+  normalisée. Mesuré sur un vrai monde 1.20, reposer un extrait à sa propre
+  place produisait **six correctifs de journal pour zéro changement**, et le
+  collage prenait 19 ms au lieu de 5. Une opération qui n'écrit rien doit
+  rendre `Etage::Rien`, pas « bloc, zéro case ». Aucune fixture ne pouvait le
+  montrer : elle écrit ses propriétés dans l'ordre où le décodeur les relit.
 - **Une ligne de commande écrite pour bash ne marche pas chez la cible.** Deux
   fois de suite, sur la même séance : la continuation `\` en fin de ligne, que
   PowerShell ne connaît pas, et les virgules de `--sel 0,-64,0,511` que

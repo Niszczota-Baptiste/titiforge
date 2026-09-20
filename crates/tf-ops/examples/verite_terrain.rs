@@ -35,8 +35,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tf_anvil::{inflate, read, splice, Interner};
-use tf_ops::edition::appliquer;
+use tf_blocks::Transfo;
+use tf_ops::edition::{appliquer, copier};
 use tf_ops::plan::Plan;
+use tf_ops::Collage;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::journal::empreinte as empreinte_de;
@@ -286,6 +288,98 @@ fn main() {
             }
         }
         println!("└ {reecrits} régions réécrites · {intacts} chunks intacts vérifiés au ZLIB près");
+        let _ = std::fs::remove_dir_all(&couche);
+    }
+
+    // ── 5. le tour complet : copier, tourner quatre fois, reposer
+    //
+    // Quatre quarts de tour rendent l'extrait de départ ; le reposer à sa
+    // place ne devrait donc RIEN changer — et le moteur doit le savoir.
+    // `section_edits` compare ce qu'il va écrire à ce qui est déjà là : une
+    // opération qui ne change rien ne doit produire aucun correctif.
+    //
+    // C'est une propriété que les fixtures ne peuvent pas prouver aussi bien :
+    // ici l'extrait porte les vrais états du monde, escaliers et dalles
+    // compris, et il traverse la palette d'une section réelle.
+    {
+        let source = FsSource::open(&monde).expect("monde relisible");
+        let couche = std::env::temp_dir().join(format!("titiforge-tour-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&couche);
+        let _ = std::fs::create_dir_all(&couche);
+        let overlay = FsSource::open(&couche).expect("copie de travail");
+        let staging = Staging::new(source, overlay);
+
+        // Une boîte non carrée, à cheval sur plusieurs chunks et sections.
+        let boite = BBox::new(
+            BlockPos {
+                x: 96,
+                y: 56,
+                z: 96,
+            },
+            BlockPos {
+                x: 135,
+                y: 79,
+                z: 115,
+            },
+        );
+        let mut inter = Interner::new();
+        let air = inter.intern("minecraft:air");
+        let t0 = std::time::Instant::now();
+        let extrait = match copier(&staging, &dim, Folder::Region, &boite, &mut inter) {
+            Ok(p) => p,
+            Err(e) => {
+                bilan.exiger(false, || format!("copie impossible : {e}"));
+                let _ = std::fs::remove_dir_all(&couche);
+                return;
+            }
+        };
+        let ms_copie = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let mut tourne = extrait.clone();
+        for _ in 0..4 {
+            tourne = tourne
+                .transformer(Transfo::Rot90, &mut inter, &|_, _| None)
+                .presse;
+        }
+        bilan.exiger(tourne == extrait, || {
+            "quatre quarts de tour doivent rendre l'extrait de départ".into()
+        });
+
+        let collage = Collage {
+            presse: &tourne,
+            coin: boite.min,
+            avec_air: true,
+            air,
+            compter: true,
+        };
+        let t1 = std::time::Instant::now();
+        let rap = match appliquer(&staging, &dim, Folder::Region, &boite, &collage, &inter) {
+            Ok(r) => r,
+            Err(e) => {
+                bilan.exiger(false, || format!("collage impossible : {e}"));
+                let _ = std::fs::remove_dir_all(&couche);
+                return;
+            }
+        };
+        let ms_collage = t1.elapsed().as_secs_f64() * 1000.0;
+
+        let (bx, by, bz) = boite.size();
+        println!(
+            "\n┌ le tour complet — copier, tourner × 4, reposer\n│ {bx} × {by} × {bz} = {} cases · copie {ms_copie:.0} ms · collage {ms_collage:.0} ms",
+            boite.volume()
+        );
+        println!(
+            "│ {} états distincts dans l'extrait",
+            extrait.palette().len()
+        );
+        bilan.exiger(rap.patches.is_empty(), || {
+            format!(
+                "reposer un extrait à l'identique ne doit RIEN écrire, \
+                 or {} chunks sont marqués modifiés",
+                rap.patches.len()
+            )
+        });
+        println!("└ {} correctif(s) — attendu : 0", rap.patches.len());
         let _ = std::fs::remove_dir_all(&couche);
     }
 

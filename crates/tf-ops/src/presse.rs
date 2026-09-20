@@ -275,7 +275,6 @@ impl Operation for Collage<'_> {
         };
         let origine = pos.min_block();
         let mut ecrits = 0u64;
-        let mut touche = false;
 
         // Le dépack se fait UNE fois pour la section, pas par case : reposer
         // la question à chaque bloc rendrait le collage quadratique en la
@@ -304,6 +303,26 @@ impl Operation for Collage<'_> {
                     }
                     debug_assert!(in_section(lx, ly, lz));
                     let i = (ly * 256 + lz * 16 + lx).min(VOL - 1);
+
+                    // **La case porte-t-elle DÉJÀ cet état ?** On le demande à
+                    // son indice actuel, pas à la palette.
+                    //
+                    // Chercher l'état dans la palette et comparer les INDICES
+                    // est faux, et c'est l'invariant n° 4 du dépôt : la
+                    // palette ne dédoublonne pas, donc le même état y figure
+                    // parfois deux fois. Un `position()` rend la PREMIÈRE
+                    // occurrence, et une case qui pointait sur la seconde se
+                    // voyait réécrite — même valeur, indice différent, donc
+                    // des octets différents.
+                    //
+                    // Trouvé sur un vrai monde 1.20, et par rien d'autre :
+                    // reposer un extrait à l'identique produisait six
+                    // correctifs de journal pour zéro changement. Aucune
+                    // fixture n'a de palette dédoublonnée — seule une save
+                    // qu'un `//replace` a déjà traversée en a.
+                    if palette.get(idx[i] as usize) == Some(&id) {
+                        continue;
+                    }
                     let k = match palette.iter().position(|p| *p == id) {
                         Some(k) => k,
                         None => {
@@ -311,25 +330,34 @@ impl Operation for Collage<'_> {
                             palette.len() - 1
                         }
                     };
-                    if idx[i] as usize != k {
-                        ecrits += 1;
-                    }
                     idx[i] = k as u16;
-                    touche = true;
+                    ecrits += 1;
                 }
             }
         }
 
-        if !touche {
+        // **Une section que le collage n'a pas changée ne doit pas être
+        // TOUCHÉE du tout**, pas même réassignée.
+        //
+        // Annoncer l'étage bloc fait passer la section par `section_edits`,
+        // qui la ré-encode pour la comparer. Or le ré-encodage ne reproduit
+        // pas toujours les octets d'origine : une propriété d'état que le
+        // fichier écrit dans un autre ordre ressort normalisée, et les octets
+        // diffèrent alors que le CONTENU est identique.
+        //
+        // Mesuré sur un vrai monde 1.20 : reposer un extrait à sa propre
+        // place produisait six correctifs de journal pour zéro changement. Une
+        // fixture ne pouvait pas le montrer — elle écrit ses propriétés dans
+        // l'ordre où le décodeur les relit.
+        if ecrits == 0 {
             return Rapport::RIEN;
         }
-        // Ne repacker que si la palette a bougé OU si des cases ont changé :
-        // `section_edits` compare les octets de toute façon, mais repacker
-        // pour rien coûte le dépack qu'on vient de payer.
+        debug_assert!(
+            palette.len() >= avant_palette,
+            "une palette ne rétrécit pas ici"
+        );
         section.palette = palette;
-        if ecrits > 0 || section.palette.len() != avant_palette {
-            section.repack(&idx);
-        }
+        section.repack(&idx);
         Rapport {
             etage: Etage::Bloc,
             blocs: self.compter.then_some(ecrits),

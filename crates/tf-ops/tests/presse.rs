@@ -265,3 +265,139 @@ fn la_case_et_le_point_atterrissent_au_meme_endroit() {
         }
     }
 }
+
+// ── ce qu'un collage ne doit PAS faire ──────────────────────────────────────
+
+use tf_anvil::section::bits_for;
+use tf_anvil::{pack, Packing, Section};
+use tf_ops::plan::{Etage, Operation};
+use tf_ops::Collage;
+use tf_world::coords::{BBox, BlockPos, SectionPos};
+
+/// Une section bâtie à la main, palette et indices compris.
+fn section(palette: Vec<StateId>, idx: &[u16]) -> Section {
+    let bits = bits_for(palette.len());
+    let data = if palette.len() <= 1 {
+        Vec::new()
+    } else {
+        pack(idx, bits as usize, Packing::NoStraddle)
+    };
+    Section {
+        y: 0,
+        palette,
+        bits,
+        data: data.into_boxed_slice(),
+        packing: Packing::NoStraddle,
+    }
+}
+
+fn toute_la_section() -> BBox {
+    BBox::new(
+        BlockPos { x: 0, y: 0, z: 0 },
+        BlockPos {
+            x: 15,
+            y: 15,
+            z: 15,
+        },
+    )
+}
+
+/// **Une section que le collage ne change pas ne doit pas être TOUCHÉE.**
+///
+/// Annoncer l'étage bloc la ferait passer par `section_edits`, qui la
+/// ré-encode pour la comparer — et le ré-encodage ne reproduit pas toujours
+/// les octets d'origine : une propriété d'état écrite dans un autre ordre
+/// par le jeu ressort normalisée.
+///
+/// Mesuré sur un vrai monde 1.20 : reposer un extrait à sa propre place
+/// produisait six correctifs de journal pour zéro changement, et le collage
+/// prenait 19 ms au lieu de 5.
+#[test]
+fn un_collage_qui_ne_change_rien_annonce_rien() {
+    let mut i = Interner::new();
+    let pierre = i.intern("minecraft:stone");
+    let air = i.intern("minecraft:air");
+    let mut s = section(vec![pierre], &[0; 4096]);
+    let avant = s.clone();
+
+    let p = Presse::uniforme([16, 16, 16], pierre);
+    let c = Collage {
+        presse: &p,
+        coin: BlockPos { x: 0, y: 0, z: 0 },
+        avec_air: true,
+        air,
+        compter: true,
+    };
+    let r = c.appliquer(&mut s, &toute_la_section(), SectionPos::new(0, 0, 0));
+
+    assert_eq!(r.etage, Etage::Rien, "rien n'a changé, il faut le dire");
+    // `Rapport::RIEN` annonce zéro bloc, pas « non compté » : rien n'a changé
+    // et c'est un fait, pas une absence de mesure.
+    assert_eq!(r.blocs, Some(0), "zéro bloc changé");
+    assert_eq!(s, avant, "la section doit être INTACTE, pas réassignée");
+}
+
+/// **La palette ne dédoublonne pas** — invariant n° 4 — et une case qui pointe
+/// sur la SECONDE occurrence d'un état ne doit pas être réécrite vers la
+/// première.
+///
+/// Même valeur, indice différent, donc des octets différents : un correctif de
+/// journal pour rien, et un chunk marqué modifié à tort. Le doublon n'est pas
+/// théorique, c'est l'étage palette qui le crée — un monde qu'un `//replace` a
+/// traversé en est plein.
+#[test]
+fn une_case_sur_la_seconde_occurrence_d_un_etat_n_est_pas_reecrite() {
+    let mut i = Interner::new();
+    let pierre = i.intern("minecraft:stone");
+    let terre = i.intern("minecraft:dirt");
+    let air = i.intern("minecraft:air");
+
+    // `pierre` en 0 ET en 2 : exactement ce que l'étage palette produit.
+    let mut idx = [1u16; 4096];
+    idx[0] = 2; // une case sur la SECONDE occurrence
+    let mut s = section(vec![pierre, terre, pierre], &idx);
+    let avant = s.clone();
+
+    // On colle `pierre` sur cette seule case : elle l'a déjà.
+    let mut p = Presse::uniforme([1, 1, 1], pierre);
+    p.taille = [1, 1, 1];
+    let c = Collage {
+        presse: &p,
+        coin: BlockPos { x: 0, y: 0, z: 0 },
+        avec_air: true,
+        air,
+        compter: true,
+    };
+    let sel = BBox::new(BlockPos { x: 0, y: 0, z: 0 }, BlockPos { x: 0, y: 0, z: 0 });
+    let r = c.appliquer(&mut s, &sel, SectionPos::new(0, 0, 0));
+
+    assert_eq!(r.etage, Etage::Rien, "la case porte déjà cet état");
+    assert_eq!(s, avant, "ni l'indice ni la palette ne doivent bouger");
+}
+
+/// Et le pendant : un collage qui change VRAIMENT quelque chose le dit, et
+/// compte juste.
+#[test]
+fn un_collage_qui_change_quelque_chose_le_compte() {
+    let mut i = Interner::new();
+    let pierre = i.intern("minecraft:stone");
+    let terre = i.intern("minecraft:dirt");
+    let air = i.intern("minecraft:air");
+    let mut s = section(vec![pierre], &[0; 4096]);
+
+    // Une colonne de 16 cases de terre.
+    let p = Presse::uniforme([1, 16, 1], terre);
+    let c = Collage {
+        presse: &p,
+        coin: BlockPos { x: 3, y: 0, z: 5 },
+        avec_air: true,
+        air,
+        compter: true,
+    };
+    let r = c.appliquer(&mut s, &c.bornes(), SectionPos::new(0, 0, 0));
+
+    assert_eq!(r.etage, Etage::Bloc);
+    assert_eq!(r.blocs, Some(16), "seize cases changées, pas une de plus");
+    assert_eq!(s.get(3, 0, 5), Some(terre));
+    assert_eq!(s.get(4, 0, 5), Some(pierre), "la voisine ne bouge pas");
+}
