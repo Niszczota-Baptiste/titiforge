@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (486 tests aujourd'hui)
+cargo test            # tous les crates (497 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -243,6 +243,7 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,3
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20 --creux 2
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,31,-21,31" --poser minecraft:stone --murs 1
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,255,60,255" --naturaliser
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -282,7 +283,8 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
-               //move ✅ · //stack ✅ · formes ✅ · lissage, biomes à venir
+               //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
+               //naturalize ✅ · lissage, creuser, biomes à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -844,6 +846,36 @@ propres à ce dépôt.
   `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
   serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
   le centre exact, et c'est écrit explicitement.
+- **Une opération qui lit HORS de sa section ne peut pas être une opération de
+  section.** « Où est la surface » est une propriété de la COLONNE : décidée
+  section par section, la naturalisation poserait une bande d'herbe tous les
+  seize blocs, au milieu de chaque falaise — régulièrement, donc visiblement,
+  et sans que rien ne dise pourquoi. D'où `Portee` : l'opération DÉCLARE ce
+  qu'elle lit, `edition.rs` lui donne la vue correspondante. Trop petite, elle
+  lit de l'air ; trop grande, elle décode un chunk entier pour trois blocs —
+  c'est `PORTEE` d'`ExeWorldEdit`, avec la même raison d'être.
+- **« Pas de section ici » n'est pas « c'est de l'air », troisième fois.**
+  `Colonnes::get` rend `None` là où le chunk ne porte rien. Rendre l'air
+  ferait écrire de la pierre dans le vide, et le piège `cold_read` a déjà été
+  payé deux fois sous d'autres formes.
+- **Un `[usize; 3]` invite à échanger des unités.** Le témoin de coffre du
+  chemin par colonne porte x et z LOCAUX et y MONDE ; écrits dans un tableau
+  de trois nombres du même type, ils se sont échangés à la première écriture.
+  Le compilateur l'a attrapé cette fois — un `struct` aux champs nommés fait
+  qu'il n'y avait rien à attraper.
+- **La documentation et le code peuvent se contredire sans qu'un test s'en
+  aperçoive.** Le commentaire de `Naturaliser` disait « tout sauf l'air » et
+  le constructeur posait `Masque::Tout`, ce qui aurait rempli le CIEL de
+  pierre. Aucun test ne les départageait : ils comptaient tous des cases sans
+  regarder LESQUELLES. Le test qui manquait tient en une ligne — le ciel doit
+  rester du ciel.
+- **L'idempotence ne prouve pas l'invariant n° 4.** Reposer une opération deux
+  fois ne montre rien sur une palette dédoublonnée : à la seconde passe,
+  toutes les cases pointent déjà sur la première occurrence. C'est la PREMIÈRE
+  qu'il faut regarder — et comme elle écrit légitimement par ailleurs, la
+  propriété se dit sur le COMPTE : ce que l'opération annonce doit être la
+  différence mesurée case par case. Mesuré par mutation : 16 640 annoncés
+  contre 1 848 réels.
 - **Un branchement par bloc coûte, même parfaitement prédit.** Le test de
   forme dans la boucle de l'étage bloc était un booléen INVARIANT — le
   processeur le prédit à coup sûr — et il coûtait quand même **5,9 %** sur

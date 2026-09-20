@@ -37,6 +37,7 @@ use tf_world::journal::{ChunkPatch, Cible};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
+use crate::colonnes::{Colonnes, Portee};
 use crate::plan::{Etage, Operation};
 use crate::presse::Presse;
 
@@ -47,6 +48,12 @@ pub struct RapportRegion {
     pub patches: Vec<ChunkPatch>,
     /// Combien de sections sont passées par chaque étage, dans l'ordre
     /// `rien`, `section`, `palette`, `bloc`.
+    ///
+    /// **Une opération de portée `Colonne` compte des CHUNKS, pas des
+    /// sections** : elle décide pour le chunk entier d'un seul mouvement, et
+    /// lui inventer un verdict par section dirait quelque chose qu'elle n'a
+    /// pas calculé. Le total renseigne donc sur des unités différentes selon
+    /// la portée — mieux vaut le dire que de faire croire à une comparaison.
     ///
     /// Public et rendu d'office : le prototype a annoncé une fois un chemin
     /// rapide que la mesure a démenti. Un rapport qui ne dit pas par où c'est
@@ -234,49 +241,96 @@ fn un_chunk(
     let habitees = !balayage.entites.est_vide();
     let mut orphelines = vec![false; balayage.entites.entrees.len()];
 
-    for sc in &balayage.sections {
-        let spos = SectionPos {
-            x: t.cpos.x,
-            y: sc.y as i32,
-            z: t.cpos.z,
-        };
-        if sel.clip_to_section(spos).is_none() {
-            continue;
+    // ── La PORTÉE décide de la forme du travail.
+    //
+    // `Section` — le défaut — traite une section à la fois et garde les trois
+    // étages. `Colonne` décode le chunk d'un coup, parce que « où est la
+    // surface » est une propriété de la colonne et qu'une section ne peut pas
+    // y répondre seule : la supposer poserait une bande d'herbe tous les
+    // seize blocs, régulièrement, au milieu de chaque falaise.
+    let portee = op.portee();
+    if portee == Portee::Colonne {
+        let mut prises: Vec<(usize, tf_anvil::Section)> = Vec::new();
+        for (rang, sc) in balayage.sections.iter().enumerate() {
+            let spos = SectionPos::new(t.cpos.x, sc.y as i32, t.cpos.z);
+            if sel.clip_to_section(spos).is_none() {
+                continue;
+            }
+            if let Some(s) = decode_section(&avant, &balayage, sc, interner)? {
+                prises.push((rang, s));
+            }
         }
-        let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
-            continue;
-        };
-        // Les cases habitées de CETTE section, telles qu'elles sont avant.
-        // Rien n'est alloué pour un chunk sans coffre, c'est-à-dire presque
-        // tous.
+        let mut colonnes = Colonnes::depuis(prises);
+        // Le témoin des coffres, pris sur la vue AVANT l'opération : même
+        // critère que le chemin par section, une case qui change d'état
+        // emporte l'entité qui l'habitait.
         let temoins = if habitees {
-            temoins_de(&balayage.entites.entrees, &section, spos)
+            temoins_colonnes(&balayage.entites.entrees, &colonnes, t.cpos)
         } else {
             Vec::new()
         };
-        let r = op.appliquer(&mut section, sel, spos);
-        for (i, [lx, ly, lz], etat) in temoins {
-            if section.get(lx, ly, lz) != etat {
-                orphelines[i] = true;
+        let r = op.appliquer_colonnes(&mut colonnes, sel, t.cpos);
+        for t in &temoins {
+            if colonnes.get(t.lx, t.wy, t.lz) != t.etat {
+                orphelines[t.rang] = true;
             }
         }
-        fait.etages[match r.etage {
-            Etage::Rien => 0,
-            Etage::Section => 1,
-            Etage::Palette => 2,
-            Etage::Bloc => 3,
-        }] += 1;
+        fait.etages[rang_etage(r.etage)] += 1;
         if let (Some(c), Some(n)) = (fait.blocs.as_mut(), r.blocs) {
             *c += n;
         }
         fait.bornes = unir(fait.bornes, r.bornes);
-        if r.etage == Etage::Rien {
-            continue;
+        for (rang, section) in colonnes.finir() {
+            edits.extend(section_edits(
+                &avant,
+                &section,
+                &balayage.sections[rang],
+                interner,
+            )?);
         }
-        // `section_edits` compare ce qu'il va écrire à ce qui est DÉJÀ là : une
-        // section que l'opération n'a pas vraiment changée ne produit aucune
-        // édition, donc aucune entrée de journal vide.
-        edits.extend(section_edits(&avant, &section, sc, interner)?);
+    }
+
+    // Le chemin ordinaire : une section à la fois, et les trois étages.
+    if portee == Portee::Section {
+        for sc in &balayage.sections {
+            let spos = SectionPos {
+                x: t.cpos.x,
+                y: sc.y as i32,
+                z: t.cpos.z,
+            };
+            if sel.clip_to_section(spos).is_none() {
+                continue;
+            }
+            let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
+                continue;
+            };
+            // Les cases habitées de CETTE section, telles qu'elles sont avant.
+            // Rien n'est alloué pour un chunk sans coffre, c'est-à-dire presque
+            // tous.
+            let temoins = if habitees {
+                temoins_de(&balayage.entites.entrees, &section, spos)
+            } else {
+                Vec::new()
+            };
+            let r = op.appliquer(&mut section, sel, spos);
+            for (i, [lx, ly, lz], etat) in temoins {
+                if section.get(lx, ly, lz) != etat {
+                    orphelines[i] = true;
+                }
+            }
+            fait.etages[rang_etage(r.etage)] += 1;
+            if let (Some(c), Some(n)) = (fait.blocs.as_mut(), r.blocs) {
+                *c += n;
+            }
+            fait.bornes = unir(fait.bornes, r.bornes);
+            if r.etage == Etage::Rien {
+                continue;
+            }
+            // `section_edits` compare ce qu'il va écrire à ce qui est DÉJÀ là : une
+            // section que l'opération n'a pas vraiment changée ne produit aucune
+            // édition, donc aucune entrée de journal vide.
+            edits.extend(section_edits(&avant, &section, sc, interner)?);
+        }
     }
 
     if !posees.is_empty() || orphelines.contains(&true) {
@@ -297,6 +351,57 @@ fn un_chunk(
         fait.ecrit = Some((patch, deflate_level(&apres, t.compression, NIVEAU_STAGING)?));
     }
     Ok(fait)
+}
+
+/// Le rang d'un étage dans `RapportRegion::etages`.
+fn rang_etage(e: Etage) -> usize {
+    match e {
+        Etage::Rien => 0,
+        Etage::Section => 1,
+        Etage::Palette => 2,
+        Etage::Bloc => 3,
+    }
+}
+
+/// Une case habitée qu'on surveille, dans le repère de `Colonnes`.
+///
+/// Un `struct` plutôt qu'un `[usize; 3]` : **x et z sont LOCAUX, y est
+/// MONDE**, et trois nombres du même type dans un tableau invitent à les
+/// échanger. Le compilateur a d'ailleurs attrapé l'échange à la première
+/// écriture.
+struct Temoin {
+    /// Rang de l'entrée dans la liste du chunk.
+    rang: usize,
+    lx: usize,
+    wy: i32,
+    lz: usize,
+    etat: Option<StateId>,
+}
+
+/// Le même témoin que `temoins_de`, pris sur une vue par colonne.
+fn temoins_colonnes(
+    entrees: &[tf_anvil::EntiteReperee],
+    c: &Colonnes,
+    cpos: ChunkPos,
+) -> Vec<Temoin> {
+    let mut out = Vec::new();
+    for (rang, e) in entrees.iter().enumerate() {
+        let Some(a) = e.ancrage else { continue };
+        // Division PLANCHER, comme partout : le bloc −1 est dans le chunk −1.
+        if [a.case[0] >> 4, a.case[2] >> 4] != [cpos.x, cpos.z] {
+            continue;
+        }
+        let lx = a.case[0].rem_euclid(16) as usize;
+        let lz = a.case[2].rem_euclid(16) as usize;
+        out.push(Temoin {
+            rang,
+            lx,
+            wy: a.case[1],
+            lz,
+            etat: c.get(lx, a.case[1], lz),
+        });
+    }
+    out
 }
 
 /// L'état des cases habitées d'une section, avec de quoi les retrouver.

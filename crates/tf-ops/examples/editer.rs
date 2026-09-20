@@ -30,7 +30,7 @@ use tf_anvil::Interner;
 use tf_blocks::Transfo;
 use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
-use tf_ops::{Collage, Forme, Masque, Motif, Pas};
+use tf_ops::{Collage, Forme, Masque, Motif, Naturaliser, Pas};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -59,6 +59,9 @@ struct Args {
     volume: Volume,
     creux: Option<f64>,
     renversee: bool,
+    /// Surface, sous-sol, roche d'une naturalisation.
+    couches: [String; 3],
+    profondeur: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,6 +98,8 @@ enum Op {
         fois: u32,
         dir: [i32; 3],
     },
+    /// `//naturalize` : refaire la stratigraphie, colonne par colonne.
+    Naturaliser,
 }
 
 fn usage() -> ! {
@@ -115,6 +120,11 @@ fn usage() -> ! {
                              (+X = Est, +Z = Sud, +Y = Haut)
   --remplir <bloc>           ce qui reste à la place d'un --deplacer
                              (défaut : minecraft:air)
+  --naturaliser              //naturalize : la 1re couche solide de chaque
+                             colonne devient de l'herbe, les 3 suivantes de la
+                             terre, le reste de la pierre
+  --couches <s> <ss> <r>     les trois blocs (défaut grass_block, dirt, stone)
+  --profondeur <n>           l'épaisseur du sous-sol (défaut 3)
   --sphere <rayon>           //sphere : restreint l'opération à une sphère
   --cylindre <rayon> <haut>  //cyl, axe vertical
   --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
@@ -169,6 +179,12 @@ fn lire_args() -> Args {
         volume: Volume::Aucun,
         creux: None,
         renversee: false,
+        couches: [
+            "minecraft:grass_block".to_string(),
+            "minecraft:dirt".to_string(),
+            "minecraft:stone".to_string(),
+        ],
+        profondeur: 3,
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -270,6 +286,15 @@ fn lire_args() -> Args {
                 args.op = Some(Op::Empiler { fois, dir });
             }
             "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
+            "--naturaliser" => args.op = Some(Op::Naturaliser),
+            "--couches" => {
+                args.couches = [
+                    a.next().unwrap_or_else(|| usage()),
+                    a.next().unwrap_or_else(|| usage()),
+                    a.next().unwrap_or_else(|| usage()),
+                ]
+            }
+            "--profondeur" => args.profondeur = nombre(a.next()) as u32,
             "--sphere" => args.volume = Volume::Sphere(nombre(a.next())),
             "--cylindre" => args.volume = Volume::Cylindre(nombre(a.next()), nombre(a.next())),
             "--pyramide" => args.volume = Volume::Pyramide(nombre(a.next()), nombre(a.next())),
@@ -465,7 +490,7 @@ fn main() {
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
         println!(
             "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
-             --copier-vers / --deplacer / --empiler)"
+             --copier-vers / --deplacer / --empiler / --naturaliser)"
         );
         return;
     };
@@ -484,7 +509,10 @@ fn main() {
         ),
         // Ces trois-là se construisent plus bas : elles ont besoin du staging
         // pour lire ce qu'elles vont reposer.
-        Op::CopierVers { .. } | Op::Deplacer { .. } | Op::Empiler { .. } => {
+        // Celles-là ne sont pas des plans : elles se construisent plus bas,
+        // parce qu'elles demandent le staging ou une autre forme de travail
+        // que « un masque et un motif ».
+        Op::CopierVers { .. } | Op::Deplacer { .. } | Op::Empiler { .. } | Op::Naturaliser => {
             Plan::nouveau(Masque::Tout, Motif::Garder)
         }
     }
@@ -685,6 +713,21 @@ fn main() {
                 *fois,
                 &mut interner,
             )
+        }
+        Op::Naturaliser => {
+            let mut n = Naturaliser::nouveau(
+                interner.intern(&args.couches[0]),
+                interner.intern(&args.couches[1]),
+                interner.intern(&args.couches[2]),
+                air,
+            );
+            n.profondeur = args.profondeur;
+            n.compter = args.compter;
+            println!(
+                "naturalisation : {} puis {} × {} puis {}",
+                args.couches[0], args.couches[1], args.profondeur, args.couches[2]
+            );
+            appliquer(&staging, &args.dim, Folder::Region, &sel, &n, &interner)
         }
         _ => appliquer(
             &staging,

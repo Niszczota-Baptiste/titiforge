@@ -36,6 +36,7 @@ use tf_anvil::section::VOL;
 use tf_anvil::{Section, StateId};
 use tf_world::coords::{BBox, ChunkPos, LocalBox, SectionPos};
 
+use crate::colonnes::{Colonnes, Portee};
 use crate::forme::{Couverture, Forme};
 use crate::masque::Masque;
 use crate::motif::Motif;
@@ -147,6 +148,28 @@ pub trait Operation: Sync {
     fn entites_posees(&self, chunk: ChunkPos) -> Vec<Entite> {
         let _ = chunk;
         Vec::new()
+    }
+
+    /// Ce que l'opération a besoin de LIRE pour décider.
+    ///
+    /// `Section` par défaut, et c'est le seul qui donne accès aux étages
+    /// `Section` et `Palette` : ils supposent qu'une section se décide seule.
+    /// Déclarer `Colonne` fait décoder tout le chunk d'un coup et ferme les
+    /// chemins rapides — à ne demander que pour ce qui en a vraiment besoin.
+    fn portee(&self) -> Portee {
+        Portee::Section
+    }
+
+    /// Appliquée à tout un chunk, quand la portée l'exige.
+    ///
+    /// Jamais appelée pour une portée `Section` : c'est `edition.rs` qui
+    /// choisit d'après `portee()`. Le défaut PANIQUE plutôt que de ne rien
+    /// faire — déclarer une portée qu'on n'implémente pas est une faute
+    /// d'écriture, et une opération qui ne ferait silencieusement rien serait
+    /// exactement le genre d'absence qui ne se voit pas.
+    fn appliquer_colonnes(&self, c: &mut Colonnes, sel: &BBox, chunk: ChunkPos) -> Rapport {
+        let _ = (c, sel, chunk);
+        unreachable!("portée `Colonne` déclarée sans `appliquer_colonnes`")
     }
 }
 

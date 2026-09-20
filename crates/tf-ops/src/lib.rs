@@ -13,18 +13,22 @@
 
 #![forbid(unsafe_code)]
 
+pub mod colonnes;
 pub mod edition;
 pub mod forme;
 pub mod hash;
 pub mod masque;
 pub mod motif;
+pub mod naturaliser;
 pub mod plan;
 pub mod presse;
 
+pub use colonnes::{Colonnes, Portee};
 pub use edition::{deplacer, empiler, Pas};
 pub use forme::{Couverture, Forme};
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};
+pub use naturaliser::Naturaliser;
 pub use plan::{Etage, Operation, Plan, Rapport};
 pub use presse::{Collage, Presse, TransfoBoite, Transforme};

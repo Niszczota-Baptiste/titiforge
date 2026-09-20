@@ -177,7 +177,9 @@ staging, journal. Manque ce qui DÉPLACE.
 | Déplacer (`//move`), empiler (`//stack`) | ✅ — composées de copier/effacer/coller, sous **une seule** entrée de journal |
 | Formes : sphère, cylindre, pyramide | ✅ — une forme répond par SECTION avant de répondre par case, donc le cœur d'une sphère garde l'étage palette |
 | Murs et faces (`//walls`, `//faces`) | ✅ — un pavé moins un pavé plus petit ; rien de neuf à tenir juste |
-| Lissage, naturalisation, creuser | ⬜ — les trois lisent HORS de leur section (la colonne, le voisin) : il leur faut une couture au niveau du chunk, que le trait `Operation` n'a pas encore |
+| **Portée d'une opération** (`Portee::Colonne`) | ✅ — une opération déclare ce qu'elle lit, `edition.rs` lui donne la vue correspondante |
+| Naturalisation (`//naturalize`) | ✅ — première opération à portée `Colonne` : « où est la surface » ne se décide pas section par section |
+| Lissage, creuser | ⬜ — le lissage lit le voisin d'à CÔTÉ, donc au-delà du chunk ; creuser lit tout le volume. Il leur faut une portée de plus, et elle se mesurera avant d'être écrite |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes (`//setbiome`, et la lecture pour la teinte) | ⬜ |
 
