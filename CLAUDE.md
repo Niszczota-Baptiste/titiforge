@@ -843,6 +843,20 @@ propres à ce dépôt.
   `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
   serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
   le centre exact, et c'est écrit explicitement.
+- **Un branchement par bloc coûte, même parfaitement prédit.** Le test de
+  forme dans la boucle de l'étage bloc était un booléen INVARIANT — le
+  processeur le prédit à coup sûr — et il coûtait quand même **5,9 %** sur
+  cent millions de cases. Passé en paramètre de COMPILATION
+  (`etage_bloc::<BORDE>`), la boucle sans forme ne porte plus une instruction
+  de plus qu'avant que les formes existent : **−2,2 %**, c'est-à-dire la
+  parité au bruit près. Corollaire : une fonction appelée une fois par SECTION
+  se mesure aussi — `Forme::couverture` laissée hors ligne coûtait 11,9 % à
+  `//set`, dont l'étage entier est en O(1).
+- **Un A/B qui `git stash` entre deux exécutions mesure aussi le
+  rebuild.** Et il laisse l'arbre à moitié rangé si on l'interrompt. Deux
+  binaires construits UNE fois — l'un depuis un `git worktree` sur le commit
+  d'avant — puis alternés, c'est le même protocole en plus sûr et en plus
+  rapide. C'est comme ça que le +11,9 % a été vu, puis corrigé, puis vérifié.
 - **Les correctifs d'une entrée de journal s'annulent À L'ENVERS.** Chacun est
   gardé par l'empreinte de l'état qu'il attend. Tant qu'une opération ne
   touchait chaque chunk qu'une fois, l'ordre n'avait aucune importance et le

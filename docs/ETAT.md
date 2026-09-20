@@ -253,6 +253,31 @@ Les trois sont EXACTS, et c'est le test qui le dit : il compare le verdict aux
 autour. Un « Dedans » faux écrirait hors de la forme, un « Dehors » faux y
 laisserait un trou, et ni l'un ni l'autre ne se voit sur une capture d'écran.
 
+Le volume est croisé avec un compteur INDÉPENDANT : une sphère de rayon 20
+écrit **36 137** blocs et sa coque d'épaisseur 2 en écrit **9 392** —
+exactement ce qu'un parcours naïf compte, au bloc près.
+
+**Ce que les formes coûtent aux opérations qui n'en ont pas.** Mesuré binaire
+contre binaire, alternés, médiane de 3 — pas de `git stash` entre deux
+exécutions, les deux binaires sont construits une fois pour toutes :
+
+| | avant | après | |
+|---|---:|---:|---|
+| `//replace` cible absente | 1,87 ms | 1,95 ms | +4,5 % |
+| `//set` uniforme | 1,75 ms | 1,94 ms | +10,6 % |
+| mélange, étage bloc | 1 217 ms | **1 190 ms** | **−2,2 %** |
+
+L'étage BLOC — le seul qui compte à grande échelle — est à parité, et ça a
+demandé deux corrections : `couverture` en ligne (le cas `Boite` se réduit à
+un test de discriminant) et le test de forme passé en paramètre de
+COMPILATION (`etage_bloc::<BORDE>`). Un branchement par bloc, même
+parfaitement prédit, coûtait 5,9 % sur cent millions de cases.
+
+Les deux premiers sont la répartition d'étage, et **elle pèse 0,17 % d'une
+opération réelle** — 1,35 ms sur 800, le reste étant la recompression.
+Continuer à les chasser serait le piège n° 1 du dépôt, pour la troisième
+fois.
+
 ### Les coffres suivent les blocs, et ça ne coûte rien
 
 ```bash

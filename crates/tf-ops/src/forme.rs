@@ -290,6 +290,14 @@ impl Forme {
     /// 4 096 cases. Une réponse « Dedans » fausse écrirait hors de la forme,
     /// une « Dehors » fausse laisserait un trou — et ni l'une ni l'autre ne
     /// se verrait sur une capture d'écran.
+    ///
+    /// **`#[inline]` n'est pas décoratif ici.** L'étage section est en O(1) :
+    /// son coût entier est un appel par section, 24 576 sur une région
+    /// pleine. Laissée hors ligne, cette fonction — dont le corps contient
+    /// tout le calcul des cinq variantes — coûtait **+11,9 %** à `//set`,
+    /// mesuré binaire contre binaire. En ligne, le cas `Boite` se réduit à un
+    /// test de discriminant que l'appelant peut sortir de sa boucle.
+    #[inline]
     pub fn couverture(&self, pos: SectionPos) -> Couverture {
         // Le cas par défaut avant tout calcul : `Forme::Boite` ne doit même
         // pas payer la conversion de la section en coordonnées monde.
@@ -300,6 +308,9 @@ impl Forme {
         self.couverture_boite([o.x, o.y, o.z], [o.x + 15, o.y + 15, o.z + 15])
     }
 
+    /// Le vrai calcul, gardé HORS LIGNE : c'est lui qui est gros, et il ne
+    /// sert qu'aux sections d'une forme réelle.
+    #[inline(never)]
     fn couverture_boite(&self, lo: [i32; 3], hi: [i32; 3]) -> Couverture {
         match self {
             Forme::Boite => Couverture::Dedans,

@@ -209,47 +209,55 @@ impl Plan {
     /// lieu de le supposer. C'est exactement l'erreur que le prototype a faite
     /// une fois, et la mesure a dit « 0 sections rapides sur 9 216 ».
     pub fn etage(&self, section: &Section, sel: &BBox, pos: SectionPos) -> Etage {
-        self.etage_avec(section, sel, pos, self.forme.couverture(pos))
+        self.etage_et_couverture(section, sel, pos).0
     }
 
-    /// Le même, la couverture déjà connue.
+    /// L'étage ET ce que la forme a dit de la section.
     ///
-    /// `appliquer` la calcule UNE fois et la passe ici puis à l'étage bloc :
-    /// la demander deux fois doublait le seul coût que les formes ajoutent
-    /// aux opérations qui n'en ont pas.
-    fn etage_avec(
+    /// Les deux sortent ensemble parce qu'ils se calculent ensemble :
+    /// `appliquer` a besoin des deux, et les demander séparément payait deux
+    /// fois le seul coût que les formes ajoutent.
+    ///
+    /// **L'ordre des tests est un choix de performance.** La forme n'est
+    /// consultée qu'APRÈS le masque : sur un `//replace` visant un bloc rare,
+    /// 999 sections sur 1 000 sont écartées par la palette, et leur faire
+    /// calculer une couverture qu'on n'utilisera pas coûtait 6 % du
+    /// `cible_absente`. Ce qui ne coûte rien passe en premier.
+    fn etage_et_couverture(
         &self,
         section: &Section,
         sel: &BBox,
         pos: SectionPos,
-        couverture: Couverture,
-    ) -> Etage {
+    ) -> (Etage, Couverture) {
+        // `Dehors` en repli : l'étage `Rien` ne s'en sert pas, et c'est la
+        // valeur qui ne peut pas faire écrire par erreur.
         if self.motif.est_muet() || section.palette.is_empty() {
-            return Etage::Rien;
+            return (Etage::Rien, Couverture::Dehors);
         }
         if self.masque.n_accepte_rien(&section.palette) {
-            return Etage::Rien;
+            return (Etage::Rien, Couverture::Dehors);
         }
         // La forme répond pour les 4 096 cases d'un coup. « Dehors » est le
         // cas le plus fréquent sur une sphère — 48 % de sa boîte englobante —
         // et il évite jusqu'au parcours.
+        let couverture = self.forme.couverture(pos);
         if couverture == Couverture::Dehors {
-            return Etage::Rien;
+            return (Etage::Rien, couverture);
         }
         if !sel.covers_section(pos) || couverture == Couverture::Partielle {
-            return Etage::Bloc;
+            return (Etage::Bloc, couverture);
         }
-        match self.motif.uniforme() {
+        let etage = match self.motif.uniforme() {
             None => Etage::Bloc,
             Some(_) if self.masque.accepte_toute(&section.palette) => Etage::Section,
             Some(_) => Etage::Palette,
-        }
+        };
+        (etage, couverture)
     }
 
     /// Applique l'opération à une section.
     pub fn appliquer(&self, section: &mut Section, sel: &BBox, pos: SectionPos) -> Rapport {
-        let couverture = self.forme.couverture(pos);
-        let etage = self.etage_avec(section, sel, pos, couverture);
+        let (etage, couverture) = self.etage_et_couverture(section, sel, pos);
         match etage {
             Etage::Rien => Rapport::RIEN,
             Etage::Section => {
@@ -298,12 +306,15 @@ impl Plan {
                     Some(z) => z,
                     None => return Rapport::RIEN,
                 };
-                // Le test par bloc n'est branché que si la forme hésite :
-                // c'est un booléen INVARIANT de la boucle, donc un branchement
-                // que le processeur prédit à coup sûr, et rien du tout pour
-                // `Forme::Boite`.
-                let blocs =
-                    self.etage_bloc(section, &zone, pos, couverture == Couverture::Partielle);
+                // Le test par bloc n'existe QUE si la forme hésite. Le
+                // booléen est effacé à la compilation, pas prédit à
+                // l'exécution : un branchement par bloc, même parfaitement
+                // prédit, coûtait 5,9 % sur 100 millions de cases.
+                let blocs = if couverture == Couverture::Partielle {
+                    self.etage_bloc::<true>(section, &zone, pos)
+                } else {
+                    self.etage_bloc::<false>(section, &zone, pos)
+                };
                 Rapport {
                     etage,
                     blocs: Some(blocs),
@@ -314,12 +325,14 @@ impl Plan {
     }
 
     /// Le seul chemin qui lit chaque case. Tout le reste existe pour l'éviter.
-    fn etage_bloc(
+    /// `BORDE` dit si la forme hésite sur cette section. C'est un paramètre
+    /// de COMPILATION : la boucle sans forme ne porte alors pas une
+    /// instruction de plus qu'avant que les formes existent.
+    fn etage_bloc<const BORDE: bool>(
         &self,
         section: &mut Section,
         zone: &LocalBox,
         pos: SectionPos,
-        borde: bool,
     ) -> u64 {
         let table = self.masque.table(&section.palette);
         // **Dépacker AVANT de toucher à la palette.** `unpack` la consulte pour
@@ -353,7 +366,7 @@ impl Plan {
                     // La forme, quand elle hésite. `borde` est invariant de la
                     // boucle : pour `Forme::Boite` c'est du code mort, et pour
                     // une section entièrement dedans aussi.
-                    if borde
+                    if BORDE
                         && !self.forme.contient(
                             base[0] + x as i32,
                             base[1] + y as i32,
