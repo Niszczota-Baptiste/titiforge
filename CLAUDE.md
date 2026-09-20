@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (468 tests aujourd'hui)
+cargo test            # tous les crates (474 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -236,6 +236,9 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --remplacer min
 # copier / tourner / coller. Sans --pack, les cases bougent mais les états ne
 # sont PAS réécrits — l'outil le dit plutôt que de le laisser découvrir en jeu.
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --copier-vers "64,0,64" --tourner 90 --pack %APPDATA%\.minefield_1_18
+# //move et //stack : composées, mais UNE seule entrée de journal
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --deplacer "64,0,0"
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --empiler 5 est
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -274,7 +277,8 @@ crates/
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
-               presse-papiers ✅ · rotation/miroir ✅ · block entities ✅ · prédicats
+               presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
+               //move ✅ · //stack ✅ · formes, lissage, biomes à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -812,6 +816,17 @@ propres à ce dépôt.
   test tombe — pas par relecture. Un test vert ne dit rien tant qu'on n'a pas
   vu ce qui le fait rougir. Les `y` décroissent maintenant, et c'est écrit à
   côté de la constante.
+- **Les correctifs d'une entrée de journal s'annulent À L'ENVERS.** Chacun est
+  gardé par l'empreinte de l'état qu'il attend. Tant qu'une opération ne
+  touchait chaque chunk qu'une fois, l'ordre n'avait aucune importance et le
+  test de jonction les rejouait dans le sens d'enregistrement — juste par
+  accident. `//move` repasse sur les chunks que source et destination ont en
+  commun : le second correctif échoue alors sur `Divergence`. Le sens vit
+  maintenant dans `Entree::a_annuler` / `a_refaire` et nulle part ailleurs,
+  parce qu'un appelant qui écrirait `corrections.iter()` à la main aurait
+  raison jusqu'au jour où il aurait tort, sans prévenir. Une opération
+  composée rend ses correctifs bout à bout (`RapportRegion::absorber`) : un
+  seul `Ctrl+Z` doit défaire le déplacement entier, pas son dernier tiers.
 - **`--quick` de criterion n'est pas une mesure.** L'A/B du suivi des block
   entities annonçait **−25 %** sur le balayage, un gain qu'aucune ligne du
   changement ne pouvait expliquer. Repris en runs complets, alternés, médiane

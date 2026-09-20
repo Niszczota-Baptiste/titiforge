@@ -199,6 +199,39 @@ impl Entree {
         }
     }
 
+    /// Les correctifs dans l'ordre où il faut les appliquer pour **REFAIRE**
+    /// — celui où ils ont été enregistrés.
+    ///
+    /// Une opération peut toucher DEUX FOIS le même chunk : `//move` efface
+    /// sa source puis repose l'extrait, et les deux passes s'enregistrent dans
+    /// la MÊME entrée, parce qu'un seul `Ctrl+Z` doit défaire le déplacement
+    /// entier.
+    pub fn a_refaire(&self) -> impl Iterator<Item = &Correction> {
+        self.corrections().iter()
+    }
+
+    /// Les correctifs dans l'ordre où il faut les appliquer pour **ANNULER** :
+    /// l'inverse du précédent.
+    ///
+    /// **Ce n'est pas un détail de présentation.** Chaque correctif est gardé
+    /// par l'empreinte de l'état qu'il attend ; deux correctifs sur le même
+    /// chunk s'enchaînent, et les rejouer dans l'ordre d'enregistrement fait
+    /// échouer le second sur `Divergence`. Le sens correct est donné ici, et
+    /// une seule fois : un appelant qui écrirait `corrections.iter()` à la
+    /// main aurait raison tant qu'aucune opération ne repasse sur un chunk,
+    /// puis tort sans prévenir — c'est exactement la forme des pièges que ce
+    /// dépôt paie le plus cher.
+    pub fn a_annuler(&self) -> impl Iterator<Item = &Correction> {
+        self.corrections().iter().rev()
+    }
+
+    fn corrections(&self) -> &[Correction] {
+        match &self.genre {
+            Genre::Operation { corrections, .. } => corrections,
+            Genre::Reprise => &[],
+        }
+    }
+
     /// Régions touchées, pour savoir quoi relire avant d'annuler.
     pub fn regions(&self) -> BTreeSet<(Dimension, Folder, RegionPos)> {
         let mut out = BTreeSet::new();

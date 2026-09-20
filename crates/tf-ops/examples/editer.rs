@@ -28,9 +28,9 @@ use std::path::{Path, PathBuf};
 
 use tf_anvil::Interner;
 use tf_blocks::Transfo;
-use tf_ops::edition::{appliquer, copier};
+use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
-use tf_ops::{Collage, Masque, Motif};
+use tf_ops::{Collage, Masque, Motif, Pas};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -50,6 +50,8 @@ struct Args {
     /// de le laisser découvrir en jeu.
     pack: Option<PathBuf>,
     avec_air: bool,
+    /// Ce qui reste à la place de la source d'un `--deplacer`.
+    remplir: String,
 }
 
 enum Op {
@@ -62,6 +64,17 @@ enum Op {
     CopierVers {
         d: [i32; 3],
         transfo: Option<Transfo>,
+    },
+    /// `//move` : la source est effacée, le contenu part ailleurs.
+    Deplacer {
+        d: [i32; 3],
+    },
+    /// `//stack` : la sélection se répète, d'un PAS égal à sa propre taille
+    /// le long d'une direction. C'est ce que fait WorldEdit, et c'est ce
+    /// qu'on veut neuf fois sur dix — un mur qu'on prolonge.
+    Empiler {
+        fois: u32,
+        dir: [i32; 3],
     },
 }
 
@@ -77,6 +90,12 @@ fn usage() -> ! {
   --copier-vers \"dx,dy,dz\"   //copy puis //paste décalé de (dx, dy, dz)
   --tourner 90|180|270       tourne l'extrait avant de le poser
   --miroir x|z               le reflète
+  --deplacer \"dx,dy,dz\"     //move : déplace le contenu, la source est remplie
+  --empiler <n> <direction>  //stack : répète la sélection n fois, d'un pas égal
+                             à sa taille. est|ouest|nord|sud|haut|bas
+                             (+X = Est, +Z = Sud, +Y = Haut)
+  --remplir <bloc>           ce qui reste à la place d'un --deplacer
+                             (défaut : minecraft:air)
   --avec-air                 l'air de l'extrait écrase ce qu'il recouvre
   --pack <chemin>            le pack, l'installation ou le codex d'où DÉRIVER
                              les règles de rotation. Sans lui, les cases
@@ -118,6 +137,7 @@ fn lire_args() -> Args {
         seed: 0,
         pack: None,
         avec_air: false,
+        remplir: "minecraft:air".to_string(),
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -183,6 +203,42 @@ fn lire_args() -> Args {
                     transfo: None,
                 });
             }
+            "--deplacer" => {
+                let v: Vec<i32> = a
+                    .next()
+                    .unwrap_or_else(|| usage())
+                    .split(sep)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim().parse().unwrap_or_else(|_| usage()))
+                    .collect();
+                if v.len() != 3 {
+                    usage();
+                }
+                args.op = Some(Op::Deplacer {
+                    d: [v[0], v[1], v[2]],
+                });
+            }
+            "--empiler" => {
+                let fois = a
+                    .next()
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+                // Le repère Minecraft, en toutes lettres : +X = Est,
+                // +Z = Sud, +Y = Haut. Un « nord » qui irait vers +Z ferait
+                // empiler du mauvais côté sans qu'aucune erreur le dise.
+                let dir = match a.next().unwrap_or_else(|| usage()).as_str() {
+                    "est" | "e" => [1, 0, 0],
+                    "ouest" | "o" => [-1, 0, 0],
+                    "sud" | "s" => [0, 0, 1],
+                    "nord" | "n" => [0, 0, -1],
+                    "haut" | "h" => [0, 1, 0],
+                    "bas" | "b" => [0, -1, 0],
+                    _ => usage(),
+                };
+                args.op = Some(Op::Empiler { fois, dir });
+            }
+            "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
             "--tourner" => {
                 transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
                     "90" => Transfo::Rot90,
@@ -362,7 +418,8 @@ fn main() {
 
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
         println!(
-            "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / --copier-vers)"
+            "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
+             --copier-vers / --deplacer / --empiler)"
         );
         return;
     };
@@ -379,9 +436,11 @@ fn main() {
             Masque::Tout,
             Motif::melange(v.iter().map(|(p, b)| (*p, interner.intern(b))).collect()),
         ),
-        // Le collage se construit plus bas : il a besoin du staging pour
-        // lire ce qu'il va reposer.
-        Op::CopierVers { .. } => Plan::nouveau(Masque::Tout, Motif::Garder),
+        // Ces trois-là se construisent plus bas : elles ont besoin du staging
+        // pour lire ce qu'elles vont reposer.
+        Op::CopierVers { .. } | Op::Deplacer { .. } | Op::Empiler { .. } => {
+            Plan::nouveau(Masque::Tout, Motif::Garder)
+        }
     }
     .avec_seed(args.seed);
     let plan = if args.compter {
@@ -496,15 +555,52 @@ fn main() {
         None => (&plan, sel),
     };
 
+    let remplissage = interner.intern(&args.remplir);
+    let un_pas = |d: [i32; 3]| Pas {
+        d,
+        avec_air: args.avec_air,
+        air,
+        compter: args.compter,
+    };
+
     let t0 = std::time::Instant::now();
-    let rap = match appliquer(
-        &staging,
-        &args.dim,
-        Folder::Region,
-        &portee,
-        operation,
-        &interner,
-    ) {
+    // `deplacer` et `empiler` sont COMPOSÉES : elles enchaînent plusieurs
+    // passes et rendent leurs correctifs bout à bout, pour une seule entrée
+    // de journal. Un `Ctrl+Z` défera le déplacement entier.
+    let fait = match &op {
+        Op::Deplacer { d } => deplacer(
+            &staging,
+            &args.dim,
+            Folder::Region,
+            &sel,
+            un_pas(*d),
+            remplissage,
+            &mut interner,
+        ),
+        Op::Empiler { fois, dir } => {
+            let (sx, sy, sz) = sel.size();
+            let d = [dir[0] * sx as i32, dir[1] * sy as i32, dir[2] * sz as i32];
+            println!("pas : {},{},{} · {fois} fois", d[0], d[1], d[2]);
+            empiler(
+                &staging,
+                &args.dim,
+                Folder::Region,
+                &sel,
+                un_pas(d),
+                *fois,
+                &mut interner,
+            )
+        }
+        _ => appliquer(
+            &staging,
+            &args.dim,
+            Folder::Region,
+            &portee,
+            operation,
+            &interner,
+        ),
+    };
+    let rap = match fait {
         Ok(r) => r,
         Err(e) => {
             eprintln!("opération refusée : {e}");

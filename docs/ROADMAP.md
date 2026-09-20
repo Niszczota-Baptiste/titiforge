@@ -174,7 +174,7 @@ staging, journal. Manque ce qui DÉPLACE.
 | Masques `et` / `ou` / `non` / parmi | ✅ |
 | **Rotation et miroir** | ✅ — appliquées sur la PALETTE de l'extrait, jamais par bloc ; ce que la règle ne sait pas transformer est laissé tel quel et NOMMÉ |
 | Copier / coller | ✅ — `copier` est la seule opération qui n'écrit rien ; `Collage` est à l'étage bloc par nature et ne paie que son extrait |
-| Déplacer (`//move`), empiler (`//stack`) | ⬜ — le collage est là, il manque l'effacement de la source et la répétition |
+| Déplacer (`//move`), empiler (`//stack`) | ✅ — composées de copier/effacer/coller, sous **une seule** entrée de journal |
 | Formes : sphère, cylindre, pyramide | ⬜ |
 | Lissage, naturalisation, murs, creuser | ⬜ |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
@@ -188,7 +188,8 @@ mesurée.
 > les escaliers regardent au bon endroit, les coffres ont gardé leur contenu,
 > et un seul `Ctrl+Z` défait l'ensemble.
 >
-> Atteinte pour la rotation et les coffres, en ligne de commande :
+> Atteinte pour la rotation, les coffres, `//move` et `//stack`, en ligne de
+> commande :
 > `editer --sel "…" --copier-vers "64,0,64" --tourner 90 --pack <installation>`.
 > Le contrôle qui compte est le non-changement : copier, tourner quatre fois,
 > reposer à sa propre place doit rendre **zéro chunk modifié** — vérifié sur le

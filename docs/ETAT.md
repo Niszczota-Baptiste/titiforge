@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **468**, zéro échec |
+| Tests | **474**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-468 tests, répartis par ce qu'ils PROUVENT :
+474 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -50,6 +50,7 @@ cargo test --workspace
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 57 | les trois étages, la jonction, le presse-papiers, le hachage par plan |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
+| `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 17 | **au pixel** : ombrage, teinte, dalle, alignement WGSL |
@@ -63,6 +64,13 @@ Trois propriétés valent d'être nommées :
   (`TF_PACK=…`) et le `.mca` du moteur tiers (`TF_MCA_TIERS=…`). Un test qu'on
   ne peut pas jouer sans une donnée privée ne doit pas casser la suite de
   quelqu'un qui ne l'a pas, mais il doit EXISTER.
+- **Deux passes sur le même chunk s'annulent À L'ENVERS.** Chaque correctif
+  est gardé par l'empreinte de l'état qu'il attend ; `//move` repasse sur les
+  chunks que source et destination ont en commun, et rejouer ses correctifs
+  dans l'ordre d'enregistrement fait échouer le second sur `Divergence`. Le
+  sens est donné une seule fois, par `Entree::a_annuler`, et le test de
+  `deplacer` le prouve — aucune opération simple ne repasse deux fois sur un
+  chunk, donc rien d'autre ne pouvait le voir.
 - **Les tests de `coffres` ont été vérifiés PAR MUTATION.** Quatre pièces de la
   chaîne ont été cassées une par une — la copie ne ramasse plus, le collage ne
   pose plus, l'orphelin n'est plus détecté, la rotation ne déplace plus les
@@ -425,6 +433,8 @@ cargo run --release -p tf-render --example capture         -- %APPDATA%\.minefie
 
 # copier, tourner, coller — sans --ecrire, la save n'est pas touchée
 cargo run --release -p tf-ops --example editer -- D:\monde --sel "0,60,0,31,90,31" --copier-vers "64,0,64" --tourner 90 --pack %APPDATA%\.minefield_1_18
+cargo run --release -p tf-ops --example editer -- D:\monde --sel "0,60,0,31,90,31" --deplacer "64,0,0"
+cargo run --release -p tf-ops --example editer -- D:\monde --sel "0,60,0,31,90,31" --empiler 5 est
 ```
 
 Les outils acceptent trois formes d'assets, reconnues au CONTENU : un codex

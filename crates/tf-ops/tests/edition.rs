@@ -217,7 +217,10 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     assert!(region > 0);
     region = 0;
     let mut defait = apres.clone();
-    for c in entree_corrections(entree) {
+    // `a_annuler` rend les correctifs À L'ENVERS : deux passes sur le même
+    // chunk s'enchaînent par leurs empreintes, et les rejouer dans l'ordre
+    // d'enregistrement ferait échouer la seconde.
+    for c in entree_corrections(entree, true) {
         defait = rejouer(&defait, &c, true);
         region += 1;
     }
@@ -232,7 +235,7 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     // ── refaire
     let (entree, _) = journal.refaire().expect("et à refaire");
     let mut refait = defait.clone();
-    for c in entree_corrections(entree) {
+    for c in entree_corrections(entree, false) {
         refait = rejouer(&refait, &c, false);
     }
     assert_eq!(
@@ -242,17 +245,19 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     );
 }
 
-/// Les correctifs de chunk d'une entrée.
-fn entree_corrections(e: &tf_world::journal::Entree) -> Vec<tf_world::journal::ChunkPatch> {
-    match &e.genre {
-        Genre::Operation { corrections, .. } => corrections
-            .iter()
-            .filter_map(|c| match c {
-                tf_world::journal::Correction::Chunk(p) => Some(p.clone()),
-                _ => None,
-            })
-            .collect(),
-        Genre::Reprise => Vec::new(),
+/// Les correctifs de chunk d'une entrée, dans le sens demandé.
+fn entree_corrections(
+    e: &tf_world::journal::Entree,
+    annuler: bool,
+) -> Vec<tf_world::journal::ChunkPatch> {
+    let garder = |c: &tf_world::journal::Correction| match c {
+        tf_world::journal::Correction::Chunk(p) => Some(p.clone()),
+        _ => None,
+    };
+    if annuler {
+        e.a_annuler().filter_map(garder).collect()
+    } else {
+        e.a_refaire().filter_map(garder).collect()
     }
 }
 

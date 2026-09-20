@@ -20,6 +20,7 @@ pub mod motif;
 pub mod plan;
 pub mod presse;
 
+pub use edition::{deplacer, empiler, Pas};
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};

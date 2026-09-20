@@ -71,6 +71,27 @@ impl RapportRegion {
     pub fn est_vide(&self) -> bool {
         self.patches.is_empty()
     }
+
+    /// Absorbe le rapport d'une autre passe.
+    ///
+    /// Une opération composée (`//move`, `//stack`) en fait plusieurs mais ne
+    /// doit produire qu'UNE entrée de journal : un seul `Ctrl+Z` défait le
+    /// déplacement entier, pas son dernier tiers. L'ordre des correctifs est
+    /// celui des passes — et c'est pour ça que l'annulation les rejoue à
+    /// l'envers (`Entree::a_annuler`).
+    pub fn absorber(&mut self, autre: RapportRegion) {
+        self.patches.extend(autre.patches);
+        for (a, b) in self.etages.iter_mut().zip(autre.etages) {
+            *a += b;
+        }
+        self.blocs = match (self.blocs, autre.blocs) {
+            (Some(a), Some(b)) => Some(a + b),
+            (x, None) | (None, x) => x,
+        };
+        self.bornes = unir(self.bornes, autre.bornes);
+        self.entites_posees += autre.entites_posees;
+        self.entites_retirees += autre.entites_retirees;
+    }
 }
 
 #[derive(Debug)]
@@ -645,23 +666,137 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
     op: &dyn Operation,
     interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
-    let mut total = RapportRegion::default();
-    let mut compte = op.compte().then_some(0u64);
+    let mut total = RapportRegion {
+        blocs: op.compte().then_some(0),
+        ..Default::default()
+    };
     for pos in sel.regions() {
-        let r = appliquer_region(staging, dim, folder, pos, sel, op, interner)?;
-        total.patches.extend(r.patches);
-        for (a, b) in total.etages.iter_mut().zip(r.etages) {
-            *a += b;
-        }
-        if let (Some(c), Some(n)) = (compte.as_mut(), r.blocs) {
-            *c += n;
-        }
-        total.bornes = unir(total.bornes, r.bornes);
-        total.entites_posees += r.entites_posees;
-        total.entites_retirees += r.entites_retirees;
+        total.absorber(appliquer_region(
+            staging, dim, folder, pos, sel, op, interner,
+        )?);
     }
-    total.blocs = compte;
     Ok(total)
+}
+
+/// Le pas et le remplissage d'un déplacement ou d'un empilement.
+///
+/// Un `struct` plutôt que six arguments : `deplacer(st, dim, f, sel, d, r, a,
+/// true, false, i)` est une ligne où deux booléens voisins s'échangent sans
+/// que rien ne le signale.
+#[derive(Debug, Clone, Copy)]
+pub struct Pas {
+    /// De combien on décale, en blocs.
+    pub d: [i32; 3],
+    /// L'air de l'extrait écrase-t-il la destination ? `false` est le défaut
+    /// de WorldEdit, et c'est le bon : on déplace un bâtiment sur un terrain.
+    pub avec_air: bool,
+    /// Ce qui compte comme air DANS l'extrait. Passé plutôt que deviné : un
+    /// `StateId` n'a de sens que relativement à son interner.
+    pub air: StateId,
+    pub compter: bool,
+}
+
+/// `//move` : déplacer le contenu d'une sélection.
+///
+/// Trois passes, **une seule entrée de journal** : copier (qui n'écrit rien),
+/// effacer la source, reposer l'extrait décalé. Un `Ctrl+Z` défait le
+/// déplacement entier ; trois entrées en défairaient le dernier tiers.
+///
+/// **La source est effacée EN ENTIER, même si la destination la recouvre.**
+/// L'extrait est déjà détaché à ce moment-là, donc rien n'est perdu, et le
+/// collage réécrit ensuite la partie commune. Effacer seulement le complément
+/// demanderait une soustraction de boîtes qui n'est pas rectangulaire — donc
+/// une opération de plus, pour un résultat identique.
+///
+/// Les block entities suivent : le collage les repose, et l'effacement retire
+/// celles dont la case a changé d'état. Un coffre déplacé garde son contenu.
+pub fn deplacer<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+    pas: Pas,
+    // `remplissage` : ce qui reste à la place de la source, de l'air
+    // d'ordinaire. Passé plutôt que supposé — un `StateId` n'a de sens que
+    // relativement à son interner, et « air » n'est pas toujours le bon choix
+    // (on creuse parfois une tranchée de pierre).
+    remplissage: StateId,
+    interner: &mut Interner,
+) -> Result<RapportRegion, Erreur> {
+    let presse = copier(staging, dim, folder, sel, interner)?;
+    let mut total = RapportRegion::default();
+
+    let efface = crate::plan::Plan::nouveau(crate::Masque::Tout, crate::Motif::Bloc(remplissage));
+    let efface = if pas.compter {
+        efface.en_comptant()
+    } else {
+        efface
+    };
+    total.absorber(appliquer(staging, dim, folder, sel, &efface, interner)?);
+    total.absorber(coller(
+        staging, dim, folder, &presse, sel.min, pas, interner,
+    )?);
+    Ok(total)
+}
+
+/// `//stack` : répéter le contenu d'une sélection `fois` fois.
+///
+/// Le pas est donné en entier plutôt que « une direction et un nombre » :
+/// c'est l'appelant qui sait s'il empile de la taille de la sélection ou d'un
+/// bloc, et une direction cardinale ne saurait pas dire « en diagonale ».
+///
+/// **Chaque copie part du monde tel qu'il est à ce moment-là.** Avec un pas
+/// plus petit que la sélection, les copies se recouvrent et la dernière
+/// l'emporte — c'est ce que fait WorldEdit, et c'est ce qu'on attend d'un
+/// empilement.
+pub fn empiler<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+    pas: Pas,
+    fois: u32,
+    interner: &mut Interner,
+) -> Result<RapportRegion, Erreur> {
+    let presse = copier(staging, dim, folder, sel, interner)?;
+    let mut total = RapportRegion::default();
+    for k in 1..=fois as i32 {
+        let un = Pas {
+            d: [pas.d[0] * k, pas.d[1] * k, pas.d[2] * k],
+            ..pas
+        };
+        total.absorber(coller(
+            staging, dim, folder, &presse, sel.min, un, interner,
+        )?);
+    }
+    Ok(total)
+}
+
+/// Pose un extrait, le coin de plus petites coordonnées à `depuis + pas.d`.
+///
+/// Une opération ne paie que sa PORTÉE : la sélection passée à `appliquer` est
+/// celle de l'extrait posé, jamais celle d'où il vient.
+fn coller<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    presse: &Presse,
+    depuis: tf_world::coords::BlockPos,
+    pas: Pas,
+    interner: &Interner,
+) -> Result<RapportRegion, Erreur> {
+    let c = crate::presse::Collage {
+        presse,
+        coin: BlockPos {
+            x: depuis.x + pas.d[0],
+            y: depuis.y + pas.d[1],
+            z: depuis.z + pas.d[2],
+        },
+        avec_air: pas.avec_air,
+        air: pas.air,
+        compter: pas.compter,
+    };
+    appliquer(staging, dim, folder, &c.bornes(), &c, interner)
 }
 
 #[cfg(test)]
