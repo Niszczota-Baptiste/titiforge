@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (474 tests aujourd'hui)
+cargo test            # tous les crates (483 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -239,6 +239,9 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,3
 # //move et //stack : composées, mais UNE seule entrée de journal
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --deplacer "64,0,0"
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,60,0,31,90,31" --empiler 5 est
+# les formes : centrées sur la sélection, et l'opération ne paie QUE la forme
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20 --creux 2
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -278,7 +281,7 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
-               //move ✅ · //stack ✅ · formes, lissage, biomes à venir
+               //move ✅ · //stack ✅ · formes ✅ · lissage, biomes à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
@@ -816,6 +819,30 @@ propres à ce dépôt.
   test tombe — pas par relecture. Un test vert ne dit rien tant qu'on n'a pas
   vu ce qui le fait rougir. Les `y` décroissent maintenant, et c'est écrit à
   côté de la constante.
+- **Une forme n'est pas un masque, et le confondre coûterait tout.** Un masque
+  est un prédicat sur l'ÉTAT, donc il s'évalue une fois par ENTRÉE de palette ;
+  une forme est un prédicat sur la POSITION, donc elle s'évaluerait 4 096 fois
+  par section. Mettre une sphère dans `Masque` ferait retomber `//replace` à
+  l'étage bloc. Une forme a son propre chemin rapide, sur l'autre axe : elle
+  répond par SECTION (`Dedans` / `Dehors` / `Partielle`) avant de répondre par
+  case, et le cœur d'une sphère garde donc l'étage palette.
+- **Un verdict par section se croise aux 4 096 cases, jamais relu.** Un
+  « Dedans » faux écrit hors de la forme, un « Dehors » faux y laisse un trou,
+  et ni l'un ni l'autre ne se voit sur une capture d'écran. Mesuré par
+  mutation : juger l'appartenance d'un ellipsoïde sur le point le plus PROCHE
+  au lieu du plus LOIN passe tous les tests de `contient` et corrompt le
+  résultat.
+- **« La section est dans la forme pleine » n'implique pas « elle est dans le
+  trou ».** Première écriture du test de coque : j'affirmais que toute section
+  entièrement dans la sphère extérieure devait être écartée par la coque.
+  Faux — une telle section peut chevaucher la paroi, et `Partielle` y est la
+  bonne réponse. La propriété juste se dit avec le TROU, reconstruit
+  indépendamment par les constructeurs publics : si la règle de
+  rétrécissement change d'un côté seulement, le test le dit.
+- **Un rayon nul divise par zéro, et `NaN` est faux dans les DEUX sens.**
+  `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
+  serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
+  le centre exact, et c'est écrit explicitement.
 - **Les correctifs d'une entrée de journal s'annulent À L'ENVERS.** Chacun est
   gardé par l'empreinte de l'état qu'il attend. Tant qu'une opération ne
   touchait chaque chunk qu'une fois, l'ordre n'avait aucune importance et le

@@ -30,7 +30,7 @@ use tf_anvil::Interner;
 use tf_blocks::Transfo;
 use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
-use tf_ops::{Collage, Masque, Motif, Pas};
+use tf_ops::{Collage, Forme, Masque, Motif, Pas};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -52,6 +52,21 @@ struct Args {
     avec_air: bool,
     /// Ce qui reste à la place de la source d'un `--deplacer`.
     remplir: String,
+    /// Le VOLUME visé dans la sélection. Gardé en paramètres plutôt qu'en
+    /// `Forme` construite : le centre vient de `--sel`, qui peut arriver
+    /// APRÈS sur la ligne de commande, et l'ordre des options n'a jamais de
+    /// sens.
+    volume: Volume,
+    creux: Option<f64>,
+    renversee: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Volume {
+    Aucun,
+    Sphere(f64),
+    Cylindre(f64, f64),
+    Pyramide(f64, f64),
 }
 
 enum Op {
@@ -96,6 +111,13 @@ fn usage() -> ! {
                              (+X = Est, +Z = Sud, +Y = Haut)
   --remplir <bloc>           ce qui reste à la place d'un --deplacer
                              (défaut : minecraft:air)
+  --sphere <rayon>           //sphere : restreint l'opération à une sphère
+  --cylindre <rayon> <haut>  //cyl, axe vertical
+  --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
+  --creux <épaisseur>        creuse la forme (//hsphere, //hcyl…)
+  Les formes sont CENTRÉES sur la sélection, et l'opération ne paie que la
+  forme : une sphère de rayon 10 dans une sélection d'un million de blocs
+  coûte une sphère de rayon 10.
   --avec-air                 l'air de l'extrait écrase ce qu'il recouvre
   --pack <chemin>            le pack, l'installation ou le codex d'où DÉRIVER
                              les règles de rotation. Sans lui, les cases
@@ -138,6 +160,9 @@ fn lire_args() -> Args {
         pack: None,
         avec_air: false,
         remplir: "minecraft:air".to_string(),
+        volume: Volume::Aucun,
+        creux: None,
+        renversee: false,
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -239,6 +264,11 @@ fn lire_args() -> Args {
                 args.op = Some(Op::Empiler { fois, dir });
             }
             "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
+            "--sphere" => args.volume = Volume::Sphere(nombre(a.next())),
+            "--cylindre" => args.volume = Volume::Cylindre(nombre(a.next()), nombre(a.next())),
+            "--pyramide" => args.volume = Volume::Pyramide(nombre(a.next()), nombre(a.next())),
+            "--creux" => args.creux = Some(nombre(a.next())),
+            "--renversee" => args.renversee = true,
             "--tourner" => {
                 transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
                     "90" => Transfo::Rot90,
@@ -273,6 +303,14 @@ fn lire_args() -> Args {
         *t = Some(v);
     }
     args
+}
+
+fn nombre(v: Option<String>) -> f64 {
+    v.unwrap_or_else(|| usage())
+        .trim()
+        .replace(',', ".")
+        .parse()
+        .unwrap_or_else(|_| usage())
 }
 
 /// Les règles de rotation, dérivées du pack qu'on nous désigne.
@@ -456,6 +494,45 @@ fn main() {
         sel.regions().count()
     );
 
+    // Les formes sont centrées sur la SÉLECTION. Le milieu se prend en
+    // division PLANCHER : `(-9 + -1) / 2` vaut −5 en Rust comme en euclidien,
+    // mais `(-9 + 0) / 2` vaut −4 dans un sens et −5 dans l'autre — et le
+    // bloc −1 est dans la région −1, pas la région 0.
+    let centre = [
+        (sel.min.x + sel.max.x).div_euclid(2),
+        (sel.min.y + sel.max.y).div_euclid(2),
+        (sel.min.z + sel.max.z).div_euclid(2),
+    ];
+    let forme = match args.volume {
+        Volume::Aucun => Forme::Boite,
+        Volume::Sphere(r) => Forme::sphere(centre, r),
+        Volume::Cylindre(r, h) => Forme::cylindre(centre, r, h),
+        // La pyramide se pose sur le BAS de la sélection, pas sur son centre :
+        // une pyramide flottante n'est ce que personne ne demande.
+        Volume::Pyramide(b, h) => Forme::pyramide(
+            [
+                centre[0],
+                if args.renversee { sel.max.y } else { sel.min.y },
+                centre[2],
+            ],
+            b,
+            h,
+            args.renversee,
+        ),
+    };
+    let forme = match args.creux {
+        Some(e) => forme.creuse(e),
+        None => forme,
+    };
+    let plan = plan.dans(forme);
+    if let Some(b) = plan.forme.bornes() {
+        let (fx, fy, fz) = b.size();
+        println!(
+            "forme : {fx} × {fy} × {fz} · centrée sur {},{},{}",
+            centre[0], centre[1], centre[2]
+        );
+    }
+
     // La copie de travail vit à côté, dans un dossier temporaire. La save
     // d'origine n'est pas ouverte en écriture tant qu'on n'a pas demandé.
     let couche = std::env::temp_dir().join(format!("titiforge-{}", std::process::id()));
@@ -552,7 +629,9 @@ fn main() {
     // la sélection d'où il vient.
     let (operation, portee): (&dyn Operation, BBox) = match &collage {
         Some(c) => (c, c.bornes()),
-        None => (&plan, sel),
+        // Une opération ne paie que sa PORTÉE : la forme resserre la
+        // sélection avant qu'un seul chunk ne soit lu.
+        None => (&plan, plan.portee(&sel)),
     };
 
     let remplissage = interner.intern(&args.remplir);

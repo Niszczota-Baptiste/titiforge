@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod edition;
+pub mod forme;
 pub mod hash;
 pub mod masque;
 pub mod motif;
@@ -21,6 +22,7 @@ pub mod plan;
 pub mod presse;
 
 pub use edition::{deplacer, empiler, Pas};
+pub use forme::{Couverture, Forme};
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};

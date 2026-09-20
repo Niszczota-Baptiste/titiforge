@@ -175,7 +175,7 @@ staging, journal. Manque ce qui DÉPLACE.
 | **Rotation et miroir** | ✅ — appliquées sur la PALETTE de l'extrait, jamais par bloc ; ce que la règle ne sait pas transformer est laissé tel quel et NOMMÉ |
 | Copier / coller | ✅ — `copier` est la seule opération qui n'écrit rien ; `Collage` est à l'étage bloc par nature et ne paie que son extrait |
 | Déplacer (`//move`), empiler (`//stack`) | ✅ — composées de copier/effacer/coller, sous **une seule** entrée de journal |
-| Formes : sphère, cylindre, pyramide | ⬜ |
+| Formes : sphère, cylindre, pyramide | ✅ — une forme répond par SECTION avant de répondre par case, donc le cœur d'une sphère garde l'étage palette |
 | Lissage, naturalisation, murs, creuser | ⬜ |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes (`//setbiome`, et la lecture pour la teinte) | ⬜ |

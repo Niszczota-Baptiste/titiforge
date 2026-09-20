@@ -36,6 +36,7 @@ use tf_anvil::section::VOL;
 use tf_anvil::{Section, StateId};
 use tf_world::coords::{BBox, ChunkPos, LocalBox, SectionPos};
 
+use crate::forme::{Couverture, Forme};
 use crate::masque::Masque;
 use crate::motif::Motif;
 
@@ -95,6 +96,13 @@ pub struct Plan {
     /// d'économiser. Laissé au choix de l'appelant : une interface qui affiche
     /// « 12 345 blocs » le veut, un script qui enchaîne vingt opérations non.
     pub compter: bool,
+    /// Le VOLUME visé à l'intérieur de la sélection.
+    ///
+    /// `Forme::Boite` — le défaut — ne coûte rien : le test par bloc n'est
+    /// même pas branché, et une section entièrement couverte garde son étage
+    /// palette. Une sphère, elle, répond par SECTION avant de répondre par
+    /// case : c'est le même chemin rapide que le masque, sur l'autre axe.
+    pub forme: Forme,
 }
 
 /// Ce qu'une opération sait faire d'une section.
@@ -159,6 +167,27 @@ impl Plan {
             motif,
             seed: 0,
             compter: false,
+            forme: Forme::Boite,
+        }
+    }
+
+    /// Restreint le plan à une forme.
+    pub fn dans(mut self, forme: Forme) -> Plan {
+        self.forme = forme;
+        self
+    }
+
+    /// La sélection à passer à `appliquer` : celle qu'on demande, resserrée
+    /// sur la forme.
+    ///
+    /// **Une opération ne paie que sa PORTÉE.** Une sphère de rayon 20 posée
+    /// dans une sélection « tout le build » ne doit pas faire parcourir le
+    /// build — c'est le piège `warmup(extent)` d'`ExeWorldEdit`, qui faisait
+    /// payer 5,2 s pour soixante-deux blocs.
+    pub fn portee(&self, sel: &BBox) -> BBox {
+        match self.forme.bornes() {
+            Some(b) => sel.intersection(&b).unwrap_or(*sel),
+            None => *sel,
         }
     }
 
@@ -180,13 +209,34 @@ impl Plan {
     /// lieu de le supposer. C'est exactement l'erreur que le prototype a faite
     /// une fois, et la mesure a dit « 0 sections rapides sur 9 216 ».
     pub fn etage(&self, section: &Section, sel: &BBox, pos: SectionPos) -> Etage {
+        self.etage_avec(section, sel, pos, self.forme.couverture(pos))
+    }
+
+    /// Le même, la couverture déjà connue.
+    ///
+    /// `appliquer` la calcule UNE fois et la passe ici puis à l'étage bloc :
+    /// la demander deux fois doublait le seul coût que les formes ajoutent
+    /// aux opérations qui n'en ont pas.
+    fn etage_avec(
+        &self,
+        section: &Section,
+        sel: &BBox,
+        pos: SectionPos,
+        couverture: Couverture,
+    ) -> Etage {
         if self.motif.est_muet() || section.palette.is_empty() {
             return Etage::Rien;
         }
         if self.masque.n_accepte_rien(&section.palette) {
             return Etage::Rien;
         }
-        if !sel.covers_section(pos) {
+        // La forme répond pour les 4 096 cases d'un coup. « Dehors » est le
+        // cas le plus fréquent sur une sphère — 48 % de sa boîte englobante —
+        // et il évite jusqu'au parcours.
+        if couverture == Couverture::Dehors {
+            return Etage::Rien;
+        }
+        if !sel.covers_section(pos) || couverture == Couverture::Partielle {
             return Etage::Bloc;
         }
         match self.motif.uniforme() {
@@ -198,7 +248,8 @@ impl Plan {
 
     /// Applique l'opération à une section.
     pub fn appliquer(&self, section: &mut Section, sel: &BBox, pos: SectionPos) -> Rapport {
-        let etage = self.etage(section, sel, pos);
+        let couverture = self.forme.couverture(pos);
+        let etage = self.etage_avec(section, sel, pos, couverture);
         match etage {
             Etage::Rien => Rapport::RIEN,
             Etage::Section => {
@@ -247,7 +298,12 @@ impl Plan {
                     Some(z) => z,
                     None => return Rapport::RIEN,
                 };
-                let blocs = self.etage_bloc(section, &zone, pos);
+                // Le test par bloc n'est branché que si la forme hésite :
+                // c'est un booléen INVARIANT de la boucle, donc un branchement
+                // que le processeur prédit à coup sûr, et rien du tout pour
+                // `Forme::Boite`.
+                let blocs =
+                    self.etage_bloc(section, &zone, pos, couverture == Couverture::Partielle);
                 Rapport {
                     etage,
                     blocs: Some(blocs),
@@ -258,7 +314,13 @@ impl Plan {
     }
 
     /// Le seul chemin qui lit chaque case. Tout le reste existe pour l'éviter.
-    fn etage_bloc(&self, section: &mut Section, zone: &LocalBox, pos: SectionPos) -> u64 {
+    fn etage_bloc(
+        &self,
+        section: &mut Section,
+        zone: &LocalBox,
+        pos: SectionPos,
+        borde: bool,
+    ) -> u64 {
         let table = self.masque.table(&section.palette);
         // **Dépacker AVANT de toucher à la palette.** `unpack` la consulte pour
         // savoir si la section est homogène : la lui retirer d'abord la faisait
@@ -288,6 +350,18 @@ impl Plan {
         for y in zone.y0..=zone.y1 {
             for z in zone.z0..=zone.z1 {
                 for x in zone.x0..=zone.x1 {
+                    // La forme, quand elle hésite. `borde` est invariant de la
+                    // boucle : pour `Forme::Boite` c'est du code mort, et pour
+                    // une section entièrement dedans aussi.
+                    if borde
+                        && !self.forme.contient(
+                            base[0] + x as i32,
+                            base[1] + y as i32,
+                            base[2] + z as i32,
+                        )
+                    {
+                        continue;
+                    }
                     let i = (y << 8) | (z << 4) | x;
                     // **Un indice que la palette ne contient pas ne fait pas
                     // paniquer.** `bits` se DÉDUIT de la longueur de palette :

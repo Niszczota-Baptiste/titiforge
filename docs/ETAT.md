@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **474**, zéro échec |
+| Tests | **483**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-474 tests, répartis par ce qu'ils PROUVENT :
+483 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -51,6 +51,7 @@ cargo test --workspace
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 57 | les trois étages, la jonction, le presse-papiers, le hachage par plan |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
+| `tf-ops` forme | 9 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 17 | **au pixel** : ombrage, teinte, dalle, alignement WGSL |
@@ -228,6 +229,29 @@ Et la sélection non alignée est la prochaine optimisation désignée — une
 sélection d'utilisateur ne tombe presque jamais sur un multiple de 16. Une
 section partiellement couverte dont la partie couverte est uniforme peut encore
 éviter le parcours.
+
+### Une forme répond par SECTION avant de répondre par case
+
+```bash
+cargo run --release -q -p tf-ops --example editer -- /tmp/monde-essai --sel "0,-40,0,63,20,63" --poser minecraft:stone --sphere 20
+```
+
+Une sphère, un cylindre, une pyramide ne sont pas des masques : un masque est
+un prédicat sur l'ÉTAT, une forme sur la POSITION. Les mélanger ferait
+retomber `//replace` à l'étage bloc. Une forme a donc son propre chemin
+rapide, sur l'autre axe : là où le masque répond sur la PALETTE, la forme
+répond sur la SECTION, et en une seule fois pour ses 4 096 cases.
+
+| Verdict | Ce qu'il évite |
+|---|---|
+| `Dehors` | la section n'est même pas décodée |
+| `Dedans` | l'étage palette reste ouvert — une sphère pleine s'écrit en O(palette) en son cœur |
+| `Partielle` | seule la coque paie le parcours par bloc |
+
+Les trois sont EXACTS, et c'est le test qui le dit : il compare le verdict aux
+4 096 cases, section par section, sur toutes les formes et une couronne
+autour. Un « Dedans » faux écrirait hors de la forme, un « Dehors » faux y
+laisserait un trou, et ni l'un ni l'autre ne se voit sur une capture d'écran.
 
 ### Les coffres suivent les blocs, et ça ne coûte rien
 
