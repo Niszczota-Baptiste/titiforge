@@ -18,8 +18,10 @@ pub mod hash;
 pub mod masque;
 pub mod motif;
 pub mod plan;
+pub mod presse;
 
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};
 pub use plan::{Etage, Plan, Rapport};
+pub use presse::{Presse, TransfoBoite, Transforme};

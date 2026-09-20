@@ -8,6 +8,7 @@ description = "Les opérations d'édition : masques, motifs, et la répartition 
 
 [dependencies]
 tf-anvil.workspace = true
+tf-blocks.workspace = true
 tf-world.workspace = true
 tf-nbt.workspace = true
 rayon = { workspace = true, optional = true }
