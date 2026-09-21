@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-590 tests, répartis par ce qu'ils PROUVENT :
+601 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -62,7 +62,8 @@ cargo test --workspace
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 20 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; et que la teinte de biome atteint AUSSI les blocs-modèles, sans les dupliquer quand ils ne se teintent pas |
-| `tf-render` controles | 17 | les deux pilotages — vol et orbite — et qu'une BASCULE de mode ne bouge jamais l'image |
+| `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
+| `tf-render` viser | 16 | quel bloc et quelle FACE sous le curseur — et que poser et casser ne visent pas la même case |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :

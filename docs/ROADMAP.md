@@ -227,20 +227,54 @@ mesurée.
 
 ### Deux MODES, et un bouton pour passer de l'un à l'autre
 
-**Éditer un monde et concevoir un bâtiment ne se pilotent pas pareil**, et
-vouloir les servir avec un seul pilotage donne un outil qui n'est bon pour
-aucun des deux.
+**Éditer un monde et concevoir un bâtiment ne se font pas pareil.** Ce qui
+change n'est PAS la caméra : c'est ce que font les boutons.
 
 | | **Édition** (WorldEdit, MCEdit) | **Conception** (SketchUp) |
 |---|---|---|
-| Caméra | on VOLE dans le monde | on ORBITE autour de ce qu'on bâtit |
-| Sélectionner | un VOLUME : deux coins, une `BBox` | des ENTITÉS : face, arête, groupe, composant |
-| Le clic gauche | poser pos1 / pos2 | pousser-tirer, dessiner |
+| Clic gauche / droit | les deux coins d'un VOLUME | des ENTITÉS : face, arête, composant |
+| Ce qu'on manipule | une `BBox` | une face qu'on pousse-tire, un composant |
 | Le survol montre | la case visée | un point d'inférence — coin, milieu, axe |
 | L'unité mentale | le bloc | la face et le composant |
 
 Les modes sont nommés d'après ce qu'ils FONT, pas d'après les trois logiciels
 qu'ils héritent : ces noms-là survivront aux leurs.
+
+### La caméra : le point fixe est le JOUEUR
+
+**Dans les deux modes.** Tourner fait pivoter le regard autour de l'œil ;
+l'œil ne bouge pas. C'est ce que fait Minecraft, donc ce que la main de
+quiconque construit sait déjà faire — et une habitude de jeu ne se rééduque
+pas, elle se sert.
+
+Une orbite autour d'un pivot posé sur le build a été écrite, puis RETIRÉE :
+c'est la convention de la CAO, pas celle d'un monde où l'on vole. Pour tourner
+autour d'un bâtiment, on vole autour, exactement comme en jeu. Elle obligeait
+en plus à décider d'un pivot à chaque bascule de mode — le seul morceau de
+tout le pilotage qui était difficile à rendre juste, et il a disparu avec elle.
+
+**La répartition des boutons, et elle est fixe :**
+
+| Geste | Effet |
+|---|---|
+| **Molette ENFONCÉE**, glisser | tourner le regard |
+| Molette enfoncée + Maj, glisser | panoramique, dans le plan de l'écran |
+| Molette, rouler | avancer et reculer |
+| **Clic gauche** | aux outils et à la sélection |
+| **Clic droit** | aux outils et à la sélection |
+
+C'est la caméra de SketchUp (molette) et la sélection de WorldEdit (gauche =
+coin 1, droit = coin 2) réunies sans se marcher dessus. Donner la caméra au
+clic droit coûterait l'un des deux coins de WorldEdit, et c'est le geste que
+tout utilisateur de WorldEdit connaît par cœur. Le piège d'`ExeWorldEdit` —
+*un outil qui coupe la caméra entière enferme l'utilisateur* — ne peut pas se
+produire ici : la caméra a un bouton à elle, qu'aucun outil ne prend.
+
+✅ Posé et testé sans écran : `tf-render/src/controles.rs`. La pente est
+bornée à un cheveu de la verticale (à π/2 pile, la base de la vue dégénère et
+l'image bascule d'un quart de tour), « monter » suit la verticale du MONDE
+(sinon monter en piqué fait reculer), et le panoramique suit celle de
+l'ÉCRAN (sinon il part à la verticale quand on regarde déjà le ciel).
 
 **Ce que la décision impose, et qui n'est pas dans le bouton :**
 
@@ -250,24 +284,12 @@ qu'ils héritent : ces noms-là survivront aux leurs.
    sait pas quel geste l'a déclenchée, et une sélection de Conception se
    RÉSOUT en volumes avant de l'atteindre. C'est le corollaire direct de « le
    monde reste souverain ».
-2. **Le clic DROIT reste à la caméra dans les deux modes.** Piège déjà payé
-   dans `ExeWorldEdit` : « un outil qui coupe la caméra entière enferme
-   l'utilisateur ». Le partage gauche / droit / molette est FIXE ; c'est ce
-   que fait le gauche qui change avec le mode.
-3. **Une bascule ne bouge jamais l'image.** ✅ posé et testé
-   (`tf-render/src/controles.rs`) : `Vol`, `Orbite`, et un `Pilotage` qui
-   tient les deux états SYNCHRONES — un mode qui jetterait l'autre ferait du
-   bouton un travail. Le pivot d'une orbite se DÉCIDE, et il est projeté sur
-   le rayon du regard : posé tel quel à côté de l'axe, il faisait sauter
-   l'œil de quarante blocs. Recentrer délibérément sur une sélection hors
-   champ est un autre geste, qui porte un autre nom (`recentrer`) parce qu'il
-   bouge la caméra et doit le dire.
-4. **La sélection ne se jette pas au changement de mode**, sinon le bouton
+2. **La sélection ne se jette pas au changement de mode**, sinon le bouton
    coûte un travail. Une `BBox` reste une `BBox` ; elle devient simplement une
    chose qu'on pousse-tire au lieu d'une chose qu'on remplit.
-5. **Le mode se persiste** avec le projet — le remettre à chaque ouverture
+3. **Le mode se persiste** avec le projet — le remettre à chaque ouverture
    serait le rendre pénible pour rien.
-6. **Un greffon déclare dans QUEL mode vit son outil.** Sans ça, la barre de
+4. **Un greffon déclare dans QUEL mode vit son outil.** Sans ça, la barre de
    l'Édition finit par porter les outils de conception, et réciproquement.
 
 **Deux règles d'architecture, et elles ne se retrofitent pas :**

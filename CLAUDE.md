@@ -91,13 +91,29 @@ deux qui se cassent le plus facilement par inadvertance :
   suite d'entrées réversibles TYPÉES ; l'instantané de section n'en est qu'une.
 
 **Deux MODES, et un bouton.** Éditer un monde et concevoir un bâtiment ne se
-pilotent pas pareil : en **Édition** on VOLE dans le monde et on sélectionne
-un VOLUME ; en **Conception** on ORBITE autour de ce qu'on bâtit et on
-sélectionne des ENTITÉS (face, arête, composant). Trois conséquences pour le
-cœur : *le moteur n'a pas de mode* — une sélection de Conception se résout en
-volumes avant d'atteindre `tf-ops` ; *le clic droit reste à la caméra dans les
-deux* ; *une bascule ne bouge jamais l'image*. Le pilotage est posé et testé
-sans écran (`tf-render/src/controles.rs`), le reste est de la phase 4.
+pilotent pas pareil : en **Édition** gauche et droit posent les deux coins
+d'un VOLUME, comme WorldEdit ; en **Conception** ils désignent des ENTITÉS —
+face, arête, composant.
+
+**Le point fixe de la caméra est le JOUEUR, jamais le build**, et dans les
+deux modes : tourner fait pivoter le regard autour de l'œil, qui ne bouge pas.
+C'est ce que fait Minecraft, donc ce que la main de quiconque construit sait
+déjà faire. **La caméra ne dépend donc pas du mode** — seuls les boutons
+changent de sens.
+
+La répartition, et elle est FIXE : **molette ENFONCÉE** = tourner, molette +
+Maj = panoramique, molette roulée = avancer ; **gauche et droit restent aux
+outils**. C'est la caméra de SketchUp et la sélection de WorldEdit réunies
+sans se marcher dessus — donner la caméra au clic droit coûterait l'un des
+deux coins, et c'est le geste que tout utilisateur de WorldEdit connaît par
+cœur. Le piège d'`ExeWorldEdit` — *un outil qui coupe la caméra entière
+enferme l'utilisateur* — ne peut pas se produire : la caméra a un bouton à
+elle, qu'aucun outil ne prend.
+
+Conséquence pour le cœur : *le moteur n'a pas de mode* — une sélection de
+Conception se résout en volumes avant d'atteindre `tf-ops`. Le pilotage est
+posé et testé sans écran (`tf-render/src/controles.rs`), le reste est de la
+phase 4.
 
 Ce qui se pose aujourd'hui, ce sont les **coutures** — registres plutôt
 qu'`enum` figés, journal typé, format de projet versionné. Le runtime de
@@ -193,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (590 tests aujourd'hui)
+cargo test            # tous les crates (601 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -314,7 +330,8 @@ crates/
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
                (gloutonne ET modèles) · AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
-               pilotage : vol / orbite et la bascule ✅ (pur, sans écran)
+               pilotage ✅ : le JOUEUR est le point fixe (pur, sans écran)
+               viser ✅ : quel bloc, quelle FACE sous le curseur
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
@@ -1080,17 +1097,17 @@ propres à ce dépôt.
   la couche de staging compte autant que la source, sinon une opération
   sauterait la région qu'une opération précédente vient de créer.
 
-- **Un bouton de mode qui BOUGE l'image est un bouton qu'on n'ose plus
-  toucher.** `Camera` porte un œil et une cible, donc la bascule vol ↔ orbite
-  a l'air gratuite. Elle ne l'est pas : en vol, la cible est un point
-  arbitraire posé à un mètre devant le nez, et orbiter autour d'elle ferait
-  pivoter l'utilisateur autour de son propre nez. Le pivot se DÉCIDE — ce
-  qu'on vise — et il se PROJETTE sur le rayon du regard : posé tel quel à
-  quarante blocs de l'axe, il faisait sauter l'œil de quarante blocs. Un
-  aller-retour doit rendre la caméra de départ, sinon le bouton coûte un
-  recadrage à chaque appui — une dérive qu'on attribue à sa souris pendant
-  des semaines. Corollaire : recentrer délibérément sur une sélection hors
-  champ est un AUTRE geste, avec un autre nom, parce qu'il bouge la caméra.
+- **Le point fixe d'une caméra d'éditeur Minecraft est le JOUEUR, pas le
+  build.** J'avais écrit l'orbite de la CAO : un pivot posé sur ce qu'on
+  construit, l'œil qui tourne autour. C'est juste pour SketchUp et faux ici —
+  la main de quiconque construit vient de Minecraft, et une habitude de jeu ne
+  se rééduque pas, elle se sert. Tout le morceau difficile est parti avec
+  l'orbite : il fallait DÉCIDER d'un pivot à chaque bascule de mode, le
+  projeter sur le rayon du regard (posé tel quel à quarante blocs de l'axe, il
+  faisait sauter l'œil d'autant), et garantir qu'un aller-retour ne dérive pas.
+  Avec le joueur comme point fixe, il n'y a plus rien à convertir. **Une
+  correction qui SUPPRIME la partie qu'on avait eu le plus de mal à rendre
+  juste est le signe qu'on résolvait le mauvais problème.**
 - **`cible` est un POINT SUR le rayon, pas le rayon.** Un vol pose sa cible à
   une unité devant le nez, une orbite la pose sur son pivot à soixante blocs :
   deux points différents, la même direction, donc la même image — la matrice
@@ -1108,3 +1125,27 @@ propres à ce dépôt.
   traverser un build, et il traverse l'objet d'un cran quand on est contre.
   Un facteur rend le geste identique à toutes les échelles — ce qu'exige un
   outil qui sert du bloc à la ville.
+
+- **Poser et casser ne visent pas la même case — et le rendre à l'appelant
+  serait le faire refaire à chacun.** Un rayon touche une FACE, donc un plan
+  ENTRE deux cases : `case` est celle qu'on casse, `avant` celle où l'on
+  pose, et `avant` est la voisine par la face traversée. Laisser chaque outil
+  refaire le pas de son côté donne un outil qui pose un bloc DANS le mur une
+  fois sur deux. Piège hérité d'`ExeWorldEdit`, fermé d'un cran plus bas :
+  `viser` rend les deux. Corollaire : la face traversée est celle du côté
+  d'où l'on VIENT — en avançant vers +X on entre par −X. L'inverser fait
+  poser de l'autre côté du mur, ce qui se lit « l'outil vise à côté ».
+- **Un test qui ne mesure que le RÉSULTAT laisse passer une garde entière.**
+  La mutation « retirer la garde contre une direction dégénérée » passait
+  tous mes tests : sans elle, `INFINITY > portee` finit par couper, ou le
+  garde-fou de pas. Le résultat était `None` des deux côtés. Ce que la garde
+  achète n'est pas le résultat, c'est le COÛT — `arrete` est une lecture du
+  monde, qui décode des chunks, et une origine `NaN` la fait appeler seize
+  mille fois PAR IMAGE sans qu'aucune comparaison ne soit jamais vraie. Le
+  test qui manquait COMPTE les appels. Quand une mutation survit, c'est
+  souvent que le test mesure la mauvaise chose, pas qu'il en manque un.
+- **Une marche de voxels a besoin d'un garde-fou en NOMBRE DE PAS, pas
+  seulement d'une portée.** Une direction minuscule fait des pas
+  infinitésimaux : la portée seule n'arrête la boucle qu'après des millions
+  d'itérations. Et une boucle qui ne finit pas fige la fenêtre sans message —
+  personne ne sait dire pourquoi, et il n'y a rien à lire dans un journal.
