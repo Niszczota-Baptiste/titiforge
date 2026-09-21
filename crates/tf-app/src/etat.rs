@@ -315,6 +315,40 @@ impl Etat {
         };
     }
 
+    /// **Le geste de sélection : poser un coin sur ce qu'on vise.**
+    ///
+    /// La convention est celle de WorldEdit, et elle est délibérée : gauche
+    /// pose le coin 1, droit le coin 2, tous deux sur la case VISÉE — pas sur
+    /// celle d'avant. On sélectionne le bloc qu'on regarde, on ne sélectionne
+    /// pas l'air devant lui.
+    ///
+    /// **L'accrochage ne s'applique PAS ici.** Il sert à poser un bloc au nu
+    /// d'un mur ; un coin de sélection qu'une inférence déplacerait
+    /// sélectionnerait autre chose que ce qu'on a visé, et l'utilisateur ne
+    /// pourrait plus attraper le bord d'une paroi — qui est justement ce
+    /// qu'il vise le plus souvent.
+    ///
+    /// Rend faux quand le réticule ne désigne rien : un clic dans le ciel ne
+    /// doit pas déplacer une sélection existante.
+    pub fn poser_coin(&mut self, premier: bool) -> bool {
+        let Some(c) = self.reticule.case else {
+            return false;
+        };
+        if premier {
+            self.selection.poser_coin1(c);
+        } else {
+            self.selection.poser_coin2(c);
+        }
+        self.message = format!(
+            "coin {} : {}, {}, {}",
+            if premier { 1 } else { 2 },
+            c.x,
+            c.y,
+            c.z
+        );
+        true
+    }
+
     /// Le point qu'un clic poserait : l'accroché s'il y en a un, sinon le brut.
     pub fn point_de_pose(&self) -> Option<BlockPos> {
         match &self.reticule.accroche {

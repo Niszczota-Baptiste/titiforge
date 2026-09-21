@@ -176,10 +176,24 @@ impl ApplicationHandler for Coque {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                // **La molette ENFONCÉE, et elle seule.** Gauche et droit
-                // restent aux outils.
+                // **La molette ENFONCÉE, et elle seule, pour la caméra.**
+                // Gauche et droit restent aux outils — c'est le partage fixe,
+                // et c'est ce qui empêche le piège d'`ExeWorldEdit` : un outil
+                // qui coupe la caméra entière enferme l'utilisateur.
                 if button == MouseButton::Middle {
                     g.tourne = state == ElementState::Pressed;
+                } else if state == ElementState::Pressed && !pris {
+                    // Gauche = coin 1, droit = coin 2. La convention de
+                    // WorldEdit, que la main de tout constructeur connaît.
+                    match button {
+                        MouseButton::Left => {
+                            g.etat.poser_coin(true);
+                        }
+                        MouseButton::Right => {
+                            g.etat.poser_coin(false);
+                        }
+                        _ => {}
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {

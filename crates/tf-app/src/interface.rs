@@ -53,9 +53,23 @@ fn barre(ui: &mut Ui, e: &mut Etat) {
             );
 
         ui.separator();
+        // La répartition est FIXE, et elle est écrite là où on la lit sans
+        // chercher : la caméra a un bouton à elle, qu'aucun outil ne prend.
         ui.label(
             RichText::new("molette enfoncée : tourner · +Maj : panoramique · rouler : avancer")
                 .color(GRIS),
+        );
+        ui.separator();
+        ui.label(
+            RichText::new(match e.mode {
+                Mode::Edition => "gauche : coin 1 · droit : coin 2",
+                Mode::Conception => "gauche/droit : entités (à venir)",
+            })
+            .color(if e.mode == Mode::Edition {
+                VERT
+            } else {
+                ORANGE
+            }),
         );
     });
 }

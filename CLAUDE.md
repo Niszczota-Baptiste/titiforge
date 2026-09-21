@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (723 tests aujourd'hui)
+cargo test            # tous les crates (725 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -363,8 +363,9 @@ crates/
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
+               · SÉLECTION À LA SOURIS ✅ (gauche = coin 1, droit = coin 2)
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
-               · remaillage encore global, outils de souris à venir.
+               · remaillage encore global, mode Conception à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1299,6 +1300,13 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Un coin de sélection ne s'accroche PAS.** L'inférence sert à poser un bloc
+  au nu d'un mur ; appliquée à un coin, elle sélectionnerait autre chose que ce
+  qu'on a visé — et le bord d'une paroi, qui est justement ce qu'on vise le
+  plus souvent, deviendrait inattrapable. Même famille que le verrou d'axe :
+  l'accroche est juste, la pose est juste, c'est leur COMPOSITION qui décide.
+  Corollaire : un coin se pose sur la case VISÉE, jamais sur celle d'avant —
+  confondre les deux décale toute sélection d'un bloc vers l'observateur.
 - **Remailler depuis la SOURCE au lieu de la copie de travail.** C'est la faute
   qui se lit « le bouton ne fait rien » : l'opération réussit, le journal la
   garde, et l'écran montre le monde d'avant. La coque relit donc le `Staging`,

@@ -11,7 +11,7 @@
 
 use tf_app::etat::{direction, Etat, Quadrillage};
 use tf_render::Camera;
-use tf_world::coords::BlockPos;
+use tf_world::coords::{BBox, BlockPos};
 use tf_world::decoupe::Niveau;
 use tf_world::inference::{accrocher, Ancre};
 
@@ -280,4 +280,55 @@ fn l_etat_d_ouverture_regarde_le_contenu() {
 fn les_deux_niveaux_de_decoupe_ne_se_confondent_pas() {
     assert_eq!(Niveau::Chunk.cote(), 16);
     assert_eq!(Niveau::Region.cote(), 512);
+}
+
+/// **Le geste de sélection : gauche pose le coin 1, droit le coin 2, sur la
+/// case VISÉE.** On sélectionne le bloc qu'on regarde, pas l'air devant lui —
+/// c'est la convention de WorldEdit, et la confondre avec la case de POSE
+/// décalerait toute sélection d'un bloc vers l'observateur.
+#[test]
+fn un_clic_pose_le_coin_sur_la_case_visee() {
+    let mut e = etat_devant_le_mur();
+    e.selection.vider();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let vise = e.reticule.case.unwrap();
+    let pose = e.reticule.pose.unwrap();
+    assert_ne!(vise, pose, "sinon le test ne distingue rien");
+
+    assert!(e.poser_coin(true));
+    // **Un coin n'est pas une sélection.** WorldEdit non plus : il faut les
+    // deux, et annoncer un volume sur un seul clic ferait écrire dans un
+    // bloc que personne n'a désigné.
+    assert_eq!(e.selection.boite(), None);
+
+    // Le second coin ailleurs : la boîte s'étend.
+    let cam = Camera {
+        oeil: [0.5, 2.5, 0.5],
+        cible: [1.5, 2.5, 0.5],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    e.relever_reticule(&cam, 1.0, 64.0, &mur);
+    let autre = e.reticule.case.unwrap();
+    assert!(e.poser_coin(false));
+    let b = e.selection.boite().unwrap();
+    assert_eq!(b, BBox::new(vise, autre));
+
+    // Et l'ACCROCHAGE ne s'y applique pas : un coin qu'une inférence
+    // déplacerait sélectionnerait autre chose que ce qu'on a visé, et le bord
+    // d'une paroi — ce qu'on vise le plus souvent — deviendrait inattrapable.
+    assert_eq!(b.max.x.max(b.min.x), 10, "le coin a été déplacé");
+}
+
+/// Un clic dans le ciel ne doit pas déplacer une sélection existante : le
+/// réticule ne désigne rien, il n'y a pas de coin à poser.
+#[test]
+fn un_clic_dans_le_vide_ne_touche_pas_la_selection() {
+    let mut e = etat_devant_le_mur();
+    let avant = e.selection.boite();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    assert!(!e.poser_coin(true));
+    assert!(!e.poser_coin(false));
+    assert_eq!(e.selection.boite(), avant);
 }
