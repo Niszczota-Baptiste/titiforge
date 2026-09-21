@@ -9,11 +9,13 @@
 pub mod appareil;
 pub mod arene;
 pub mod camera;
+pub mod controles;
 pub mod modeles;
 pub mod scene;
 
 pub use appareil::{Appareil, AppareilError};
 pub use arene::{depaqueter, empaqueter, Arene, InstanceQuad, Tranche};
 pub use camera::Camera;
+pub use controles::{Mode, Orbite, Pilotage, Vol};
 pub use modeles::{faces_de, origines, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
 pub use scene::{AtlasGpu, Cible, Compte, Scene};

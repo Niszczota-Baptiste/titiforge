@@ -90,6 +90,15 @@ deux qui se cassent le plus facilement par inadvertance :
   greffon doit s'annuler avec le même Ctrl+Z qu'un `//set`. Le journal est une
   suite d'entrées réversibles TYPÉES ; l'instantané de section n'en est qu'une.
 
+**Deux MODES, et un bouton.** Éditer un monde et concevoir un bâtiment ne se
+pilotent pas pareil : en **Édition** on VOLE dans le monde et on sélectionne
+un VOLUME ; en **Conception** on ORBITE autour de ce qu'on bâtit et on
+sélectionne des ENTITÉS (face, arête, composant). Trois conséquences pour le
+cœur : *le moteur n'a pas de mode* — une sélection de Conception se résout en
+volumes avant d'atteindre `tf-ops` ; *le clic droit reste à la caméra dans les
+deux* ; *une bascule ne bouge jamais l'image*. Le pilotage est posé et testé
+sans écran (`tf-render/src/controles.rs`), le reste est de la phase 4.
+
 Ce qui se pose aujourd'hui, ce sont les **coutures** — registres plutôt
 qu'`enum` figés, journal typé, format de projet versionné. Le runtime de
 greffons ne se construit pas avant que le cœur soit fini.
@@ -184,7 +193,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (573 tests aujourd'hui)
+cargo test            # tous les crates (590 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -305,6 +314,7 @@ crates/
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
                (gloutonne ET modèles) · AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
+               pilotage : vol / orbite et la bascule ✅ (pur, sans écran)
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
@@ -1069,3 +1079,32 @@ propres à ce dépôt.
   contre le chemin lent sur les OCTETS produits, pas sur un compte. Corollaire :
   la couche de staging compte autant que la source, sinon une opération
   sauterait la région qu'une opération précédente vient de créer.
+
+- **Un bouton de mode qui BOUGE l'image est un bouton qu'on n'ose plus
+  toucher.** `Camera` porte un œil et une cible, donc la bascule vol ↔ orbite
+  a l'air gratuite. Elle ne l'est pas : en vol, la cible est un point
+  arbitraire posé à un mètre devant le nez, et orbiter autour d'elle ferait
+  pivoter l'utilisateur autour de son propre nez. Le pivot se DÉCIDE — ce
+  qu'on vise — et il se PROJETTE sur le rayon du regard : posé tel quel à
+  quarante blocs de l'axe, il faisait sauter l'œil de quarante blocs. Un
+  aller-retour doit rendre la caméra de départ, sinon le bouton coûte un
+  recadrage à chaque appui — une dérive qu'on attribue à sa souris pendant
+  des semaines. Corollaire : recentrer délibérément sur une sélection hors
+  champ est un AUTRE geste, avec un autre nom, parce qu'il bouge la caméra.
+- **`cible` est un POINT SUR le rayon, pas le rayon.** Un vol pose sa cible à
+  une unité devant le nez, une orbite la pose sur son pivot à soixante blocs :
+  deux points différents, la même direction, donc la même image — la matrice
+  de vue ne garde que la direction normalisée. Mon test comparait les POINTS
+  et rougissait sur du code juste, ce qui envoie chercher un bug là où il n'y
+  en a pas. « La même image » se dit avec l'œil et la DIRECTION.
+- **Une pente de caméra se borne, elle ne s'enroule pas.** À la verticale
+  pile, le regard est colinéaire au haut du monde, leur produit vectoriel
+  s'annule et la base de la vue devient dégénérée : l'image bascule d'un
+  quart de tour sans prévenir. Un demi-degré de marge coûte ce qu'on ne voit
+  pas et évite ce qu'on ne comprend pas. Même famille : un rayon d'orbite qui
+  atteint zéro donne une direction nulle, donc des `NaN` — et `NaN` ne plante
+  pas, il affiche du NOIR.
+- **Un zoom à pas FIXE est inutilisable aux deux bouts.** Trop lent pour
+  traverser un build, et il traverse l'objet d'un cran quand on est contre.
+  Un facteur rend le geste identique à toutes les échelles — ce qu'exige un
+  outil qui sert du bloc à la ville.

@@ -225,6 +225,51 @@ mesurée.
 
 `tf-app` n'existe pas. C'est ce qui transforme un moteur mesuré en outil.
 
+### Deux MODES, et un bouton pour passer de l'un à l'autre
+
+**Éditer un monde et concevoir un bâtiment ne se pilotent pas pareil**, et
+vouloir les servir avec un seul pilotage donne un outil qui n'est bon pour
+aucun des deux.
+
+| | **Édition** (WorldEdit, MCEdit) | **Conception** (SketchUp) |
+|---|---|---|
+| Caméra | on VOLE dans le monde | on ORBITE autour de ce qu'on bâtit |
+| Sélectionner | un VOLUME : deux coins, une `BBox` | des ENTITÉS : face, arête, groupe, composant |
+| Le clic gauche | poser pos1 / pos2 | pousser-tirer, dessiner |
+| Le survol montre | la case visée | un point d'inférence — coin, milieu, axe |
+| L'unité mentale | le bloc | la face et le composant |
+
+Les modes sont nommés d'après ce qu'ils FONT, pas d'après les trois logiciels
+qu'ils héritent : ces noms-là survivront aux leurs.
+
+**Ce que la décision impose, et qui n'est pas dans le bouton :**
+
+1. **Le moteur n'a PAS de mode.** La faute tentante est de le laisser
+   descendre dans `tf-ops` — une opération qui se comporterait autrement en
+   Conception. Une opération prend une portée et rend des bornes ; elle ne
+   sait pas quel geste l'a déclenchée, et une sélection de Conception se
+   RÉSOUT en volumes avant de l'atteindre. C'est le corollaire direct de « le
+   monde reste souverain ».
+2. **Le clic DROIT reste à la caméra dans les deux modes.** Piège déjà payé
+   dans `ExeWorldEdit` : « un outil qui coupe la caméra entière enferme
+   l'utilisateur ». Le partage gauche / droit / molette est FIXE ; c'est ce
+   que fait le gauche qui change avec le mode.
+3. **Une bascule ne bouge jamais l'image.** ✅ posé et testé
+   (`tf-render/src/controles.rs`) : `Vol`, `Orbite`, et un `Pilotage` qui
+   tient les deux états SYNCHRONES — un mode qui jetterait l'autre ferait du
+   bouton un travail. Le pivot d'une orbite se DÉCIDE, et il est projeté sur
+   le rayon du regard : posé tel quel à côté de l'axe, il faisait sauter
+   l'œil de quarante blocs. Recentrer délibérément sur une sélection hors
+   champ est un autre geste, qui porte un autre nom (`recentrer`) parce qu'il
+   bouge la caméra et doit le dire.
+4. **La sélection ne se jette pas au changement de mode**, sinon le bouton
+   coûte un travail. Une `BBox` reste une `BBox` ; elle devient simplement une
+   chose qu'on pousse-tire au lieu d'une chose qu'on remplit.
+5. **Le mode se persiste** avec le projet — le remettre à chaque ouverture
+   serait le rendre pénible pour rien.
+6. **Un greffon déclare dans QUEL mode vit son outil.** Sans ça, la barre de
+   l'Édition finit par porter les outils de conception, et réciproquement.
+
 **Deux règles d'architecture, et elles ne se retrofitent pas :**
 
 - **le moteur vit dans un fil à part, l'interface ne bloque jamais.** Une
