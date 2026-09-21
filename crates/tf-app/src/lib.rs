@@ -13,6 +13,8 @@
 
 pub mod etat;
 pub mod interface;
+pub mod moteur;
 pub mod scene;
 
 pub use etat::{Etat, Quadrillage, ResumeSelection, SousLeReticule};
+pub use moteur::{Commande, Moteur, Reponse};

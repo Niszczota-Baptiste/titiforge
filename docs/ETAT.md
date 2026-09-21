@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **714**, zéro échec |
+| Tests | **722**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-714 tests, répartis par ce qu'ils PROUVENT :
+722 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -69,6 +69,7 @@ cargo test --workspace
 | `tf-world` selection | 20 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, et le VERROU que la pose impose |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 13 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` moteur | 8 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
@@ -97,6 +98,13 @@ Trois propriétés valent d'être nommées :
   d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
   croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
   pas vu ce qui le fait rougir.
+- **Le fil moteur aussi.** Six mutations : `recevoir` qui bloque, le compteur
+  d'en-vol qui ne retombe pas, `annuler` qui prend le mauvais sens, une
+  opération sans effet annoncée comme faite, la forme perdue en route. La
+  première a d'abord fait PENDRE la suite au lieu de la faire rougir — un test
+  qui pend ne dit pas ce qui ne va pas, il dit seulement qu'on a attendu. Le
+  test tourne donc dans un fil témoin avec une attente bornée, et la même faute
+  sort maintenant une phrase.
 - **L'exécuteur et le rejeu aussi.** Six mutations : `//hollow` qui ne pose
   plus d'air (donc ne change rien), `//stack` qui avance d'un bloc au lieu de
   la taille de la sélection, le rejeu qui ignore l'empreinte de garde, le rejeu

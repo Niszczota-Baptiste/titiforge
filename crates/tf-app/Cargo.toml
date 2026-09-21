@@ -32,6 +32,11 @@ winit = { version = "0.30", optional = true }
 egui-winit = { version = "0.29", optional = true, default-features = false }
 png = "0.17"
 
+[dev-dependencies]
+# Les fixtures de monde : le fil moteur se teste sur un VRAI round-trip Anvil,
+# en mémoire et sans écran.
+tf-bench = { path = "../tf-bench" }
+
 [features]
 default = ["fenetre"]
 fenetre = ["dep:winit", "dep:egui-winit"]

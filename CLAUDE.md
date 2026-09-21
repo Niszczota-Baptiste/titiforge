@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (714 tests aujourd'hui)
+cargo test            # tous les crates (722 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -362,7 +362,8 @@ crates/
                quadrillage ✅ : un calque de lignes, chunks et .mca
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
-               descripteurs ✅ · fil moteur et application à venir.
+               descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
+               · branchement au monde et remaillage à venir.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1297,6 +1298,12 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Un test qui PEND ne dit pas ce qui ne va pas.** En cassant `recevoir` pour
+  qu'il bloque — la faute même que le fil moteur existe pour empêcher — la
+  suite ne rendait plus la main du tout : ni rouge, ni vert, rien à lire. Une
+  propriété qui se formule « ça ne doit pas attendre » se vérifie donc dans un
+  fil TÉMOIN, avec une attente bornée, sinon le seul symptôme est l'absence de
+  symptôme.
 - **Un texte d'aide faux se lit exactement comme un texte d'aide juste.**
   `editer` listait ses dix opérations à la main ; la liste avait déjà vieilli,
   et rien ne pouvait le dire — ce n'est pas du code, donc aucun compilateur, et
