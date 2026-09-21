@@ -55,7 +55,7 @@ pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32) {
     let mut app = Coque {
         ouvert,
         moteur,
-        remailler: false,
+        remailler: None,
         taille: (larg, haut),
         fenetre: None,
         gpu: None,
@@ -90,12 +90,13 @@ struct Coque {
     ouvert: scene::Ouvert,
     /// `None` pour la fixture : elle n'a pas de save derrière elle.
     moteur: Option<Moteur>,
-    /// Le monde a changé : il faut relire la zone et remailler.
+    /// Ce qui a changé, en coordonnées MONDE. `None` = rien à remailler.
     ///
-    /// Un drapeau et non un appel immédiat : plusieurs réponses peuvent
-    /// arriver dans la même image, et remailler trois fois de suite coûterait
-    /// trois fois pour le même résultat.
-    remailler: bool,
+    /// Les BORNES et non un drapeau : c'est ce qui rend le remaillage
+    /// incrémental. Plusieurs réponses peuvent arriver dans la même image, et
+    /// elles s'UNISSENT — remailler trois fois coûterait trois fois pour le
+    /// même résultat.
+    remailler: Option<tf_world::BBox>,
     taille: (u32, u32),
     fenetre: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -279,7 +280,13 @@ impl ApplicationHandler for Coque {
                 // l'image précédente doit être à l'écran maintenant, pas dans
                 // une image de plus : « le bouton met du temps à répondre » et
                 // « le bouton ne répond pas » se ressemblent trop.
-                self.remailler |= ramasser(&mut self.moteur, &mut g.etat);
+                // **Les bornes voyagent jusqu'ici.** C'est ce que l'opération
+                // a VRAIMENT écrit, et c'est ce qui rend le remaillage
+                // incrémental : sans elles, on relit toute la zone pour trois
+                // blocs.
+                if let Some(b) = ramasser(&mut self.moteur, &mut g.etat) {
+                    self.remailler = Some(tf_app::scene::unir(self.remailler, b));
+                }
                 g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
                 g.etat.editable = self.ouvert.editable();
                 if let Err(e) = dessiner(f, g, &self.ouvert.monde) {
@@ -288,9 +295,8 @@ impl ApplicationHandler for Coque {
                 // Ce que l'interface a décidé pendant le dessin part
                 // maintenant : le fil travaillera pendant l'image suivante.
                 envoyer(&mut self.moteur, &mut g.etat);
-                if self.remailler {
-                    self.remailler = false;
-                    if let Err(e) = self.ouvert.remailler() {
+                if let Some(b) = self.remailler.take() {
+                    if let Err(e) = self.ouvert.remailler(Some(b)) {
                         g.etat.message = format!("remaillage : {e}");
                     } else if let Err(e) = regarnir(g, &self.ouvert.monde) {
                         g.etat.message = format!("remaillage : {e}");
@@ -322,15 +328,17 @@ fn vue_courante(g: &Gpu) -> (tf_render::Camera, f32) {
 ///
 /// **Ne bloque jamais** : c'est toute la raison d'être du fil. Une réponse qui
 /// n'est pas encore là ne coûte rien, et l'image suivante la trouvera.
-fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> bool {
-    let Some(moteur) = m else { return false };
-    let mut bouge = false;
+fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> Option<tf_world::BBox> {
+    let moteur = m.as_mut()?;
+    let mut bouge: Option<tf_world::BBox> = None;
     for r in moteur.recevoir() {
         e.message = r.texte();
         // **Des bornes, donc des blocs ont changé.** C'est le seul critère :
         // une opération qui n'a rien écrit ne rend pas de bornes, et
         // remailler pour rien coûterait la zone entière à chaque clic.
-        bouge |= r.bornes().is_some();
+        if let Some(b) = r.bornes() {
+            bouge = Some(tf_app::scene::unir(bouge, b));
+        }
     }
     bouge
 }

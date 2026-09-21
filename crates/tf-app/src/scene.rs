@@ -25,6 +25,18 @@ pub struct Monde {
     pub quoi: String,
     pub quads: usize,
     pub poses: usize,
+    /// Le maillage, gardé LOT PAR LOT.
+    ///
+    /// C'est ce qui rend le remaillage incrémental possible : on remplace les
+    /// lots des sections touchées et on reconstruit les arènes, au lieu de
+    /// remailler le monde entier pour trois blocs.
+    chantier: tf_mesh::Chantier,
+    /// L'habillage, indexé par `StateId`. Sa LONGUEUR est aussi le nombre
+    /// d'états que l'atlas connaît : un état au-delà n'a pas de texture.
+    habillage: Vec<tf_assets::apparence::Habillage>,
+    /// La table d'états de CETTE scène. Un `StateId` n'a de sens que
+    /// relativement à elle.
+    interner: Interner,
 }
 
 impl Monde {
@@ -175,6 +187,36 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
         });
 
     let chantier = grille.mailler_parallele(&table);
+    let (arene, modeles) = arenes(&chantier, &table, &habillage, &interner, climat);
+
+    let (min, max) = arene.bornes().unwrap_or(([0.0; 3], [64.0; 3]));
+    Ok(Monde {
+        quads: chantier.quads(),
+        poses: chantier.poses(),
+        quoi,
+        grille,
+        table,
+        arene,
+        modeles,
+        atlas,
+        min,
+        max,
+        chantier,
+        habillage,
+        interner,
+    })
+}
+
+/// **Les deux arènes GPU, depuis un chantier.** Écrite une fois : le
+/// chargement et le remaillage incrémental y passent tous les deux, et deux
+/// copies finiraient par teinter différemment ce qui vient d'être édité.
+fn arenes(
+    chantier: &tf_mesh::Chantier,
+    table: &TableFormes,
+    habillage: &[tf_assets::apparence::Habillage],
+    interner: &Interner,
+    climat: &tf_assets::climat::Climat,
+) -> (Arene, AreneModeles) {
     let teinte_de = |genre: tf_assets::GenreTeinte, biome: StateId| -> Option<[f32; 3]> {
         if genre == tf_assets::GenreTeinte::Aucune {
             return None;
@@ -189,7 +231,7 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
         Some(tf_assets::apparence::teinte_finale(c))
     };
     let arene = Arene::depuis(
-        &chantier,
+        chantier,
         &|id, face, biome| match habillage.get(id as usize) {
             Some(h) => {
                 let a = h.cube[face.indice()];
@@ -198,7 +240,7 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
             None => (0, [1.0; 3]),
         },
     );
-    let modeles = AreneModeles::depuis(&chantier, &|id, biome| {
+    let modeles = AreneModeles::depuis(chantier, &|id, biome| {
         let Some(h) = habillage.get(id as usize) else {
             return Vec::new();
         };
@@ -215,22 +257,9 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
                 })
             })
             .collect();
-        tf_render::faces_de(tf_mesh::forme::Formes::cuboides(&table, id), &hab)
+        tf_render::faces_de(tf_mesh::forme::Formes::cuboides(table, id), &hab)
     });
-
-    let (min, max) = arene.bornes().unwrap_or(([0.0; 3], [64.0; 3]));
-    Ok(Monde {
-        quads: chantier.quads(),
-        poses: chantier.poses(),
-        quoi,
-        grille,
-        table,
-        arene,
-        modeles,
-        atlas,
-        min,
-        max,
-    })
+    (arene, modeles)
 }
 
 /// **Le monde OUVERT : le pack, la copie de travail, et ce que le GPU dessine.**
@@ -295,18 +324,136 @@ impl Ouvert {
         })
     }
 
-    /// Relit la zone et remaille. **Depuis la copie de travail**, pas la
-    /// source : c'est elle qui porte ce qu'on vient d'écrire.
+    /// Relit et remaille. **Depuis la copie de travail**, pas la source :
+    /// c'est elle qui porte ce qu'on vient d'écrire.
     ///
-    /// Toute la zone, pas seulement ce qui a bougé. Le remaillage incrémental
-    /// viendra ; le faire maintenant demanderait de découper l'arène GPU, et
-    /// une arène mal recousue affiche un mur là où il n'y en a plus — un défaut
-    /// qu'on met des heures à voir. Sur la zone d'aperçu, tout refaire se
-    /// mesure en dizaines de millisecondes.
-    pub fn remailler(&mut self) -> Result<(), String> {
+    /// `bornes` est ce que l'opération a VRAIMENT écrit. Sans elles, on
+    /// recharge tout ; avec, on ne relit et ne remaille que les sections
+    /// touchées, **plus une case de débordement** — le mailleur travaille avec
+    /// un padding, donc un bloc au bord d'une section change les faces
+    /// visibles de la voisine.
+    ///
+    /// **Un état inconnu force le rechargement complet.** L'atlas ne monte que
+    /// les textures des blocs PRÉSENTS : poser un bloc dont la scène n'avait
+    /// jamais vu l'état lui donnerait une texture prise au hasard dans la
+    /// table voisine. Ça arrive une fois par type de bloc et par séance, et
+    /// c'est le seul moment où l'on paie le prix fort.
+    pub fn remailler(&mut self, bornes: Option<tf_world::coords::BBox>) -> Result<(), String> {
         let Some(st) = &self.staging else {
             return Err("la fixture n'a pas de save derrière elle".into());
         };
+        let Some(b) = bornes else {
+            return self.recharger();
+        };
+        let visees =
+            Grille::sections_autour([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
+        if visees.is_empty() {
+            return Ok(());
+        }
+        // **On relit les SECTIONS visées, et rien de plus.**
+        //
+        // Premier jet : la boîte allait de y = −64 à 319 « pour être sûr ».
+        // Mesuré, le remaillage incrémental gagnait ×1,1 sur un rechargement
+        // complet — autant dire rien : pour trois blocs je relisais neuf
+        // chunks sur TOUTE la hauteur du monde, là où la zone entière n'en
+        // faisait que quatre. Le chemin rapide lisait plus que le lent.
+        //
+        // La hauteur se borne donc aux sections visées, et le rectangle à
+        // l'intersection avec la ZONE affichée : un remaillage n'a pas à
+        // charger des chunks que la scène ne montre pas.
+        let [zx0, zz0, zx1, zz1] = self.zone;
+        let serre = |v: i32, bas: i32, haut: i32| v.clamp(bas, haut);
+        let x0 = serre(
+            visees.iter().map(|a| a.0).min().unwrap() * 16,
+            zx0 * 16,
+            zx1 * 16 + 15,
+        );
+        let x1 = serre(
+            visees.iter().map(|a| a.0).max().unwrap() * 16 + 15,
+            zx0 * 16,
+            zx1 * 16 + 15,
+        );
+        let z0 = serre(
+            visees.iter().map(|a| a.1).min().unwrap() * 16,
+            zz0 * 16,
+            zz1 * 16 + 15,
+        );
+        let z1 = serre(
+            visees.iter().map(|a| a.1).max().unwrap() * 16 + 15,
+            zz0 * 16,
+            zz1 * 16 + 15,
+        );
+        let y0 = visees.iter().map(|a| a.2 as i32).min().unwrap() * 16;
+        let y1 = visees.iter().map(|a| a.2 as i32).max().unwrap() * 16 + 15;
+        let lu = tf_world::BBox::new(BlockPos::new(x0, y0, z0), BlockPos::new(x1, y1, z1));
+        let t0 = std::time::Instant::now();
+        let connus = self.monde.interner.len();
+        let mut interner = std::mem::take(&mut self.monde.interner);
+        let grille = &mut self.monde.grille;
+        // **Les sections visées sont RETIRÉES d'abord.** Une section que la
+        // save n'a plus ne revient pas de la relecture : sans ce retrait, son
+        // ancien contenu resterait dans la grille et les blocs effacés
+        // resteraient à l'écran.
+        //
+        // **Aujourd'hui, ce retrait n'est pas observable**, et c'est mesuré :
+        // la mutation qui le supprime ne fait rougir aucun test, y compris
+        // celui qui vide une section entière. La raison est que NOTRE écrivain
+        // ne supprime jamais une section — le splice garde la section, avec
+        // une palette d'air. Le jeu, lui, les supprime. Le retrait protège donc
+        // d'un écrivain, pas d'un bug : le jour où l'on laisse tomber les
+        // sections tout-air à l'écriture (ce qui serait légitime), son absence
+        // laisserait de la géométrie fantôme sans qu'aucun test ne le dise.
+        // Il reste, et l'hypothèse qu'il couvre est écrite ici.
+        for a in &visees {
+            grille.retirer(*a);
+        }
+        tf_world::sections_de(
+            st.as_ref(),
+            &tf_world::Dimension::Overworld,
+            tf_world::Folder::Region,
+            &lu,
+            &mut interner,
+            |s| {
+                let y = s.section.y;
+                if let Some(bi) = s.biomes {
+                    grille.poser_biomes(s.chunk.x, s.chunk.z, y, bi);
+                }
+                grille.poser(s.chunk.x, s.chunk.z, s.section);
+            },
+        );
+        self.monde.interner = interner;
+        if self.monde.interner.len() > connus {
+            // Un état que l'atlas ne connaît pas : on recharge tout plutôt que
+            // de lui donner la texture d'un autre.
+            return self.recharger();
+        }
+        phase("relecture", t0);
+        let t1 = std::time::Instant::now();
+        let neufs = self.monde.grille.mailler_ces(&self.monde.table, &visees);
+        self.monde.chantier.remplacer(&visees, neufs);
+        phase("maillage ", t1);
+        let t2 = std::time::Instant::now();
+        let (arene, modeles) = arenes(
+            &self.monde.chantier,
+            &self.monde.table,
+            &self.monde.habillage,
+            &self.monde.interner,
+            &self.assets.climat,
+        );
+        self.monde.arene = arene;
+        self.monde.modeles = modeles;
+        phase("arènes   ", t2);
+        self.monde.quads = self.monde.chantier.quads();
+        self.monde.poses = self.monde.chantier.poses();
+        Ok(())
+    }
+
+    /// Tout relire et tout remailler — y compris l'atlas.
+    fn recharger(&mut self) -> Result<(), String> {
+        let st = self
+            .staging
+            .as_ref()
+            .expect("un monde éditable a un staging");
         self.monde = charger_monde(
             &self.assets,
             Ou::Source(st.as_ref(), self.zone, self.nom.clone()),
@@ -330,6 +477,48 @@ impl Drop for Ouvert {
             let _ = std::fs::remove_dir_all(c);
         }
     }
+}
+
+/// **Ce que chaque phase du remaillage coûte**, quand on le demande
+/// (`TF_PHASES=1`).
+///
+/// Ce n'est pas du débogage oublié : découper une chaîne AVANT de choisir quoi
+/// accélérer est la seule façon de ne pas travailler pour rien, et ce dépôt l'a
+/// payé deux fois. Ici, la découpe a dit que le remaillage « incrémental » que
+/// je venais d'écrire passait 18 ms sur 18,3 à RELIRE — le maillage optimisé
+/// pesait 0,2. La ligne reste pour que la prochaine mesure soit une commande et
+/// pas une réécriture.
+fn phase(quoi: &str, depuis: std::time::Instant) {
+    if std::env::var_os("TF_PHASES").is_some() {
+        eprintln!(
+            "  {quoi} : {:.1} ms",
+            depuis.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
+/// **L'union de deux emprises.** Plusieurs opérations peuvent répondre dans la
+/// même image, et plusieurs images peuvent passer avant un remaillage : on
+/// prend l'union, jamais la dernière. Ne garder que la dernière laisserait les
+/// précédentes à l'écran, et remailler trois fois coûterait trois fois pour le
+/// même résultat.
+///
+/// Écrite ici parce qu'elle servait déjà à DEUX endroits, ce qui est
+/// exactement une de trop.
+pub fn unir(a: Option<tf_world::BBox>, b: tf_world::BBox) -> tf_world::BBox {
+    let Some(a) = a else { return b };
+    tf_world::BBox::new(
+        BlockPos::new(
+            a.min.x.min(b.min.x),
+            a.min.y.min(b.min.y),
+            a.min.z.min(b.min.z),
+        ),
+        BlockPos::new(
+            a.max.x.max(b.max.x),
+            a.max.y.max(b.max.y),
+            a.max.z.max(b.max.z),
+        ),
+    )
 }
 
 /// Le quadrillage à dessiner, depuis l'état et le point regardé.

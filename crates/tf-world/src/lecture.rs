@@ -72,6 +72,9 @@ pub fn sections_de<S: RegionSource + ?Sized>(
 ) -> Bilan {
     let mut bilan = Bilan::default();
     let (a, b) = (sel.min.chunk(), sel.max.chunk());
+    // Les sections que la hauteur demandée touche, en division PLANCHER : le
+    // bloc −1 est dans la section −1, pas la 0.
+    let (ymin, ymax) = (sel.min.y.div_euclid(16), sel.max.y.div_euclid(16));
     for pos in sel.regions() {
         let Ok(octets) = src.read_region(dim, folder, pos) else {
             continue; // région absente : ce n'est pas une anomalie
@@ -82,6 +85,25 @@ pub fn sections_de<S: RegionSource + ?Sized>(
         };
         bilan.regions += 1;
         for brut in region.iter() {
+            // **On filtre AVANT d'inflater.** Le filtre était posé après le
+            // scan : une région bâtie porte 256 chunks, donc lire UNE section
+            // en décompressait 256. Mesuré sur la fixture de terrain, une
+            // section décodée coûtait 17,5 ms là où les octets de la région
+            // s'obtenaient en 0,2 — tout le reste était du travail jeté.
+            //
+            // L'index donne les coordonnées sans rien décompresser. Le
+            // CONTENU reste juge — un `.mca` porte ses propres coordonnées, et
+            // c'est ce qui rend lisible un fichier mal nommé — mais il ne peut
+            // trancher que pour les chunks qu'on a ouverts. Un chunk rangé à
+            // un index qui ment sur sa place serait donc sauté ; il serait
+            // aussi illisible par le jeu.
+            let approx = ChunkPos {
+                x: pos.x * 32 + (brut.index % 32) as i32,
+                z: pos.z * 32 + (brut.index / 32) as i32,
+            };
+            if approx.x < a.x || approx.x > b.x || approx.z < a.z || approx.z > b.z {
+                continue;
+            }
             let Ok(inflated) = inflate(&brut.payload, brut.compression) else {
                 bilan.illisibles += 1;
                 continue;
@@ -98,6 +120,13 @@ pub fn sections_de<S: RegionSource + ?Sized>(
             for s in &sc.sections {
                 if s.spans.is_none() {
                     bilan.sans_blocs += 1;
+                    continue;
+                }
+                // **La HAUTEUR de la sélection compte aussi.** Elle était
+                // ignorée : lire une section en décodait toutes celles de son
+                // chunk, biomes compris. Sur un monde 1.18 c'est vingt-quatre
+                // sections pour une.
+                if (s.y as i32) < ymin || (s.y as i32) > ymax {
                     continue;
                 }
                 match decode_section(&inflated, &sc, s, interner) {

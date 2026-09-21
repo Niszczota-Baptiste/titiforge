@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (757 tests aujourd'hui)
+cargo test            # tous les crates (771 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -371,7 +371,8 @@ crates/
                · ÉCRIRE DANS LA SAVE ✅ (refus, sauvegarde, écriture)
                · OUTILS de Conception ✅ (tirer / poser / casser)
                · FORMES, comptage et graine réglables ✅
-               · remaillage encore global, composants à écrire.
+               · REMAILLAGE INCRÉMENTAL ✅ (× 7 sur 64 chunks)
+               · résidence pilotée par la caméra et composants à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1338,6 +1339,21 @@ propres à ce dépôt.
   n° 8 appliqué au geste. Et la tranche commence à `ancien_max + 1`, parce que
   les bornes d'une `BBox` sont INCLUSES : un bloc d'écart et la dernière rangée
   de l'ancien volume est écrasée.
+- **J'ai optimisé le maillage pendant que la relecture coûtait cent fois
+  plus.** Le remaillage incrémental écrit, mesuré : **× 1,1**. La découpe par
+  phases a dit pourquoi — 18 ms sur 18,3 dans la RELECTURE, 0,2 dans le
+  maillage. `sections_de` inflatait chaque chunk AVANT de filtrer (256 chunks
+  décompressés pour en lire quatre) et ignorait la HAUTEUR de la sélection
+  (vingt-quatre sections décodées pour une). Corrigé : × 87 sur la lecture
+  d'une section, × 7 sur le remaillage complet — et le chargement en profite
+  autant. C'est le piège n° 1 du dépôt, payé une troisième fois : **découper
+  une chaîne AVANT de choisir quoi accélérer n'est pas une précaution.**
+- **Un témoin qui ne voit pas le même monde accuse le mauvais coupable.** Pour
+  croiser le remaillage incrémental et le rechargement complet, j'avais ouvert
+  un SECOND `Ouvert` sur la même save. Il a sa propre copie de travail, donc il
+  lisait le monde d'AVANT l'opération : le test annonçait 4 722 quads contre
+  4 840 et accusait le chemin rapide d'une différence qui venait du témoin. Un
+  témoin se construit en changeant UNE chose, et rien d'autre.
 - **« Déclaré, branché, testé — et inatteignable » ne se referme pas une fois
   pour toutes.** Un audit de fin de phase a trouvé QUATRE trous du même genre,
   tous creusés par le même hôte neuf : la coque câblait `Forme::Boite`,

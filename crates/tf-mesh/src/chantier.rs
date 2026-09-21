@@ -73,6 +73,16 @@ impl Grille {
         v
     }
 
+    /// Retire une section. **Rend vrai s'il y en avait une.**
+    ///
+    /// Le pendant de `poser`, et il manquait : sans lui, une section qui se
+    /// vide dans la save reste dans la grille — la relecture ne la rend plus,
+    /// donc rien ne l'efface, donc les blocs supprimés restent à l'écran.
+    pub fn retirer(&mut self, a: Adresse) -> bool {
+        self.biomes.remove(&a);
+        self.sections.remove(&a).is_some()
+    }
+
     pub fn section(&self, a: Adresse) -> Option<&Section> {
         self.sections.get(&a)
     }
@@ -209,6 +219,75 @@ impl Grille {
         }
     }
 
+    /// **Les sections qu'une écriture oblige à remailler.**
+    ///
+    /// C'est la boîte des blocs écrits, convertie en sections, **plus une
+    /// case de débordement sur chaque axe** — et cette marge n'est pas une
+    /// précaution : le mailleur travaille avec une couche de padding, donc
+    /// poser un bloc au bord d'une section change les faces visibles de la
+    /// section d'à côté. Sans elle, un trait au bord laisse un mur de faces
+    /// fantômes le long de la frontière, et il faut tout remailler pour le
+    /// faire disparaître. Piège hérité d'`ExeWorldEdit` (`chunksInBounds`),
+    /// payé une fois, écrit une fois.
+    ///
+    /// **Rend les adresses VISÉES, pas celles qui ont du contenu.** Une
+    /// section qui vient de se vider ne figure plus dans la grille : si on ne
+    /// rendait que ce qui existe, son maillage resterait à l'écran et les
+    /// blocs effacés resteraient visibles. C'est l'appelant qui retire
+    /// d'abord tout ce qui est visé, puis remaille ce qui a encore du
+    /// contenu.
+    ///
+    /// Les bornes sont INCLUSES, comme partout dans ce dépôt.
+    pub fn sections_autour(min: [i32; 3], max: [i32; 3]) -> Vec<Adresse> {
+        let cell = |v: i32, marge: i32| -> i32 {
+            // En `i64` : `min - 16` près de `i32::MIN` s'enroulerait, et la
+            // marge enverrait le remaillage à l'autre bout du monde.
+            ((v as i64 + marge as i64).div_euclid(16)).clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32
+        };
+        let (x0, x1) = (cell(min[0], -1), cell(max[0], 1));
+        let (y0, y1) = (cell(min[1], -1), cell(max[1], 1));
+        let (z0, z1) = (cell(min[2], -1), cell(max[2], 1));
+        let mut out = Vec::new();
+        for cz in z0..=z1 {
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    // Le Y d'une section tient dans un `i8` : au-delà, il n'y
+                    // a pas de section à remailler.
+                    if let Ok(y) = i8::try_from(cy) {
+                        out.push((cx, cz, y));
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// Maille SEULEMENT ces adresses.
+    ///
+    /// Le voisinage est lu dans la grille ENTIÈRE — c'est ce qui rend le
+    /// résultat identique à celui d'un maillage complet, et c'est la seule
+    /// propriété qui compte : un remaillage partiel qui ne donnerait pas les
+    /// mêmes quads serait une optimisation qui abîme l'image.
+    pub fn mailler_ces<F: Formes + ?Sized>(&self, f: &F, adresses: &[Adresse]) -> Chantier {
+        let mut out = Chantier::default();
+        let mut v = Voisinage::new();
+        for &a in adresses {
+            if self.sans_contenu(a, f) {
+                out.sautees += 1;
+                continue;
+            }
+            self.voisinage(a, &mut v);
+            let op = Opacite::relever(&v, f);
+            let mut lot = Lot::vide(a);
+            crate::glouton::mailler_avec(&v, f, &op, &mut lot.quads);
+            crate::modeles::instancier_avec(&v, f, &op, &mut lot.poses);
+            out.lots.push(lot);
+        }
+        out
+    }
+
     /// Maille tout ce que la grille porte, en séquence.
     pub fn mailler<F: Formes + ?Sized>(&self, f: &F) -> Chantier {
         let mut out = Chantier::default();
@@ -271,6 +350,34 @@ pub struct Chantier {
 }
 
 impl Chantier {
+    /// **Remplace les lots des adresses VISÉES par ceux d'un remaillage
+    /// partiel.**
+    ///
+    /// Elle remplace `fusionner`, qui concaténait deux chantiers et ne servait
+    /// nulle part : concaténer aurait laissé deux lots pour la même adresse,
+    /// donc la section dessinée deux fois.
+    ///
+    /// Les visées d'abord, les neuves ensuite, et c'est l'ordre qui compte :
+    /// *un chunk qui se VIDE ne figure plus dans la liste des chunks*. Si on
+    /// se contentait d'insérer ce que le remaillage a produit, le maillage
+    /// d'une section qu'on vient d'effacer resterait à l'écran et les blocs
+    /// supprimés resteraient visibles. Piège payé dans `ExeWorldEdit`, et il
+    /// ne se voit que sur un effacement.
+    ///
+    /// L'ordre final reste trié par adresse : le chantier est déterministe, et
+    /// deux séances qui produiraient deux ordres donneraient deux images
+    /// comparables à rien.
+    pub fn remplacer(&mut self, visees: &[Adresse], neufs: Chantier) {
+        let vise: std::collections::HashSet<Adresse> = visees.iter().copied().collect();
+        self.lots.retain(|l| !vise.contains(&l.adresse));
+        self.lots.extend(neufs.lots);
+        self.lots.sort_by_key(|l| l.adresse);
+        // `sautees` compte ce qu'on n'a pas eu à mailler : il ne s'additionne
+        // pas d'un remaillage à l'autre, il se REMPLACE — un compteur cumulé
+        // dirait n'importe quoi après dix opérations.
+        self.sautees = neufs.sautees;
+    }
+
     pub fn maillees(&self) -> usize {
         self.lots.len()
     }
@@ -286,11 +393,6 @@ impl Chantier {
     /// Octets que ça pèse : 16 par quad, 12 par pose.
     pub fn octets(&self) -> usize {
         self.quads() * 16 + self.poses() * std::mem::size_of::<crate::maillage::Instance>()
-    }
-
-    pub fn fusionner(&mut self, autre: Chantier) {
-        self.lots.extend(autre.lots);
-        self.sautees += autre.sautees;
     }
 
     /// Les lots dans un ordre stable, quel que soit celui de production.

@@ -297,3 +297,218 @@ fn un_indice_hors_palette_ne_tue_pas_le_mailleur() {
         }
     }
 }
+
+// ── le remaillage PARTIEL ───────────────────────────────────────────────────
+
+/// Quelques sections pleines côte à côte et empilées : de quoi qu'un
+/// remaillage partiel ait des VOISINS à lire, ce qui est tout l'enjeu.
+fn petit_monde() -> (Grille, TableFormes) {
+    let f = table();
+    let mut g = Grille::new();
+    for cz in 0..2 {
+        for cx in 0..2 {
+            for y in 0..2 {
+                g.poser(cx, cz, pleine(y, PIERRE));
+            }
+        }
+    }
+    (g, f)
+}
+
+/// **Un remaillage partiel doit rendre EXACTEMENT les mêmes quads** que le
+/// maillage complet des mêmes sections. Une optimisation qui change l'image
+/// n'est pas une optimisation, c'est un bug qu'on a choisi.
+#[test]
+fn mailler_ces_rend_la_meme_chose_que_tout_mailler() {
+    let (g, f) = petit_monde();
+    let complet = g.mailler(&f);
+
+    // On remaille une section sur deux, et on compare lot par lot.
+    let toutes = g.adresses();
+    let moitie: Vec<_> = toutes.iter().copied().step_by(2).collect();
+    assert!(moitie.len() >= 2, "il faut de quoi comparer");
+    let partiel = g.mailler_ces(&f, &moitie);
+
+    for lot in &partiel.lots {
+        let attendu = complet
+            .lots
+            .iter()
+            .find(|l| l.adresse == lot.adresse)
+            .unwrap_or_else(|| panic!("{:?} absent du maillage complet", lot.adresse));
+        // Sur les QUADS eux-mêmes, pas sur un compte : deux maillages du même
+        // nombre de quads peuvent décrire deux images différentes.
+        assert_eq!(lot.quads.quads, attendu.quads.quads, "{:?}", lot.adresse);
+        assert_eq!(
+            lot.quads.quads_glouton, attendu.quads.quads_glouton,
+            "{:?}",
+            lot.adresse
+        );
+        assert_eq!(lot.poses.poses, attendu.poses.poses, "{:?}", lot.adresse);
+    }
+}
+
+/// **La marge d'UNE case n'est pas une précaution.** Le mailleur travaille
+/// avec une couche de padding : poser un bloc au bord d'une section change
+/// les faces visibles de la section d'à côté. Sans la marge, un trait au bord
+/// laisse un mur de faces fantômes le long de la frontière.
+#[test]
+fn les_sections_a_remailler_debordent_d_une_case() {
+    use tf_mesh::Grille;
+
+    // **La marge est d'un BLOC, pas d'une section** — et c'est exactement ce
+    // qu'il faut : le padding de la section S couvre les blocs
+    // `S·16 − 1 .. S·16 + 16`, donc un bloc B ne concerne que les sections
+    // dont le padding le contient. Déborder d'une SECTION entière remaillerait
+    // vingt-six voisines pour un bloc posé au milieu — un facteur 26 pour rien.
+    //
+    // Au coin bas (bloc 0), les deux sections de chaque axe : celle du bloc, et
+    // celle d'avant, dont le padding touche le bloc 0.
+    let a = Grille::sections_autour([0, 0, 0], [0, 0, 0]);
+    assert!(a.contains(&(0, 0, 0)), "la sienne");
+    assert!(a.contains(&(-1, 0, 0)), "la voisine en −X");
+    assert!(a.contains(&(0, -1, 0)), "la voisine en −Z");
+    assert!(a.contains(&(0, 0, -1)), "la voisine en −Y");
+    assert!(a.contains(&(-1, -1, -1)), "et leur coin commun");
+    assert_eq!(a.len(), 8, "2 × 2 × 2 au coin BAS d'une section : {a:?}");
+
+    // Au coin HAUT (bloc 15), c'est l'autre côté : la section suivante.
+    let h = Grille::sections_autour([15, 15, 15], [15, 15, 15]);
+    assert!(h.contains(&(0, 0, 0)) && h.contains(&(1, 1, 1)), "{h:?}");
+    assert_eq!(h.len(), 8);
+
+    // Un bloc au MILIEU ne touche aucune voisine : son padding ne sort pas.
+    let b = Grille::sections_autour([8, 8, 8], [8, 8, 8]);
+    assert_eq!(b, vec![(0, 0, 0)], "{b:?}");
+}
+
+/// Un Y hors de l'intervalle d'un `i8` n'a pas de section : on ne l'invente
+/// pas. Le monde va de −64 à 320, mais un `//expand` peut sortir de tout.
+#[test]
+fn un_y_demesure_ne_donne_pas_de_section() {
+    use tf_mesh::Grille;
+    let a = Grille::sections_autour([0, i32::MAX - 1, 0], [0, i32::MAX, 0]);
+    assert!(a.is_empty(), "{a:?}");
+    // Et près de i32::MIN, la marge ne doit pas s'enrouler.
+    let b = Grille::sections_autour([i32::MIN, 0, i32::MIN], [i32::MIN, 0, i32::MIN]);
+    assert!(b
+        .iter()
+        .all(|(x, z, _)| *x <= i32::MIN / 16 + 1 && *z <= i32::MIN / 16 + 1));
+}
+
+/// Une adresse qui n'a pas de contenu est SAUTÉE, pas maillée à vide — mais
+/// elle reste dans la liste des VISÉES, parce que c'est ce qui permet de
+/// retirer le maillage d'une section qui vient de se vider.
+#[test]
+fn une_section_absente_est_sautee_sans_disparaitre_de_la_liste() {
+    let (g, f) = petit_monde();
+    let nulle_part = (9999, 9999, 0);
+    assert!(g.section(nulle_part).is_none());
+
+    let c = g.mailler_ces(&f, &[nulle_part]);
+    assert!(c.lots.is_empty());
+    assert_eq!(c.sautees, 1);
+
+    // Et `sections_autour` la rend quand même : c'est une liste de CIBLES.
+    let vise =
+        tf_mesh::Grille::sections_autour([9999 * 16, 0, 9999 * 16], [9999 * 16, 0, 9999 * 16]);
+    assert!(vise.contains(&nulle_part));
+}
+
+/// **Remplacer par un remaillage partiel doit donner le MÊME chantier qu'un
+/// maillage complet.** C'est la seule propriété qui compte : si les deux
+/// divergent, l'image dépend de l'historique des opérations, et personne ne
+/// sait plus ce qu'il regarde.
+#[test]
+fn remplacer_par_un_remaillage_partiel_rend_le_chantier_complet() {
+    let (mut g, f) = petit_monde();
+    let mut courant = g.mailler(&f);
+
+    // On change une section — de la pierre pleine à de l'air.
+    let vise = tf_mesh::Grille::sections_autour([16, 0, 0], [31, 15, 15]);
+    g.poser(1, 0, pleine(0, AIR));
+    courant.remplacer(&vise, g.mailler_ces(&f, &vise));
+
+    let complet = g.mailler(&f);
+    assert_eq!(courant.lots.len(), complet.lots.len());
+    for (a, b) in courant.lots.iter().zip(complet.lots.iter()) {
+        assert_eq!(a.adresse, b.adresse, "l'ordre doit rester trié");
+        assert_eq!(a.quads.quads, b.quads.quads, "{:?}", a.adresse);
+        assert_eq!(a.poses.poses, b.poses.poses, "{:?}", a.adresse);
+    }
+}
+
+/// **Un chunk qui se VIDE ne figure plus dans la liste des chunks.** Si la
+/// fusion se contentait d'insérer ce que le remaillage produit, le maillage
+/// d'une section effacée resterait à l'écran — les blocs supprimés resteraient
+/// visibles. Ça ne se voit que sur un effacement, jamais sur une pose.
+#[test]
+fn une_section_videe_perd_son_maillage() {
+    let (mut g, f) = petit_monde();
+    let mut courant = g.mailler(&f);
+    let avant = courant.lots.len();
+    assert!(courant.lots.iter().any(|l| l.adresse == (1, 1, 0)));
+
+    // Effacée pour de bon : la section n'est plus dans la grille du tout.
+    let vise = tf_mesh::Grille::sections_autour([16, 0, 16], [31, 15, 31]);
+    g.poser(1, 1, pleine(0, AIR));
+    courant.remplacer(&vise, g.mailler_ces(&f, &vise));
+
+    assert!(
+        !courant.lots.iter().any(|l| l.adresse == (1, 1, 0)),
+        "le maillage d'une section vidée est resté"
+    );
+    assert!(courant.lots.len() < avant);
+}
+
+/// **L'ordre reste trié même quand on ne remaille qu'une section du MILIEU.**
+///
+/// Le premier test de fusion ne le voyait pas : sa liste visée couvrait tout
+/// le monde, donc `retain` vidait la liste et l'ordre se retrouvait trié par
+/// accident. Il faut une section BASSE remaillée seule — retirée du début,
+/// rajoutée à la fin — pour que l'ordre se dérange. Le chantier est
+/// déterministe, et `Arene::origines` est indexée comme ses lots : deux ordres
+/// donneraient deux dispositions d'arène, donc deux images qu'on ne peut plus
+/// comparer.
+#[test]
+fn remplacer_une_seule_section_garde_l_ordre_trie() {
+    let (g, f) = petit_monde();
+    let mut courant = g.mailler(&f);
+    assert!(courant.lots.len() > 2);
+
+    // Le bloc (8, 8, 8) est au MILIEU de la section (0, 0, 0) : son padding
+    // ne sort pas, donc la liste visée ne contient qu'elle.
+    let vise = tf_mesh::Grille::sections_autour([8, 8, 8], [8, 8, 8]);
+    assert_eq!(vise, vec![(0, 0, 0)], "la fixture doit isoler UNE section");
+    assert_eq!(
+        courant.lots[0].adresse,
+        (0, 0, 0),
+        "et ce doit être la PREMIÈRE, sinon le retrait ne dérange rien"
+    );
+
+    courant.remplacer(&vise, g.mailler_ces(&f, &vise));
+
+    let ordre: Vec<_> = courant.lots.iter().map(|l| l.adresse).collect();
+    let mut trie = ordre.clone();
+    trie.sort_unstable();
+    assert_eq!(ordre, trie, "l'ordre des lots s'est dérangé");
+}
+
+/// `retirer` est le pendant de `poser`, et il manquait. Sans lui, rien ne peut
+/// enlever une section d'une grille : ce qui a été lu une fois y reste pour
+/// toujours, même quand la save ne le porte plus.
+#[test]
+fn retirer_enleve_la_section_et_ses_biomes() {
+    let mut g = Grille::new();
+    g.poser(0, 0, pleine(0, PIERRE));
+    assert!(g.poser_biomes(0, 0, 0, vec![7; tf_mesh::voisinage::VOL_BIOME]));
+    assert!(g.section((0, 0, 0)).is_some());
+
+    assert!(g.retirer((0, 0, 0)), "il y en avait une");
+    assert!(g.section((0, 0, 0)).is_none());
+    // Et le biome part avec : le laisser donnerait la couleur d'une section
+    // qui n'existe plus à celle qui prendra sa place.
+    assert!(g.poser_biomes(0, 0, 0, vec![9; tf_mesh::voisinage::VOL_BIOME]));
+
+    assert!(!g.retirer((0, 0, 0)), "deux fois ne fait rien");
+    assert!(!g.retirer((42, 42, 0)), "et ce qui n'existe pas non plus");
+}

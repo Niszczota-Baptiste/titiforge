@@ -370,9 +370,16 @@ La fenêtre de résidence existe et est testée ; rien ne la pilote. Tant qu'on
 affiche une zone choisie à la main, ça ne se voit pas — dès qu'on vole dans un
 monde de 800 régions, c'est bloquant.
 
-Avec ça viennent le remaillage INCRÉMENTAL (une opération ne remaille que ses
-bornes, plus une case de débordement) et l'arène GPU par tranches, déjà
-préparée.
+✅ **Le remaillage INCRÉMENTAL est fait** — une opération ne remaille que ses
+bornes, plus une case de débordement — et il a coûté une leçon : écrit seul, il
+gagnait **× 1,1**, parce que la relecture pesait cent fois le maillage. Une fois
+`sections_de` corrigé (filtrer avant d'inflater, honorer la hauteur), c'est
+× 7 sur 64 chunks, et le chargement en profite autant. Détail et chiffres :
+`docs/ETAT.md`.
+
+Reste l'arène GPU par TRANCHES : elle se reconstruit encore en entier, 3,5 ms
+sur les 4,4 d'un remaillage. Sous le budget de 8 ms, donc pas encore le bon
+combat — mais c'est le prochain dès que les zones grandissent.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.

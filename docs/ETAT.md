@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **757**, zéro échec |
+| Tests | **771**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-757 tests, répartis par ce qu'ils PROUVENT :
+771 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -61,7 +61,7 @@ cargo test --workspace
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
+| `tf-mesh` mailler/chantier | 33 | glouton contre naïf, case par case ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage |
 | `tf-render` rendu | 26 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -69,7 +69,7 @@ cargo test --workspace
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
-| `tf-app` chantier | 2 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; et que la SAUVEGARDE porte le monde d'AVANT, octet pour octet (demande `TF_PACK`) |
+| `tf-app` chantier | 8 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
 | `tf-app` moteur | 9 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
@@ -532,7 +532,8 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
-| **Le remaillage refait TOUTE la zone** | après une opération, la coque relit et remaille la zone entière plutôt que ce qui a bougé. Les bornes sont pourtant là, dans la réponse du fil : ce qui manque est une arène GPU qu'on puisse recoudre par morceaux. Sur la zone d'aperçu, tout refaire se mesure en dizaines de millisecondes — ça ne tiendra pas sur un build de ville |
+| **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |
+| **Rien ne PILOTE la fenêtre de résidence** | la zone est choisie à la main (`--zone`) ; `tf-world::residency` existe et est testé, et rien ne le nourrit depuis la caméra. C'est le cœur de la phase 5 |
 | **Ni composants ni saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste, et les composants qu'on modifie une fois pour les mettre à jour partout, restent à écrire (phase 7) |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
@@ -540,6 +541,38 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 Et une limite de méthode : **tous les temps de rendu sont mesurés sur un
 rastériseur logiciel** et ne valent rien. Les comptes — quads, poses, appels de
 dessin, octets — sont transposables ; les millisecondes, non.
+
+### Le remaillage, et ce qu'il a appris
+
+```bash
+TF_PACK=<pack> cargo test -p tf-app --test chantier mesurer -- --nocapture
+TF_PHASES=1 TF_PACK=<pack> cargo test -p tf-app --test chantier mesurer_les_deux -- --nocapture
+```
+
+| | avant | après | |
+|---|---:|---:|---|
+| Décoder UNE section d'une région bâtie | 17,5 ms | **0,2 ms** | × 87 |
+| Remaillage après une opération de 3 blocs (zone de 64 chunks) | 30,7 ms | **4,4 ms** | × 7 |
+
+**Le gain n'est pas venu d'où je l'avais mis.** J'ai écrit le remaillage
+incrémental — ne remailler que les sections touchées plus une case de
+débordement — et mesuré **× 1,1**. La découpe par phases a dit pourquoi :
+18 ms sur 18,3 partaient dans la RELECTURE, 0,2 dans le maillage que je venais
+d'optimiser. C'est le piège n° 1 du dépôt, à la lettre.
+
+La relecture coûtait cher pour deux raisons, et toutes deux pèsent aussi sur le
+CHARGEMENT :
+
+- **`sections_de` inflatait chaque chunk AVANT de filtrer.** Une région bâtie
+  porte 256 chunks : lire une section en décompressait 256. L'index donne les
+  coordonnées sans rien décompresser.
+- **La HAUTEUR de la sélection était ignorée.** Lire une section décodait
+  toutes celles de son chunk, biomes compris — vingt-quatre pour une sur un
+  monde 1.18.
+
+Après quoi le poids s'est déplacé une fois de plus, et c'est écrit dans les
+trous : les arènes GPU se reconstruisent en entier, 3,5 ms sur 4,4. Sous le
+budget de 8 ms de la phase 5, donc pas encore le bon combat.
 
 ---
 
