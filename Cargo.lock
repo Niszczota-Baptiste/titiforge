@@ -2062,6 +2062,7 @@ dependencies = [
  "tf-anvil",
  "tf-assets",
  "tf-bench",
+ "tf-blocks",
  "tf-mesh",
  "tf-ops",
  "tf-render",

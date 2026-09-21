@@ -235,11 +235,23 @@ POURQUOI axe par axe, on allume le quadrillage des chunks et celui des `.mca`,
 et le panneau annonce ce que la sélection coûtera — en sections entières
 comptées, jamais en « alignée ».
 
-**Ce qui manque, et l'interface le DIT à l'écran plutôt que de faire croire
-l'inverse :** aucun bouton n'appelle encore `tf-ops`. Les formulaires
-d'opérations doivent être ENGENDRÉS depuis les descripteurs du moteur (voir
-plus bas) — écrire un formulaire à la main serait exactement la dette
-qu'`ExeWorldEdit` n'a pas contractée.
+**Les formulaires sont ENGENDRÉS.** `tf-ops/src/catalogue.rs` dit ce que les
+opérations prennent en paramètre — nom, noms WorldEdit, bornes, coût — et la
+coque ne connaît AUCUNE opération : elle sait dessiner une saisie (un bloc, un
+entier borné, une direction, un mélange pondéré) et lit le reste. Ajouter
+`//deform` au moteur demandera zéro ligne de renderer. Deux tests tiennent la
+couture : chaque descripteur doit se construire (contre *déclaré, branché,
+testé — et inatteignable*), et chaque genre de paramètre doit avoir un champ
+(contre *un type déclaré sans champ pour le saisir*, qui a livré « Remplacer »
+et « Mélange » inutilisables dans `ExeWorldEdit`, sans une erreur à l'écran).
+Le normaliseur est SUR le chemin de toute construction — il n'existe pas de
+façon de fabriquer un travail sans passer par sa description — ce qui exige
+qu'il soit idempotent, et un test l'exige pour chaque opération.
+
+**Ce qui manque, et l'interface le DIT à l'écran :** « Appliquer » ne fait rien.
+Le moteur doit tourner dans un FIL à part, sinon une opération de trois
+secondes fige la fenêtre — et c'est une règle d'architecture qui ne se
+retrofite pas.
 
 **La coque sait se dessiner dans une TEXTURE** (`--capture ecran.png`),
 interface comprise. Ce n'est pas un mode dégradé : c'est ce qui permet de la
@@ -317,11 +329,12 @@ l'ÉCRAN (sinon il part à la verticale quand on regarde déjà le ciel).
 **Deux règles d'architecture, et elles ne se retrofitent pas :**
 
 - **le moteur vit dans un fil à part, l'interface ne bloque jamais.** Une
-  opération de trois secondes ne doit pas figer la fenêtre ;
-- **les formulaires se GÉNÈRENT depuis les descripteurs d'opérations.**
+  opération de trois secondes ne doit pas figer la fenêtre — **reste à
+  faire, et c'est ce qui bloque « Appliquer » ;**
+- ✅ **les formulaires se GÉNÈRENT depuis les descripteurs d'opérations.**
   `ExeWorldEdit` l'a prouvé : aucun formulaire n'y est écrit à la main, et
-  ajouter une opération n'y demande aucune ligne d'interface. Un test y relie
-  le descripteur du moteur à la palette d'outils.
+  ajouter une opération n'y demande aucune ligne d'interface. Fait, et tenu
+  par deux tests plutôt que par une convention.
 
 Le socle de fenêtre : `winit` + `egui`, caméra, sélection au cuboïde avec
 poignées, palette de blocs avec icônes, historique visible et cliquable.

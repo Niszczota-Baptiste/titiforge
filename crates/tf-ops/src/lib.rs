@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod biome;
+pub mod catalogue;
 pub mod colonnes;
 pub mod creuser;
 pub mod edition;
@@ -27,6 +28,10 @@ pub mod presse;
 pub mod relief;
 
 pub use biome::PoserBiome;
+pub use catalogue::{
+    chercher, construire, descripteur, normaliser, Composee, Cout, Defaut, Descripteur, Param,
+    Params, Saisie, Travail, Valeur, OPS,
+};
 pub use colonnes::{Colonnes, Portee};
 pub use creuser::{creuser, extrait_creuse, Creux};
 pub use edition::{deplacer, empiler, Pas};

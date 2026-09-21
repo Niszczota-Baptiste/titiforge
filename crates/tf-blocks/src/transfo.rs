@@ -61,6 +61,10 @@ impl Transfo {
         }
     }
 
+    /// Son nom, en français, pour un écran ou un message. **Ici et nulle part
+    /// ailleurs** : une deuxième table dirait un jour « miroir nord-sud » pour
+    /// `MiroirX`, et un build sortirait retourné dans le mauvais sens sans
+    /// qu'aucun test ne s'en aperçoive — le nom ne change pas le calcul.
     pub const fn nom(self) -> &'static str {
         match self {
             Transfo::Rot90 => "rotation 90°",

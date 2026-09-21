@@ -11,6 +11,7 @@ tf-anvil.workspace = true
 # La fixture de BUILD, en attendant que la coque ouvre une save par le menu.
 tf-bench = { path = "../tf-bench" }
 tf-assets.workspace = true
+tf-blocks.workspace = true
 tf-mesh.workspace = true
 tf-ops.workspace = true
 tf-render.workspace = true

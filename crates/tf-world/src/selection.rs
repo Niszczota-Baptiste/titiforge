@@ -55,6 +55,30 @@ pub const DIRECTIONS: [Direction; 6] = [
 ];
 
 impl Direction {
+    /// Son nom, dans le repère Minecraft : **+X = Est, +Z = Sud, +Y = Haut**.
+    ///
+    /// Ici et nulle part ailleurs. La ligne de commande lisait déjà
+    /// « est|ouest|nord|sud|haut|bas » avec sa propre table, et une coque en
+    /// aurait écrit une deuxième : ce dépôt a payé QUATRE fois le piège des
+    /// tables qui divergent, et celle-ci se serait trompée de signe sur Z —
+    /// l'axe dont personne ne se rappelle le sens.
+    pub const fn nom(self) -> &'static str {
+        match self {
+            Direction::MoinsX => "ouest",
+            Direction::PlusX => "est",
+            Direction::MoinsY => "bas",
+            Direction::PlusY => "haut",
+            Direction::MoinsZ => "nord",
+            Direction::PlusZ => "sud",
+        }
+    }
+
+    /// L'inverse de `nom`, tolérant sur la casse et les espaces.
+    pub fn depuis_nom(nom: &str) -> Option<Direction> {
+        let n = nom.trim().to_lowercase();
+        DIRECTIONS.iter().copied().find(|d| d.nom() == n)
+    }
+
     /// L'axe : 0 = X, 1 = Y, 2 = Z.
     pub const fn axe(self) -> usize {
         (self as usize) >> 1

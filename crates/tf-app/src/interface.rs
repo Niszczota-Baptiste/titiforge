@@ -1,16 +1,22 @@
 //! **Le dessin de l'interface. Il LIT l'état, il ne décide rien.**
 //!
-//! Ce qui n'est pas ici : les formulaires d'opérations. `ExeWorldEdit` l'a
-//! prouvé — aucun formulaire ne s'y écrit à la main, tous se GÉNÈRENT depuis
-//! les descripteurs du moteur, et ajouter une opération n'y demande pas une
-//! ligne d'interface. `tf-ops` n'a pas encore de descripteurs ; en écrire les
-//! formulaires à la main maintenant, ce serait écrire ce qu'il faudra
-//! supprimer. Le trou est donc LAISSÉ VISIBLE, et nommé dans le panneau.
+//! **Aucun formulaire d'opération ne s'écrit ici.** Ils se GÉNÈRENT depuis les
+//! descripteurs de `tf-ops` : ce fichier sait dessiner une saisie — un bloc,
+//! un entier borné, une direction — et ne sait RIEN des opérations qui
+//! existent. Ajouter `//deform` au moteur demandera zéro ligne de renderer.
+//!
+//! C'est la leçon d'`ExeWorldEdit`, reprise telle quelle, et sa contrepartie
+//! aussi : *un type de paramètre déclaré sans champ pour le saisir* y a livré
+//! « Remplacer » et « Mélange » inutilisables, sans la moindre erreur à
+//! l'écran. D'où `champ`, qui rend `false` quand il ne sait pas dessiner — et
+//! un test qui l'exige vrai pour CHAQUE variante de `Saisie`.
 
 use egui::{Color32, RichText, Ui};
+use tf_ops::catalogue::{self, Param, Saisie, Valeur};
 use tf_render::controles::Mode;
+use tf_world::selection::DIRECTIONS;
 
-use crate::etat::Etat;
+use crate::etat::{Etat, Note};
 
 /// Les couleurs du quadrillage, partagées avec ce qui le dessine en 3D —
 /// une seule table, sinon la légende finit par mentir sur ce qu'on voit.
@@ -129,16 +135,19 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
                 .small()
                 .color(GRIS),
             );
-            // **Ce qui décide l'étage se COMPTE.** « Alignée sur les chunks »
-            // est vrai et ne prouve rien : une sélection alignée en x et z
-            // dont la hauteur tombe au milieu d'une tranche de seize ne couvre
-            // aucune section entière.
-            let (ent, tot) = r.sections;
-            ui.label(RichText::new(r.verdict()).color(if ent == tot && tot > 0 {
-                VERT
-            } else {
-                ORANGE
-            }));
+            // **Le coût n'est PAS ici.** Il dépend de l'opération : une
+            // opération à portée `Colonne` ne verra jamais l'étage palette,
+            // quelle que soit l'alignement de la sélection. Le dire deux fois
+            // ferait dire deux choses différentes le jour où elles divergent.
+            ui.label(
+                RichText::new(if r.alignee_chunk {
+                    "alignée sur les chunks"
+                } else {
+                    "non alignée sur les chunks"
+                })
+                .small()
+                .color(if r.alignee_chunk { VERT } else { GRIS }),
+            );
         }
     }
 
@@ -182,29 +191,223 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
             .color(GRIS),
     );
 
-    // ── ce qui manque, dit en toutes lettres
+    // ── l'atelier : l'opération, engendrée depuis son descripteur
     ui.add_space(10.0);
     ui.separator();
-    ui.label(RichText::new("OPÉRATIONS").strong().color(GRIS));
-    ui.label(
-        RichText::new(
-            "Pas encore ici. Les formulaires se GÉNÈRENT depuis les descripteurs \
-             du moteur — aucun ne s'écrit à la main. `tf-ops` n'en a pas encore : \
-             les écrire maintenant, ce serait écrire ce qu'il faudra supprimer.",
-        )
-        .small()
-        .color(ORANGE),
-    );
-    ui.label(
-        RichText::new("En attendant : `cargo run -p tf-ops --example editer`")
-            .small()
-            .color(GRIS),
-    );
+    operations(ui, e);
 
     if !e.message.is_empty() {
         ui.add_space(8.0);
         ui.separator();
         ui.label(RichText::new(&e.message).color(ORANGE));
+    }
+}
+
+/// La palette d'opérations et le formulaire de celle qui est choisie.
+///
+/// Rien de ce qui suit ne nomme une opération. Tout vient du catalogue.
+fn operations(ui: &mut Ui, e: &mut Etat) {
+    ui.label(RichText::new("OPÉRATION").strong().color(GRIS));
+
+    // La palette. On tape ce qu'on connaît — « //walls » aussi bien que
+    // « mur » — et on VOIT les candidats : `//set` en nomme deux, et en
+    // choisir un à la place de l'utilisateur serait décider pour lui.
+    ui.horizontal(|ui| {
+        ui.label("chercher");
+        ui.add(
+            egui::TextEdit::singleline(&mut e.atelier.recherche)
+                .desired_width(150.0)
+                .hint_text("//walls, mur…"),
+        );
+    });
+    let trouves: Vec<&'static catalogue::Descripteur> =
+        catalogue::chercher(&e.atelier.recherche).collect();
+    if trouves.is_empty() {
+        ui.colored_label(ORANGE, "aucune opération ne répond");
+    }
+    let courant = e.atelier.op();
+    let mut choix: Option<&'static str> = None;
+    ui.horizontal_wrapped(|ui| {
+        for d in &trouves {
+            if ui
+                .selectable_label(d.id == courant, d.label)
+                .on_hover_text(format!("{}\n{}", d.we.join("  "), d.resume))
+                .clicked()
+            {
+                choix = Some(d.id);
+            }
+        }
+    });
+    if let Some(id) = choix {
+        e.atelier.choisir(id);
+    }
+
+    let d = e.atelier.descripteur();
+    ui.add_space(4.0);
+    ui.label(RichText::new(d.resume).small().color(GRIS));
+
+    // ── les champs, un par paramètre DÉCLARÉ
+    ui.add_space(6.0);
+    for p in d.params {
+        let mut v = e.atelier.valeur(p.nom);
+        ui.horizontal(|ui| {
+            ui.label(p.label);
+        });
+        if champ(ui, p, &mut v) {
+            e.atelier.params.poser(p.nom, v);
+        } else {
+            // Il ne peut pas se produire tant que le test de couverture
+            // passe ; s'il se produit quand même, il se VOIT.
+            ui.colored_label(ROUGE, format!("saisie non dessinable : {}", p.nom));
+        }
+    }
+
+    // ── ce que ça coûterait, avant de le faire
+    ui.add_space(6.0);
+    let resume = e.resume_selection();
+    let notes = e.atelier.verdict(resume.as_ref());
+    for n in &notes {
+        let (c, prefixe) = match n {
+            Note::Bloquant(_) => (ROUGE, "✖ "),
+            Note::Attention(_) => (ORANGE, "▲ "),
+            Note::Info(_) => (GRIS, ""),
+        };
+        ui.label(
+            RichText::new(format!("{prefixe}{}", n.texte()))
+                .small()
+                .color(c),
+        );
+    }
+
+    ui.add_space(4.0);
+    let pret = !notes.iter().any(|n| n.bloque());
+    ui.add_enabled_ui(pret, |ui| {
+        if ui.button(RichText::new("Appliquer").strong()).clicked() {
+            e.message = "le moteur n'est pas encore branché à la coque".into();
+        }
+    });
+    if pret {
+        ui.label(
+            RichText::new(
+                "Le bouton ne fait encore rien : le moteur doit tourner dans un FIL \
+                 à part, sinon une opération de trois secondes fige la fenêtre.",
+            )
+            .small()
+            .color(ORANGE),
+        );
+    }
+}
+
+/// **Dessine le champ d'un paramètre, et rien d'autre.**
+///
+/// Rend `false` quand ce genre de saisie n'a pas de champ — c'est ce qu'un
+/// test exige faux pour chaque variante de `Saisie`. Dans `ExeWorldEdit`, trois
+/// types déclarés sans champ retombaient sur la case de texte par défaut, et
+/// la chaîne partait telle quelle vers une opération qui attend un tableau :
+/// deux opérations inutilisables, sans une erreur à l'écran. Un repli muet est
+/// pire qu'un refus visible.
+pub fn champ(ui: &mut Ui, p: &Param, v: &mut Valeur) -> bool {
+    match (p.saisie, v) {
+        (Saisie::Bloc, Valeur::Texte(s)) | (Saisie::Biome, Valeur::Texte(s)) => {
+            ui.add(
+                egui::TextEdit::singleline(s)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(if p.saisie == Saisie::Bloc {
+                        "minecraft:stone"
+                    } else {
+                        "minecraft:plains"
+                    }),
+            );
+            true
+        }
+        // **Les bornes viennent du descripteur.** L'interface ne connaît pas
+        // le maximum d'un rayon de lissage, et ne doit pas : deux sources
+        // pour la même borne divergeraient, et c'est le serrage qui décide.
+        (Saisie::Entier { min, max }, Valeur::Entier(n)) => {
+            let (bas, haut) = (min.max(i32::MIN as i64), max.min(i32::MAX as i64));
+            ui.add(egui::Slider::new(n, bas..=haut));
+            true
+        }
+        (Saisie::Vecteur, Valeur::Vecteur(d)) => {
+            ui.horizontal(|ui| {
+                for (k, axe) in ["x", "y", "z"].iter().enumerate() {
+                    ui.label(*axe);
+                    ui.add(egui::DragValue::new(&mut d[k]).speed(1.0));
+                }
+            });
+            true
+        }
+        (Saisie::Direction, Valeur::Direction(d)) => {
+            egui::ComboBox::from_id_salt(p.nom)
+                .selected_text(d.nom())
+                .show_ui(ui, |ui| {
+                    for cand in DIRECTIONS {
+                        ui.selectable_value(d, cand, cand.nom());
+                    }
+                });
+            true
+        }
+        (Saisie::Transformation, Valeur::Transformation(t)) => {
+            egui::ComboBox::from_id_salt(p.nom)
+                .selected_text(nom_transfo(*t))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(t, None, nom_transfo(None));
+                    for cand in tf_blocks::transfo::TOUTES {
+                        ui.selectable_value(t, Some(cand), nom_transfo(Some(cand)));
+                    }
+                });
+            true
+        }
+        // Un mélange est une LISTE : une case de texte y perdrait les poids,
+        // ce qui est très exactement la faute d'`ExeWorldEdit`.
+        (Saisie::Melange, Valeur::Melange(entrees)) => {
+            let mut retirer = None;
+            for (i, (poids, bloc)) in entrees.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(poids).speed(1.0).range(0..=1000));
+                    ui.add(
+                        egui::TextEdit::singleline(bloc)
+                            .desired_width(150.0)
+                            .hint_text("minecraft:stone"),
+                    );
+                    if ui.small_button("×").clicked() {
+                        retirer = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = retirer {
+                entrees.remove(i);
+            }
+            if ui.small_button("+ un bloc").clicked() {
+                entrees.push((1, String::new()));
+            }
+            // Les proportions, dites : un poids seul ne se lit pas.
+            let total: u32 = entrees.iter().map(|(n, _)| *n).sum();
+            if total > 0 {
+                let part: Vec<String> = entrees
+                    .iter()
+                    .filter(|(n, _)| *n > 0)
+                    .map(|(n, b)| {
+                        let court = b.rsplit(':').next().unwrap_or(b);
+                        format!("{court} {:.0} %", *n as f32 * 100.0 / total as f32)
+                    })
+                    .collect();
+                ui.label(RichText::new(part.join(" · ")).small().color(GRIS));
+            }
+            true
+        }
+        // Valeur et saisie ne s'accordent pas : on ne réécrit RIEN. Convertir
+        // en silence est ce qui a fait planter « Naturaliser → Personnalisé ».
+        _ => false,
+    }
+}
+
+/// « Aucune » n'est pas une transformation, donc ce n'est pas à `tf-blocks`
+/// de la nommer ; tout le reste vient de là.
+fn nom_transfo(t: Option<tf_blocks::Transfo>) -> &'static str {
+    match t {
+        None => "aucune",
+        Some(x) => x.nom(),
     }
 }
 

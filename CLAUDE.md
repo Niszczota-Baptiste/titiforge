@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (674 tests aujourd'hui)
+cargo test            # tous les crates (701 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -343,6 +343,8 @@ crates/
                sélection ✅ : deux coins, `//expand`, et la FACE qu'on attrape
                inférence ✅ : accrocher à ce qui est BÂTI, et DIRE à quoi
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
+               CATALOGUE ✅ : ce que les opérations disent d'elles-mêmes —
+               noms, paramètres, bornes, coût. Un hôte ne réécrit plus rien
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
@@ -357,7 +359,8 @@ crates/
                viser ✅ : quel bloc, quelle FACE sous le curseur
                quadrillage ✅ : un calque de lignes, chunks et .mca
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
-               accrochage, quadrillage) · outils et commandes à venir.
+               accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
+               descripteurs ✅ · fil moteur et application à venir.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -366,6 +369,19 @@ crates/
 `proto/` est le prototype de performance. Il ne fait pas partie du produit :
 il ne prouve que des chiffres, et disparaîtra quand `tf-anvil` et `tf-ops`
 couvriront le même terrain.
+
+## Où ajouter quoi
+
+| Ajouter… | …dans |
+|---|---|
+| **Une opération** | son entrée dans `OPS` (`tf-ops/src/catalogue.rs`) — nom, noms WorldEdit, paramètres, bornes, coût — puis son bras dans `construire`, puis le calcul. **Aucune ligne d'interface** : le formulaire se génère depuis le descripteur, et deux tests l'exigent (chaque descripteur se construit ; chaque paramètre se dessine) |
+| Un PARAMÈTRE à une opération | le `Param` dans son descripteur, et sa lecture dans le bras de `construire`. Le normaliseur n'a rien à savoir : il recopie ce que le descripteur déclare. C'est le piège `seed` d'`ExeWorldEdit`, fermé par construction |
+| Un GENRE de paramètre | une variante de `Saisie`, son rang dans `Saisie::rang` (exhaustif, donc le compilateur l'exige), son entrée dans `TOUTES`, et son bras dans `interface::champ`. Un test exige un champ pour chaque variante — sans quoi le paramètre retombe muet, comme `blocklist` dans `ExeWorldEdit` |
+| Un état de bloc à transformer | rien : les règles sont DÉRIVÉES du pack (`tf-blocks`). Ce qu'elles ne savent pas faire est NOMMÉ, jamais deviné |
+| Un plafond réglable | les bornes du `Param`, jamais une constante dans l'interface. Le champ se génère depuis elles et le serrage s'y réfère |
+| Le nom d'une direction | `Direction::nom` (`tf-world/src/selection.rs`) — une seule table, et c'est sur Z que la seconde se tromperait |
+| Une capacité de la coque | `etat.rs` si ça DÉCIDE (pur, testable sans écran), `interface.rs` si ça dessine. L'interface ne décide rien |
+| Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
 
@@ -1279,6 +1295,37 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Un identifiant DÉDUIT de la forme de l'objet n'est pas un identifiant.**
+  `Travail::id()` devait se lire dans le plan — masque `Tout` et motif
+  `Melange` pour un mélange, et ainsi de suite. Ça paraissait plus sûr que de
+  recopier une chaîne, puisque rien ne pouvait diverger. C'est faux :
+  `Motif::melange` d'une liste VIDE rend `Garder` et d'une seule entrée rend
+  `Bloc` — deux simplifications justes et voulues — donc un « mélange » se
+  relisait « remplir » selon ce que l'utilisateur avait tapé dans le
+  formulaire. Un identifiant qui change avec le contenu d'un champ ne peut pas
+  servir de clé de journal. Il voyage donc AVEC le travail, et ce qu'un test
+  regarde pour les opérations directes, c'est le masque et le motif — là où la
+  faute serait vraiment.
+- **Un nom WorldEdit n'est pas une clé.** `//set` désigne aussi bien « remplir »
+  que « mélange » : dans le jeu c'est une seule commande à un motif près. Une
+  recherche en UNE passe (`d.id == nom || d.we.contains(nom)`) ferait dépendre
+  la réponse de l'ordre du tableau, et un identifiant finirait par tomber sur
+  le nom WorldEdit d'une autre opération. L'identifiant d'abord, TOUJOURS ; les
+  noms WorldEdit servent à CHERCHER, et la palette rend tous les candidats
+  plutôt que d'en choisir un à la place de l'utilisateur.
+- **Le coût d'une sélection n'appartient pas à la sélection.** Le compte de
+  sections entières était affiché dans le panneau SÉLECTION *et* dans celui de
+  l'opération : le même chiffre deux fois, donc deux chiffres différents le
+  jour où ils divergent. Et ils divergent déjà — une opération à portée
+  `Colonne` ne verra jamais l'étage palette, quelle que soit la sélection.
+  L'alignement est une propriété de la sélection ; ce qu'il COÛTERA est une
+  propriété de l'opération.
+- **Un test qui cherche un mot dans une phrase trouve aussi sa négation.**
+  J'exigeais que le verdict d'une opération par colonne ne contienne pas
+  « palette » — or il dit « ni étage palette », qui le contient. Le test
+  rougissait sur du code juste, ce qui envoie chercher un bug là où il n'y en a
+  pas. Une assertion sur un texte porte sur ce que la phrase AFFIRME, pas sur
+  ses lettres : ici « le compte de sections ne doit pas apparaître ».
 - **Une assertion toujours vraie par le TYPE ne prouve rien**, et clippy le
   dit. `r.point.x >= i32::MIN` ne peut pas échouer ; ce qui pouvait déborder
   était le MILIEU du domaine entier, où `MIN + MAX + 1` s'enroule en `i32`.

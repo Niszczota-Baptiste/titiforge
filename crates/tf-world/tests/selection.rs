@@ -359,3 +359,29 @@ fn le_verrou_laisse_libre_le_plan_de_la_face() {
     assert_eq!(a.position.y, 79, "libre, et accroché");
     assert_eq!(a.position.z, 12, "libre, et accroché");
 }
+
+/// **Les noms des six directions vivent à UN endroit.** La ligne de commande
+/// en avait sa table, une coque en aurait écrit une deuxième — cinquième
+/// occurrence du piège. Et c'est sur Z que ça se serait joué : +Z est le SUD,
+/// ce dont personne ne se souvient.
+#[test]
+fn les_noms_des_directions_font_l_aller_retour() {
+    use tf_world::selection::{Direction, DIRECTIONS};
+
+    for d in DIRECTIONS {
+        assert_eq!(Direction::depuis_nom(d.nom()), Some(d));
+        assert_eq!(Direction::depuis_nom(&d.nom().to_uppercase()), Some(d));
+    }
+    // Les six noms sont distincts — deux homonymes rendraient la même
+    // direction pour deux gestes opposés.
+    let mut noms: Vec<&str> = DIRECTIONS.iter().map(|d| d.nom()).collect();
+    noms.sort_unstable();
+    noms.dedup();
+    assert_eq!(noms.len(), 6);
+
+    // Le repère, écrit en toutes lettres plutôt que déduit.
+    assert_eq!(Direction::depuis_nom("est").unwrap().pas(), [1, 0, 0]);
+    assert_eq!(Direction::depuis_nom("sud").unwrap().pas(), [0, 0, 1]);
+    assert_eq!(Direction::depuis_nom("haut").unwrap().pas(), [0, 1, 0]);
+    assert_eq!(Direction::depuis_nom("nulle part"), None);
+}

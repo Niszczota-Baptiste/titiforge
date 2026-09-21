@@ -9,11 +9,12 @@
 //! que derrière un serveur graphique ne se teste pas, et ce dépôt a déjà
 //! tranché la question pour le rendu.
 
+use tf_ops::catalogue::{self, Descripteur, Params, Saisie, Valeur};
 use tf_render::controles::{Mode, Vue};
 use tf_world::coords::BlockPos;
 use tf_world::decoupe::Niveau;
 use tf_world::inference::{accrocher, Accroche, TOLERANCE};
-use tf_world::selection::Selection;
+use tf_world::selection::{Direction, Selection};
 
 /// Ce que le quadrillage montre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,167 @@ pub struct SousLeReticule {
     pub accroche: Option<Accroche>,
 }
 
+/// **L'atelier : l'opération choisie et ses paramètres.**
+///
+/// Rien ici ne connaît egui. L'interface LIT le descripteur et engendre ses
+/// champs ; elle ne sait pas quelles opérations existent, et c'est tout
+/// l'intérêt — ajouter une opération au moteur ne demande pas une ligne de
+/// renderer. `ExeWorldEdit` l'a prouvé dans l'autre sens : chaque formulaire
+/// écrit à la main est un formulaire à réécrire.
+#[derive(Debug, Clone)]
+pub struct Atelier {
+    /// L'identifiant de l'opération choisie. Toujours valide : il vient du
+    /// catalogue et `choisir` refuse ce qu'il ne connaît pas.
+    op: &'static str,
+    /// Ses paramètres, tenus à jour par l'interface.
+    pub params: Params,
+    /// Ce qui filtre la palette. On tape « //walls » ou « mur ».
+    pub recherche: String,
+}
+
+impl Default for Atelier {
+    fn default() -> Self {
+        // La première du catalogue, jamais une constante écrite à part.
+        // **Une opération qui n'appartient pas à l'outil affiché** est un
+        // piège déjà payé : `tool: 'select'` et `operation: 'set'` étaient
+        // deux constantes indépendantes, et la liste a fini par afficher
+        // « Copier » pendant que le bouton disait « Remplir ».
+        let d = &catalogue::OPS[0];
+        Atelier {
+            op: d.id,
+            params: d.defauts(),
+            recherche: String::new(),
+        }
+    }
+}
+
+impl Atelier {
+    pub fn descripteur(&self) -> &'static Descripteur {
+        catalogue::descripteur(self.op).expect("l'identifiant vient du catalogue")
+    }
+
+    pub fn op(&self) -> &'static str {
+        self.op
+    }
+
+    /// Change d'opération, et REPART de ses défauts.
+    ///
+    /// Garder les paramètres de la précédente paraissait aimable ; c'est
+    /// faux : deux opérations qui partagent un nom de paramètre ne lui
+    /// donnent pas forcément le même sens, et `normaliser` refuserait de
+    /// toute façon ce qui ne lui appartient pas. Un formulaire qui garde une
+    /// valeur d'une autre opération est un formulaire qui ment.
+    pub fn choisir(&mut self, id: &str) -> bool {
+        let Some(d) = catalogue::descripteur(id) else {
+            return false;
+        };
+        self.op = d.id;
+        self.params = d.defauts();
+        true
+    }
+
+    /// La valeur d'un paramètre, telle que l'interface doit l'afficher.
+    /// Jamais absente : le descripteur en donne le défaut, et ce qui n'en a
+    /// pas reçoit une valeur VIDE — un champ sans valeur ne se dessine pas.
+    pub fn valeur(&self, nom: &str) -> Valeur {
+        if let Some(v) = self.params.get(nom) {
+            return v.clone();
+        }
+        match self.descripteur().param(nom).map(|p| p.saisie) {
+            Some(Saisie::Bloc) | Some(Saisie::Biome) => Valeur::Texte(String::new()),
+            Some(Saisie::Melange) => Valeur::Melange(Vec::new()),
+            Some(Saisie::Entier { min, .. }) => Valeur::Entier(min),
+            Some(Saisie::Vecteur) => Valeur::Vecteur([0; 3]),
+            Some(Saisie::Direction) => Valeur::Direction(Direction::PlusX),
+            Some(Saisie::Transformation) => Valeur::Transformation(None),
+            None => Valeur::Texte(String::new()),
+        }
+    }
+
+    /// Ce que l'opération ferait à cette sélection — ou ce qui l'en empêche.
+    ///
+    /// **Rendu même quand tout va bien** : un panneau qui ne parle que pour
+    /// refuser laisse croire qu'il ne sait rien dire.
+    pub fn verdict(&self, sel: Option<&ResumeSelection>) -> Vec<Note> {
+        let d = self.descripteur();
+        let mut out = Vec::new();
+
+        // Ce qui manque pour pouvoir lancer, nommé.
+        match catalogue::normaliser(d, &self.params) {
+            Ok(_) => {}
+            Err(e) => out.push(Note::Bloquant(e.to_string())),
+        }
+
+        let Some(s) = sel else {
+            out.push(Note::Bloquant("aucune sélection".into()));
+            return out;
+        };
+
+        // **Ce qui matérialise toute la sélection doit l'ANNONCER avant de
+        // commencer.** `vec![]` n'échoue pas gentiment : une allocation
+        // refusée ABANDONNE le processus, et l'éditeur disparaîtrait avec le
+        // travail en cours.
+        if d.cout.materialise {
+            let boite = tf_world::coords::BBox::new(s.min, s.max);
+            match tf_ops::edition::verifier_materialisable(&boite, tf_ops::edition::OCTETS_CREUSAGE)
+            {
+                Ok(cases) => out.push(Note::Attention(format!(
+                    "matérialise {} cases — {}",
+                    cases,
+                    octets(cases * tf_ops::edition::OCTETS_CREUSAGE)
+                ))),
+                Err(e) => out.push(Note::Bloquant(e.to_string())),
+            }
+        }
+
+        if d.cout.colonne {
+            out.push(Note::Info(
+                "lit la COLONNE entière : ni étage section ni étage palette".into(),
+            ));
+        } else {
+            out.push(Note::Info(s.verdict()));
+        }
+        out
+    }
+}
+
+/// Ce que l'atelier a à dire, par gravité. Trois niveaux et pas un de plus :
+/// ce qui empêche, ce qui coûte, ce qui informe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Note {
+    Bloquant(String),
+    Attention(String),
+    Info(String),
+}
+
+impl Note {
+    pub fn texte(&self) -> &str {
+        match self {
+            Note::Bloquant(s) | Note::Attention(s) | Note::Info(s) => s,
+        }
+    }
+
+    pub fn bloque(&self) -> bool {
+        matches!(self, Note::Bloquant(_))
+    }
+}
+
+/// Des octets, dits comme un humain les lit.
+pub fn octets(n: u64) -> String {
+    const UNITES: [&str; 4] = ["o", "ko", "Mo", "Go"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i + 1 < UNITES.len() {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} o")
+    } else {
+        format!("{v:.1} {}", UNITES[i])
+    }
+}
+
 /// L'état complet de la coque.
 #[derive(Debug, Clone)]
 pub struct Etat {
@@ -57,6 +219,8 @@ pub struct Etat {
     /// Tolérance d'accrochage, en blocs. Zéro l'éteint.
     pub tolerance: i32,
     pub reticule: SousLeReticule,
+    /// L'opération choisie et ses paramètres.
+    pub atelier: Atelier,
     /// Ce que l'interface a à dire, en une ligne. Vide = rien à signaler.
     pub message: String,
 }
@@ -85,6 +249,7 @@ impl Etat {
             quadrillage: Quadrillage::default(),
             tolerance: TOLERANCE,
             reticule: SousLeReticule::default(),
+            atelier: Atelier::default(),
             message: String::new(),
         }
     }
