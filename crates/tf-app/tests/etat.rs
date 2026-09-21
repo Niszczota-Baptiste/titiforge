@@ -14,6 +14,7 @@ use tf_render::Camera;
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::decoupe::Niveau;
 use tf_world::inference::{accrocher, Ancre};
+use tf_world::selection::Direction;
 
 /// Un mur plein à partir de x = 10, et rien d'autre.
 fn mur(case: [i32; 3]) -> bool {
@@ -331,4 +332,207 @@ fn un_clic_dans_le_vide_ne_touche_pas_la_selection() {
     assert!(!e.poser_coin(true));
     assert!(!e.poser_coin(false));
     assert_eq!(e.selection.boite(), avant);
+}
+
+// ── le POUSSER-TIRER ────────────────────────────────────────────────────────
+
+/// Une sélection de dix blocs de côté, et l'œil à l'est qui la regarde.
+fn devant_un_cube() -> (Etat, Camera) {
+    let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    e.selection.poser_coin1(BlockPos::new(0, 0, 0));
+    e.selection.poser_coin2(BlockPos::new(9, 9, 9));
+    let cam = Camera {
+        oeil: [30.0, 5.0, 5.0],
+        cible: [29.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    (e, cam)
+}
+
+/// **Le geste complet : attraper la face est, tirer de quatre, lâcher.**
+///
+/// Ce que l'opération écrit est la TRANCHE, jamais la sélection entière —
+/// tirer une face de trois blocs sur un bâtiment de cent mille ne doit pas
+/// réécrire le bâtiment.
+#[test]
+fn pousser_tirer_ecrit_la_tranche_et_rien_d_autre() {
+    let (mut e, cam) = devant_un_cube();
+    e.bloc_tirage = "minecraft:stone".into();
+    assert!(e.attraper(&cam, 1.0), "la face doit être attrapée");
+    assert_eq!(e.tirage.as_ref().unwrap().face, Direction::PlusX);
+
+    // La souris vise x = 14 depuis un autre point de vue : quatre blocs.
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [5.0, 5.0, -39.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    // Le NDC qui regarde x = 14 : on le trouve en visant, mais le plus simple
+    // ici est de pointer droit devant depuis une caméra déjà orientée.
+    let vue = Camera {
+        cible: [14.0, 5.0, 5.0],
+        ..vue
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert_eq!(e.tirage.as_ref().unwrap().blocs, 4);
+    assert_eq!(e.selection.boite().unwrap().max.x, 13);
+
+    let cmd = e.lacher().expect("un tirage non nul rend une opération");
+    assert!(e.tirage.is_none());
+    let tf_app::moteur::Commande::Appliquer {
+        op, sel, params, ..
+    } = cmd
+    else {
+        panic!("un tirage pose des blocs");
+    };
+    assert_eq!(op, "poser");
+    // **La tranche, et elle seule** : x = 10..13, pas 0..13.
+    assert_eq!(
+        sel,
+        BBox::new(BlockPos::new(10, 0, 0), BlockPos::new(13, 9, 9))
+    );
+    assert_eq!(
+        params.get("bloc"),
+        Some(&tf_ops::catalogue::Valeur::texte("minecraft:stone"))
+    );
+}
+
+/// **Pousser pose de l'AIR.** C'est le modèle mental de SketchUp : la même
+/// poignée ajoute et retire de la matière. Sans ça, pousser ne ferait que
+/// rétrécir une boîte, ce qui n'est pas un geste de construction.
+#[test]
+fn pousser_retire_la_matiere() {
+    let (mut e, cam) = devant_un_cube();
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [7.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert!(
+        e.tirage.as_ref().unwrap().blocs < 0,
+        "le geste doit pousser"
+    );
+
+    let cmd = e.lacher().unwrap();
+    let tf_app::moteur::Commande::Appliquer { sel, params, .. } = cmd else {
+        panic!();
+    };
+    assert_eq!(
+        params.get("bloc"),
+        Some(&tf_ops::catalogue::Valeur::texte("minecraft:air"))
+    );
+    // Ce qui vient de SORTIR de la sélection : la face solide était à x = 10,
+    // on vise x = 7, donc trois blocs poussés — et ce qui sort est 7..9.
+    assert!(e.tirage.is_none());
+    assert_eq!(
+        sel,
+        BBox::new(BlockPos::new(7, 0, 0), BlockPos::new(9, 9, 9))
+    );
+}
+
+/// **On repart de la sélection de DÉPART à chaque image.** Cumuler les
+/// tirages ferait accélérer la face à mesure qu'on la tire — « la poignée
+/// s'emballe », et personne ne sait d'où ça vient.
+#[test]
+fn un_tirage_ne_cumule_pas() {
+    let (mut e, cam) = devant_un_cube();
+    assert!(e.attraper(&cam, 1.0));
+    let vue = |x: f32| Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [x, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    for _ in 0..5 {
+        assert!(e.tirer(&vue(13.0), 1.0, [0.0, 0.0]));
+    }
+    assert_eq!(e.tirage.as_ref().unwrap().blocs, 3);
+    assert_eq!(e.selection.boite().unwrap().max.x, 12);
+}
+
+/// Un rayon dans l'axe ne bouge rien, et surtout ne REMET PAS la face en
+/// place : elle ne doit pas revenir parce qu'on a regardé dans l'axe une
+/// image.
+#[test]
+fn regarder_dans_l_axe_ne_ramene_pas_la_face() {
+    let (mut e, cam) = devant_un_cube();
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [13.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    let tenu = e.selection.boite().unwrap();
+
+    // Puis on regarde le long de +X, depuis l'axe même.
+    let dans_l_axe = Camera {
+        oeil: [-40.0, 5.0, 5.0],
+        cible: [-39.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(!e.tirer(&dans_l_axe, 1.0, [0.0, 0.0]));
+    assert_eq!(e.selection.boite().unwrap(), tenu);
+}
+
+/// Un clic à côté ne démarre pas un geste fantôme qui déplacerait la
+/// sélection au premier mouvement de souris.
+#[test]
+fn attraper_a_cote_ne_demarre_rien() {
+    let (mut e, _) = devant_un_cube();
+    let ailleurs = Camera {
+        oeil: [30.0, 200.0, 5.0],
+        cible: [29.0, 200.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(!e.attraper(&ailleurs, 1.0));
+    assert!(e.tirage.is_none());
+    assert!(e.lacher().is_none());
+}
+
+/// Abandonner remet la sélection d'avant. Un geste qu'on ne peut pas annuler
+/// est un geste qu'on n'ose pas commencer.
+#[test]
+fn abandonner_un_tirage_remet_la_selection() {
+    let (mut e, cam) = devant_un_cube();
+    let avant = e.selection.boite().unwrap();
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [16.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert_ne!(e.selection.boite().unwrap(), avant);
+
+    assert!(e.abandonner());
+    assert_eq!(e.selection.boite().unwrap(), avant);
+    assert!(e.tirage.is_none());
+    assert!(!e.abandonner(), "rien à abandonner deux fois");
+}
+
+/// Un tirage de zéro bloc n'écrit rien : une entrée de journal pour zéro
+/// changement est exactement ce que la jonction refuse déjà plus bas.
+#[test]
+fn un_tirage_nul_n_ecrit_rien() {
+    let (mut e, cam) = devant_un_cube();
+    assert!(e.attraper(&cam, 1.0));
+    assert!(e.lacher().is_none());
 }

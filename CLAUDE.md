@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (725 tests aujourd'hui)
+cargo test            # tous les crates (736 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -340,7 +340,8 @@ crates/
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
                (cellules de chunk et de .mca, `//chunk` et les sections)
-               sélection ✅ : deux coins, `//expand`, et la FACE qu'on attrape
+               sélection ✅ : deux coins, `//expand`, la FACE qu'on attrape,
+               et le POUSSER-TIRER (combien de blocs, et quelle TRANCHE)
                inférence ✅ : accrocher à ce qui est BÂTI, et DIRE à quoi
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                CATALOGUE ✅ : ce que les opérations disent d'elles-mêmes —
@@ -364,6 +365,7 @@ crates/
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
                · SÉLECTION À LA SOURIS ✅ (gauche = coin 1, droit = coin 2)
+               · POUSSER-TIRER ✅ en mode Conception
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
                · remaillage encore global, mode Conception à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
@@ -1300,6 +1302,23 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Un pousser-tirer ne se mesure pas en pixels.** Multiplier un glissement
+  d'écran par une sensibilité donne un geste qui dérive selon la distance et
+  l'angle — personne ne sait corriger ça à l'œil. On projette le rayon de
+  souris sur la DROITE de l'axe, et on compte des blocs entiers. Corollaire :
+  quand le rayon devient colinéaire à l'axe, la projection part à l'infini et
+  un pixel vaut des dizaines de blocs. On refuse BIEN avant zéro — à un degré
+  près, c'est déjà ingouvernable — et refuser veut dire ne pas bouger, pas
+  bouger n'importe comment.
+- **Un geste qui cumule s'emballe.** Le tirage repart de la sélection de
+  DÉPART à chaque image, jamais de la courante : additionner les tirages fait
+  accélérer la face à mesure qu'on la tire, ce qui se lit « la poignée
+  s'emballe » et ne désigne rien.
+- **Un tirage n'écrit que sa TRANCHE.** Tirer une face de trois blocs sur un
+  bâtiment de cent mille ne doit pas réécrire le bâtiment — c'est l'invariant
+  n° 8 appliqué au geste. Et la tranche commence à `ancien_max + 1`, parce que
+  les bornes d'une `BBox` sont INCLUSES : un bloc d'écart et la dernière rangée
+  de l'ancien volume est écrasée.
 - **Un coin de sélection ne s'accroche PAS.** L'inférence sert à poser un bloc
   au nu d'un mur ; appliquée à un coin, elle sélectionnerait autre chose que ce
   qu'on a visé — et le bord d'une paroi, qui est justement ce qu'on vise le

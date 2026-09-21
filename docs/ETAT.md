@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **725**, zéro échec |
+| Tests | **736**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-725 tests, répartis par ce qu'ils PROUVENT :
+736 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -66,9 +66,9 @@ cargo test --workspace
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
-| `tf-world` selection | 20 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, et le VERROU que la pose impose |
+| `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 15 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` etat | 22 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` chantier | 1 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source (demande `TF_PACK`) |
 | `tf-app` moteur | 8 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
@@ -99,6 +99,16 @@ Trois propriétés valent d'être nommées :
   d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
   croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
   pas vu ce qui le fait rougir.
+- **Le pousser-tirer aussi.** Huit mutations : la garde de colinéarité ramenée
+  à zéro pile, le tirage tronqué au lieu d'arrondi, un signe faux dans la
+  projection, la tranche décalée d'un bloc dans les deux sens, une tranche
+  rendue pour un non-changement, le tirage qui cumule, la tranche remplacée par
+  la sélection entière, et « pousser » qui ne retire plus la matière. Une
+  neuvième a SURVÉCU, et c'est noté dans le code : remplacer le refus d'un
+  rayon colinéaire par un `unwrap_or(0)` ne fait rougir personne, parce que
+  `agrandir` rend faux sur un non-changement et fait sortir au même endroit.
+  Le refus reste — sans lui, le geste dépendrait de ce que `agrandir` décide
+  d'un zéro, qui n'est pas une promesse faite là.
 - **Le fil moteur aussi.** Six mutations : `recevoir` qui bloque, le compteur
   d'en-vol qui ne retombe pas, `annuler` qui prend le mauvais sens, une
   opération sans effet annoncée comme faite, la forme perdue en route. La
@@ -505,7 +515,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **Le remaillage refait TOUTE la zone** | après une opération, la coque relit et remaille la zone entière plutôt que ce qui a bougé. Les bornes sont pourtant là, dans la réponse du fil : ce qui manque est une arène GPU qu'on puisse recoudre par morceaux. Sur la zone d'aperçu, tout refaire se mesure en dizaines de millisecondes — ça ne tiendra pas sur un build de ville |
-| **Le mode Conception ne fait encore rien** | gauche et droit posent les deux coins d'un volume dans les deux modes. Les ENTITÉS — face, arête, composant — et le pousser-tirer restent à écrire |
+| **Ni composants ni saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste, et les composants qu'on modifie une fois pour les mettre à jour partout, restent à écrire (phase 7) |
 | **Rien n'écrit dans la save depuis la coque** | tout vit dans la copie de travail, et il n'y a pas de bouton « écrire ». La séquence est écrite et testée (refuser si le jeu tient le monde, sauvegarder, écrire) — c'est `editer --ecrire` qui l'emprunte |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |

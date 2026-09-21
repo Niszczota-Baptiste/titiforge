@@ -344,8 +344,8 @@ geste et pas une structure de données :
 
 | | Pourquoi maintenant |
 |---|---|
-| **Pousser-tirer** une face de la sélection | un geste + un remplissage. La sélection existe déjà, l'opération de remplissage aussi |
-| **L'inférence** — accrochage aux coins, arêtes, milieux, axes, plans et alignements de ce qui est déjà bâti | c'est ce qui FAIT SketchUp. Pure géométrie, zéro impact moteur : ça vit entièrement dans la coque |
+| ✅ **Pousser-tirer** une face de la sélection | un geste + un remplissage. Fait : on attrape une face au clic, on tire, et l'opération n'écrit que la TRANCHE. Tirer pose la matière, pousser pose de l'air |
+| ✅ **L'inférence** — accrochage aux coins, arêtes, milieux, axes, plans et alignements de ce qui est déjà bâti | c'est ce qui FAIT SketchUp. Pure géométrie, zéro impact moteur : ça vit entièrement dans la coque. Faite, et elle DIT à quoi elle tient, axe par axe |
 | **Saisie chiffrée** pendant le geste — taper `12` en tirant | trivial une fois le geste là, et c'est la moitié de la précision de SketchUp |
 
 L'inférence est le morceau le plus difficile à rendre JUSTE de toute la

@@ -63,7 +63,7 @@ fn barre(ui: &mut Ui, e: &mut Etat) {
         ui.label(
             RichText::new(match e.mode {
                 Mode::Edition => "gauche : coin 1 · droit : coin 2",
-                Mode::Conception => "gauche/droit : entités (à venir)",
+                Mode::Conception => "gauche : tirer une FACE · droit : abandonner",
             })
             .color(if e.mode == Mode::Edition {
                 VERT
@@ -205,6 +205,12 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
             .color(GRIS),
     );
 
+    // Le pousser-tirer n'a de sens qu'en Conception : l'afficher en Édition
+    // proposerait un geste que les boutons n'y font pas.
+    if e.mode == Mode::Conception {
+        tirage(ui, e);
+    }
+
     // ── l'atelier : l'opération, engendrée depuis son descripteur
     ui.add_space(10.0);
     ui.separator();
@@ -215,6 +221,58 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
         ui.separator();
         ui.label(RichText::new(&e.message).color(ORANGE));
     }
+}
+
+/// Ce que le pousser-tirer fait pendant qu'on le fait.
+///
+/// **Un geste qui ne DIT pas ce qu'il vaut est un geste qu'on refait trois
+/// fois.** SketchUp affiche le nombre pendant le glissement, et c'est la
+/// moitié de sa précision.
+fn tirage(ui: &mut Ui, e: &mut Etat) {
+    ui.add_space(10.0);
+    ui.separator();
+    ui.label(RichText::new("POUSSER-TIRER").strong().color(GRIS));
+    match &e.tirage {
+        None => {
+            ui.label(
+                RichText::new(
+                    "Clic gauche sur une FACE de la sélection, puis glisser. \
+                     Droit ou Échap abandonne.",
+                )
+                .small()
+                .color(GRIS),
+            );
+        }
+        Some(t) => {
+            let n = t.blocs;
+            ui.label(
+                RichText::new(format!(
+                    "{} {} de {} bloc(s)",
+                    if n >= 0 { "tiré" } else { "poussé" },
+                    t.face.nom(),
+                    n.abs()
+                ))
+                .color(if n >= 0 { VERT } else { ORANGE }),
+            );
+            ui.label(
+                RichText::new(if n >= 0 {
+                    "tirer POSE la matière"
+                } else {
+                    "pousser pose de l'AIR"
+                })
+                .small()
+                .color(GRIS),
+            );
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label("bloc");
+        ui.add(
+            egui::TextEdit::singleline(&mut e.bloc_tirage)
+                .desired_width(180.0)
+                .hint_text("minecraft:stone"),
+        );
+    });
 }
 
 /// La palette d'opérations et le formulaire de celle qui est choisie.

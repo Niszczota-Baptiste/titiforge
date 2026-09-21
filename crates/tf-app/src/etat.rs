@@ -14,7 +14,7 @@ use tf_render::controles::{Mode, Vue};
 use tf_world::coords::BlockPos;
 use tf_world::decoupe::Niveau;
 use tf_world::inference::{accrocher, Accroche, TOLERANCE};
-use tf_world::selection::{Direction, Selection};
+use tf_world::selection::{glissement, tranche, Direction, Selection};
 
 /// Ce que le quadrillage montre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +209,27 @@ pub fn octets(n: u64) -> String {
     }
 }
 
+/// **Un pousser-tirer en cours.**
+///
+/// Le premier tiers de SketchUp, et c'est un GESTE, pas une structure de
+/// données : la sélection existe déjà, le remplissage aussi. Ce qui manquait
+/// est la poignée.
+#[derive(Debug, Clone)]
+pub struct Tirage {
+    /// La face attrapée.
+    pub face: Direction,
+    /// Le point du monde où le geste a commencé — l'origine de la mesure.
+    pub ancre: [f32; 3],
+    /// La sélection AVANT le geste.
+    ///
+    /// **On repart d'elle à chaque image**, jamais de la sélection courante :
+    /// cumuler les tirages ferait accélérer la face à mesure qu'on la tire,
+    /// ce qui se lit « la poignée s'emballe ».
+    pub depart: Selection,
+    /// Ce qui est tiré, en blocs. Négatif = poussé.
+    pub blocs: i32,
+}
+
 /// L'état complet de la coque.
 #[derive(Debug, Clone)]
 pub struct Etat {
@@ -221,6 +242,12 @@ pub struct Etat {
     pub reticule: SousLeReticule,
     /// L'opération choisie et ses paramètres.
     pub atelier: Atelier,
+    /// Le pousser-tirer en cours, s'il y en a un.
+    pub tirage: Option<Tirage>,
+    /// Le bloc que le pousser-tirer pose. Celui de l'opération choisie quand
+    /// elle en nomme un, sinon de la pierre — jamais rien, sinon le geste
+    /// n'écrirait pas.
+    pub bloc_tirage: String,
     /// Ce que l'interface veut envoyer au moteur, posé pendant le dessin et
     /// ramassé juste après.
     ///
@@ -263,6 +290,8 @@ impl Etat {
             tolerance: TOLERANCE,
             reticule: SousLeReticule::default(),
             atelier: Atelier::default(),
+            tirage: None,
+            bloc_tirage: "minecraft:stone".into(),
             demande: None,
             occupe: false,
             editable: false,
@@ -355,6 +384,112 @@ impl Etat {
             Some(a) => Some(a.position),
             None => self.reticule.pose,
         }
+    }
+
+    /// **Attrape une face de la sélection.** Le début du pousser-tirer.
+    ///
+    /// Le rayon est celui du réticule, comme tout le reste : on tire la face
+    /// qu'on REGARDE. Rend faux quand le rayon ne touche aucune face — un clic
+    /// à côté ne doit pas démarrer un geste fantôme qui déplacera la sélection
+    /// au premier mouvement de souris.
+    pub fn attraper(&mut self, camera: &tf_render::Camera, aspect: f32) -> bool {
+        let d = tf_render::viser::rayon_ecran(camera, [0.0, 0.0], aspect);
+        let Some((face, t)) = self.selection.face_visee(camera.oeil, d) else {
+            return false;
+        };
+        let ancre = [
+            camera.oeil[0] + d[0] * t,
+            camera.oeil[1] + d[1] * t,
+            camera.oeil[2] + d[2] * t,
+        ];
+        self.tirage = Some(Tirage {
+            face,
+            ancre,
+            depart: self.selection,
+            blocs: 0,
+        });
+        self.message = format!("face {} attrapée", face.nom());
+        true
+    }
+
+    /// Met le geste à jour depuis la position de la souris, en NDC.
+    ///
+    /// Rend faux quand le rayon est trop parallèle à l'axe : là, un pixel
+    /// vaudrait des dizaines de blocs. On ne bouge pas plutôt que de bouger
+    /// n'importe comment — et la sélection garde la dernière valeur VALIDE,
+    /// pas zéro : la face ne doit pas revenir à sa place parce qu'on a regardé
+    /// dans l'axe une image.
+    ///
+    /// **Ce refus est aujourd'hui indistinguable d'un tirage de zéro**, parce
+    /// que `Selection::agrandir` rend faux sur un non-changement et nous fait
+    /// sortir au même endroit. Mesuré par mutation : remplacer le refus par un
+    /// `unwrap_or(0)` ne fait rougir aucun test. Il reste, et c'est
+    /// délibéré — sans lui, le geste dépendrait de ce que `agrandir` décide
+    /// d'un zéro, qui n'est pas une promesse faite ici.
+    pub fn tirer(&mut self, camera: &tf_render::Camera, aspect: f32, ndc: [f32; 2]) -> bool {
+        let Some(t) = &self.tirage else { return false };
+        let d = tf_render::viser::rayon_ecran(camera, ndc, aspect);
+        let Some(n) = glissement(t.ancre, t.face, camera.oeil, d) else {
+            return false;
+        };
+        let (face, depart) = (t.face, t.depart);
+        let mut s = depart;
+        if !s.agrandir(face, n) {
+            return false;
+        }
+        self.selection = s;
+        if let Some(t) = &mut self.tirage {
+            t.blocs = n;
+        }
+        self.message = format!(
+            "{} {} de {} bloc(s)",
+            if n >= 0 { "tiré" } else { "poussé" },
+            face.nom(),
+            n.abs()
+        );
+        true
+    }
+
+    /// Lâche le geste, et rend l'opération à envoyer.
+    ///
+    /// **Elle ne porte que la TRANCHE**, jamais la sélection entière : tirer
+    /// une face de trois blocs sur un bâtiment de cent mille ne doit pas
+    /// réécrire le bâtiment. Tirer POSE le bloc choisi, pousser pose de l'air
+    /// — c'est le modèle mental de SketchUp, où la même poignée ajoute et
+    /// retire de la matière.
+    pub fn lacher(&mut self) -> Option<crate::moteur::Commande> {
+        let t = self.tirage.take()?;
+        let (avant, apres) = (t.depart.boite()?, self.selection.boite()?);
+        let zone = tranche(avant, apres, t.face)?;
+        let mut params = Params::new();
+        params.poser(
+            "bloc",
+            Valeur::Texte(if t.blocs >= 0 {
+                self.bloc_tirage.clone()
+            } else {
+                "minecraft:air".into()
+            }),
+        );
+        Some(crate::moteur::Commande::Appliquer {
+            op: "poser",
+            params,
+            sel: zone,
+            forme: tf_ops::Forme::Boite,
+            compter: true,
+            seed: 0,
+        })
+    }
+
+    /// Abandonne le geste et remet la sélection d'avant. Échap, ou un clic
+    /// droit pendant le tirage : SketchUp fait les deux, et un geste qu'on ne
+    /// peut pas annuler est un geste qu'on n'ose pas commencer.
+    pub fn abandonner(&mut self) -> bool {
+        let Some(t) = self.tirage.take() else {
+            return false;
+        };
+        self.selection = t.depart;
+        self.message = "tirage abandonné".into();
+        true
     }
 
     /// Ce que le panneau de sélection affiche.

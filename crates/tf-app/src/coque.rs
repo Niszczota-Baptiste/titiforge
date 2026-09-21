@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tf_app::etat::Etat;
 use tf_app::moteur::Moteur;
 use tf_app::{interface, scene};
+use tf_render::controles::Mode;
 use tf_render::{Appareil, AtlasGpu, Scene};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -148,7 +149,14 @@ impl ApplicationHandler for Coque {
                 let bas = event.state == ElementState::Pressed;
                 if let PhysicalKey::Code(c) = event.physical_key {
                     match c {
-                        KeyCode::Escape if bas => evb.exit(),
+                        // Échap abandonne d'abord le geste en cours. Quitter
+                        // l'application au milieu d'un tirage serait une
+                        // surprise coûteuse.
+                        KeyCode::Escape if bas => {
+                            if !g.etat.abandonner() {
+                                evb.exit();
+                            }
+                        }
                         // **Ctrl est REGARDÉ, pas supposé.** « Z » qui répond
                         // aussi à Ctrl+Z, c'est une annulation qui change
                         // d'outil au passage — piège payé dans
@@ -183,21 +191,51 @@ impl ApplicationHandler for Coque {
                 if button == MouseButton::Middle {
                     g.tourne = state == ElementState::Pressed;
                 } else if state == ElementState::Pressed && !pris {
-                    // Gauche = coin 1, droit = coin 2. La convention de
-                    // WorldEdit, que la main de tout constructeur connaît.
-                    match button {
-                        MouseButton::Left => {
+                    match (g.etat.mode, button) {
+                        // **Édition** : gauche = coin 1, droit = coin 2. La
+                        // convention de WorldEdit, que la main de tout
+                        // constructeur connaît.
+                        (Mode::Edition, MouseButton::Left) => {
                             g.etat.poser_coin(true);
                         }
-                        MouseButton::Right => {
+                        (Mode::Edition, MouseButton::Right) => {
                             g.etat.poser_coin(false);
+                        }
+                        // **Conception** : gauche attrape une FACE et la
+                        // tire ; droit abandonne le geste en cours.
+                        (Mode::Conception, MouseButton::Left) => {
+                            let (cam, aspect) = vue_courante(g);
+                            g.etat.attraper(&cam, aspect);
+                        }
+                        (Mode::Conception, MouseButton::Right) => {
+                            g.etat.abandonner();
                         }
                         _ => {}
                     }
+                } else if state == ElementState::Released
+                    && button == MouseButton::Left
+                    && g.etat.tirage.is_some()
+                {
+                    // Le trait part au moteur au RELÂCHEMENT, pas à chaque
+                    // image : sinon une poignée tirée de vingt blocs
+                    // produirait vingt entrées de journal, et vingt Ctrl+Z
+                    // pour les défaire.
+                    g.etat.demande = g.etat.lacher();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let p = (position.x, position.y);
+                // Un tirage en cours suit la souris — c'est le seul geste qui
+                // lit sa position à l'écran plutôt que le réticule, parce que
+                // c'est une POIGNÉE qu'on déplace, pas une visée.
+                if g.etat.tirage.is_some() && !pris {
+                    let (cam, aspect) = vue_courante(g);
+                    let ndc = [
+                        (p.0 as f32 / g.config.width as f32) * 2.0 - 1.0,
+                        1.0 - (p.1 as f32 / g.config.height as f32) * 2.0,
+                    ];
+                    g.etat.tirer(&cam, aspect, ndc);
+                }
                 if let (Some(a), true) = (g.souris, g.tourne && !pris) {
                     let (dx, dy) = ((p.0 - a.0) as f32, (p.1 - a.1) as f32);
                     if g.maj {
@@ -247,6 +285,21 @@ impl ApplicationHandler for Coque {
         }
         f.request_redraw();
     }
+}
+
+/// La caméra et le rapport d'image du moment. Deux endroits en avaient besoin,
+/// et les recopier aurait fini par donner deux champs de vision différents
+/// selon le geste.
+fn vue_courante(g: &Gpu) -> (tf_render::Camera, f32) {
+    let aspect = g.config.width as f32 / g.config.height as f32;
+    let cam = g.etat.vue.camera(&tf_render::Camera {
+        oeil: [0.0; 3],
+        cible: [0.0, 0.0, 1.0],
+        fov: 50f32.to_radians(),
+        proche: 0.1,
+        loin: 4096.0,
+    });
+    (cam, aspect)
 }
 
 /// Ramasse ce que le fil a rendu, et le met à l'écran.
@@ -378,14 +431,7 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
     let vue = image
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let aspect = g.config.width as f32 / g.config.height as f32;
-    let camera = g.etat.vue.camera(&tf_render::Camera {
-        oeil: [0.0; 3],
-        cible: [0.0, 0.0, 1.0],
-        fov: 50f32.to_radians(),
-        proche: 0.1,
-        loin: 4096.0,
-    });
+    let (camera, aspect) = vue_courante(g);
     g.etat.relever_reticule(&camera, aspect, 256.0, &m.solide());
 
     let oeil = tf_world::coords::BlockPos::new(

@@ -352,3 +352,123 @@ impl Selection {
         }
     }
 }
+
+/// **Combien de blocs on a tiré le long d'un axe.**
+///
+/// Le geste de pousser-tirer : on a attrapé une face, on déplace la souris, et
+/// il faut en tirer un NOMBRE DE BLOCS le long de la normale. Ce n'est pas un
+/// glissement d'écran multiplié par une sensibilité — ça donnerait un geste
+/// qui dérive selon la distance et l'angle, ce que personne ne sait corriger
+/// à l'œil. C'est la projection du rayon de souris sur la DROITE de l'axe :
+/// le point de la droite le plus proche du rayon.
+///
+/// `ancre` est le point du monde où le geste a commencé, `d` l'axe suivi.
+/// Rend le déplacement en blocs, arrondi.
+///
+/// **`None` quand le rayon est trop parallèle à l'axe.** Là, la projection
+/// part à l'infini : un pixel de souris vaudrait des centaines de blocs.
+/// SketchUp refuse aussi — et refuser, c'est ne pas bouger, pas bouger
+/// n'importe comment.
+pub fn glissement(
+    ancre: [f32; 3],
+    d: Direction,
+    origine: [f32; 3],
+    direction: [f32; 3],
+) -> Option<i32> {
+    if !ancre.iter().all(|c| c.is_finite())
+        || !origine.iter().all(|c| c.is_finite())
+        || !direction.iter().all(|c| c.is_finite())
+    {
+        return None;
+    }
+    let u = {
+        let p = d.pas();
+        [p[0] as f32, p[1] as f32, p[2] as f32]
+    };
+    let v = direction;
+    let n2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if n2 < 1e-12 {
+        return None;
+    }
+    // Le classique « point de la droite A le plus proche de la droite B » :
+    // avec `u` unitaire, uu vaut 1 et le système se réduit à deux produits
+    // scalaires.
+    let w = [
+        ancre[0] - origine[0],
+        ancre[1] - origine[1],
+        ancre[2] - origine[2],
+    ];
+    let uv = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let wu = w[0] * u[0] + w[1] * u[1] + w[2] * u[2];
+    let wv = w[0] * v[0] + w[1] * v[1] + w[2] * v[2];
+    // `denom` s'annule quand le rayon est colinéaire à l'axe. On s'arrête
+    // BIEN avant zéro : à un degré près de la colinéarité, un pixel vaut déjà
+    // des dizaines de blocs.
+    let denom = n2 - uv * uv;
+    if denom.abs() < 1e-3 * n2 {
+        return None;
+    }
+    let t = (uv * wv - wu * n2) / denom;
+    if !t.is_finite() {
+        return None;
+    }
+    // Un tirage se compte en blocs ENTIERS. L'arrondi au plus proche, pas la
+    // troncature : tronquer collerait le geste à zéro sur toute la première
+    // moitié du premier bloc, ce qui se lit « la poignée ne répond pas ».
+    let n = t.round();
+    if n.abs() > i32::MAX as f32 {
+        return None;
+    }
+    Some(n as i32)
+}
+
+/// **La TRANCHE qu'un pousser-tirer a ajoutée ou retirée.**
+///
+/// C'est elle que l'opération écrit, et pas la sélection entière : tirer une
+/// face de trois blocs sur un bâtiment de cent mille ne doit pas réécrire le
+/// bâtiment. C'est l'invariant n° 8 — une opération ne paie que sa portée —
+/// appliqué au geste.
+///
+/// `avant` et `apres` sont les boîtes de part et d'autre du geste, `d` la face
+/// attrapée. Rend `None` quand rien n'a bougé sur cet axe.
+///
+/// **Les bornes d'une `BBox` sont INCLUSES**, et c'est là que ça se joue : la
+/// tranche ajoutée commence à `ancien_max + 1`, pas à `ancien_max`. Un bloc
+/// d'écart se lit « la dernière rangée ne se remplit pas », ou pire, « une
+/// rangée de trop est écrasée ».
+pub fn tranche(avant: BBox, apres: BBox, d: Direction) -> Option<BBox> {
+    let k = d.axe();
+    let (a0, a1) = (
+        [avant.min.x, avant.min.y, avant.min.z][k],
+        [avant.max.x, avant.max.y, avant.max.z][k],
+    );
+    let (b0, b1) = (
+        [apres.min.x, apres.min.y, apres.min.z][k],
+        [apres.max.x, apres.max.y, apres.max.z][k],
+    );
+    // La tranche prend les DEUX autres axes de la boîte d'après : c'est là
+    // qu'on écrit, et c'est elle qui décrit le volume final.
+    let (bas, haut) = if d.positif() {
+        if b1 > a1 {
+            (a1 + 1, b1) // tiré : ce qui s'ajoute au-delà de l'ancienne face
+        } else if b1 < a1 {
+            (b1 + 1, a1) // poussé : ce qui vient d'en sortir
+        } else {
+            return None;
+        }
+    } else if b0 < a0 {
+        (b0, a0 - 1)
+    } else if b0 > a0 {
+        (a0, b0 - 1)
+    } else {
+        return None;
+    };
+    let mut min = [apres.min.x, apres.min.y, apres.min.z];
+    let mut max = [apres.max.x, apres.max.y, apres.max.z];
+    min[k] = bas;
+    max[k] = haut;
+    Some(BBox::new(
+        BlockPos::new(min[0], min[1], min[2]),
+        BlockPos::new(max[0], max[1], max[2]),
+    ))
+}

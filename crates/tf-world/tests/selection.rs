@@ -385,3 +385,158 @@ fn les_noms_des_directions_font_l_aller_retour() {
     assert_eq!(Direction::depuis_nom("haut").unwrap().pas(), [0, 1, 0]);
     assert_eq!(Direction::depuis_nom("nulle part"), None);
 }
+
+/// **Le geste de pousser-tirer se mesure sur la DROITE de l'axe**, pas sur un
+/// glissement d'écran multiplié par une sensibilité : celui-ci dériverait
+/// selon la distance et l'angle, et personne ne sait corriger ça à l'œil.
+#[test]
+fn tirer_le_long_d_un_axe_compte_des_blocs() {
+    use tf_world::selection::{glissement, Direction};
+
+    let ancre = [0.0, 0.0, 0.0];
+    // L'œil est à dix blocs en −Z et regarde une cible sur l'axe X.
+    let oeil = [0.0, 0.0, -10.0];
+    let vers = |cible: [f32; 3]| [cible[0] - oeil[0], cible[1] - oeil[1], cible[2] - oeil[2]];
+
+    // Viser le point x = 5 sur l'axe doit rendre 5.
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, oeil, vers([5.0, 0.0, 0.0])),
+        Some(5)
+    );
+    // Et de l'autre côté, un négatif — tirer vers l'arrière RAMÈNE la face.
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, oeil, vers([-3.0, 0.0, 0.0])),
+        Some(-3)
+    );
+    // L'axe compte, pas seulement la position visée.
+    assert_eq!(
+        glissement(ancre, Direction::PlusY, oeil, vers([0.0, 7.0, 0.0])),
+        Some(7)
+    );
+    // Un demi-bloc s'arrondit au plus proche : tronquer collerait le geste à
+    // zéro sur toute la première moitié du premier bloc.
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, oeil, vers([1.6, 0.0, 0.0])),
+        Some(2)
+    );
+}
+
+/// **Un rayon colinéaire à l'axe ne donne AUCUN nombre.** La projection part à
+/// l'infini : un pixel de souris vaudrait des centaines de blocs, et la face
+/// sauterait à l'autre bout du monde. Refuser, c'est ne pas bouger — pas
+/// bouger n'importe comment.
+#[test]
+fn un_rayon_dans_l_axe_ne_donne_pas_de_tirage() {
+    use tf_world::selection::{glissement, Direction};
+
+    let ancre = [0.0, 0.0, 0.0];
+    // L'œil est SUR l'axe X et regarde le long de l'axe X.
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, [-10.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        None
+    );
+    // Presque colinéaire : refusé aussi, et c'est le point — à un degré près
+    // de l'axe, un pixel vaut déjà des dizaines de blocs.
+    let presque = [1.0, 0.01, 0.0];
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, [-10.0, 0.0, 0.0], presque),
+        None
+    );
+    // Une direction nulle, et des valeurs non finies : refusées, pas
+    // propagées. `NaN` ne plante pas, il déplace.
+    assert_eq!(
+        glissement(ancre, Direction::PlusX, [0.0; 3], [0.0; 3]),
+        None
+    );
+    assert_eq!(
+        glissement(
+            ancre,
+            Direction::PlusX,
+            [f32::NAN, 0.0, 0.0],
+            [0.0, 0.0, 1.0]
+        ),
+        None
+    );
+}
+
+/// Le geste complet, en une propriété : attraper une face et tirer de n doit
+/// donner la même sélection que `//expand n` sur cette face.
+#[test]
+fn tirer_une_face_vaut_un_expand_de_la_meme_face() {
+    use tf_world::coords::BlockPos;
+    use tf_world::selection::{glissement, Selection};
+
+    let mut s = Selection::nouvelle();
+    s.poser_coin1(BlockPos::new(0, 0, 0));
+    s.poser_coin2(BlockPos::new(9, 9, 9));
+
+    // On vise la face EST (+X) depuis l'extérieur, en regardant vers −X.
+    let oeil = [30.0, 5.0, 5.0];
+    let dir = [-1.0, 0.0, 0.0];
+    let (face, _) = s.face_visee(oeil, dir).expect("la face est visée");
+    assert_eq!(face, tf_world::selection::Direction::PlusX);
+
+    // Puis on tire de 4 blocs vers l'est, la souris visant x = 14.
+    let ancre = [10.0, 5.0, 5.0];
+    let oeil2 = [5.0, 5.0, -30.0];
+    let vise = [14.0 - oeil2[0], 5.0 - oeil2[1], 5.0 - oeil2[2]];
+    let n = glissement(ancre, face, oeil2, vise).unwrap();
+    assert_eq!(n, 4);
+
+    let mut attendu = Selection::nouvelle();
+    attendu.poser_coin1(BlockPos::new(0, 0, 0));
+    attendu.poser_coin2(BlockPos::new(9, 9, 9));
+    assert!(attendu.agrandir(face, n));
+    assert!(s.agrandir(face, n));
+    assert_eq!(s.boite(), attendu.boite());
+    assert_eq!(s.boite().unwrap().max.x, 13);
+}
+
+/// **Un pousser-tirer n'écrit QUE sa tranche.** Tirer une face de trois blocs
+/// sur un bâtiment de cent mille ne doit pas réécrire le bâtiment : c'est
+/// l'invariant « une opération ne paie que sa portée », appliqué au geste.
+#[test]
+fn la_tranche_d_un_tirage_est_ce_qui_s_ajoute() {
+    use tf_world::coords::{BBox, BlockPos};
+    use tf_world::selection::{tranche, Direction, Selection};
+
+    let base = BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(9, 9, 9));
+    let etendre = |d: Direction, n: i32| {
+        let mut s = Selection::nouvelle();
+        s.poser_coin1(base.min);
+        s.poser_coin2(base.max);
+        assert!(s.agrandir(d, n));
+        s.boite().unwrap()
+    };
+
+    // Tiré de 3 vers l'est : la tranche va de x = 10 à 12 — **pas de 9**.
+    // Les bornes sont INCLUSES, et un bloc d'écart écraserait la dernière
+    // rangée de l'ancien volume.
+    let t = tranche(base, etendre(Direction::PlusX, 3), Direction::PlusX).unwrap();
+    assert_eq!(
+        t,
+        BBox::new(BlockPos::new(10, 0, 0), BlockPos::new(12, 9, 9))
+    );
+
+    // Poussé de 3 : ce qui vient d'en SORTIR, x = 7 à 9.
+    let t = tranche(base, etendre(Direction::PlusX, -3), Direction::PlusX).unwrap();
+    assert_eq!(t, BBox::new(BlockPos::new(7, 0, 0), BlockPos::new(9, 9, 9)));
+
+    // La face négative, symétrique : tirer vers l'ouest ajoute x = −3 à −1.
+    let t = tranche(base, etendre(Direction::MoinsX, 3), Direction::MoinsX).unwrap();
+    assert_eq!(
+        t,
+        BBox::new(BlockPos::new(-3, 0, 0), BlockPos::new(-1, 9, 9))
+    );
+
+    // Et sur un autre axe, pour que le test ne passe pas par accident sur X.
+    let t = tranche(base, etendre(Direction::PlusY, 2), Direction::PlusY).unwrap();
+    assert_eq!(
+        t,
+        BBox::new(BlockPos::new(0, 10, 0), BlockPos::new(9, 11, 9))
+    );
+
+    // Rien n'a bougé : rien à écrire. Rendre une tranche vide ferait une
+    // entrée de journal pour zéro changement.
+    assert_eq!(tranche(base, base, Direction::PlusX), None);
+}
