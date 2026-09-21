@@ -221,6 +221,19 @@ pub struct Etat {
     pub reticule: SousLeReticule,
     /// L'opération choisie et ses paramètres.
     pub atelier: Atelier,
+    /// Ce que l'interface veut envoyer au moteur, posé pendant le dessin et
+    /// ramassé juste après.
+    ///
+    /// **L'interface ne parle pas au moteur elle-même.** Elle DÉCRIT ce
+    /// qu'elle veut ; la boucle envoie. Sans cette séparation, dessiner un
+    /// bouton demanderait de tenir un canal, et l'interface ne se testerait
+    /// plus sans fil.
+    pub demande: Option<crate::moteur::Commande>,
+    /// Le moteur travaille-t-il ? C'est ce qui grise le bouton.
+    pub occupe: bool,
+    /// Le monde ouvert est-il éditable ? La fixture ne l'est pas, et il faut
+    /// le DIRE plutôt que de griser sans raison.
+    pub editable: bool,
     /// Ce que l'interface a à dire, en une ligne. Vide = rien à signaler.
     pub message: String,
 }
@@ -250,6 +263,9 @@ impl Etat {
             tolerance: TOLERANCE,
             reticule: SousLeReticule::default(),
             atelier: Atelier::default(),
+            demande: None,
+            occupe: false,
+            editable: false,
             message: String::new(),
         }
     }

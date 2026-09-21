@@ -62,7 +62,7 @@ pub struct Bilan {
 /// `poser` reçoit chaque section au fil de l'eau plutôt qu'un `Vec` : sur une
 /// emprise large, tout accumuler avant de rendre la main doublerait la pointe
 /// de mémoire pour rien.
-pub fn sections_de<S: RegionSource>(
+pub fn sections_de<S: RegionSource + ?Sized>(
     src: &S,
     dim: &Dimension,
     folder: Folder,

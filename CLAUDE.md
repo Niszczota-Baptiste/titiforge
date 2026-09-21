@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (722 tests aujourd'hui)
+cargo test            # tous les crates (723 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -363,7 +363,8 @@ crates/
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
-               · branchement au monde et remaillage à venir.
+               · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
+               · remaillage encore global, outils de souris à venir.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1298,6 +1299,16 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Remailler depuis la SOURCE au lieu de la copie de travail.** C'est la faute
+  qui se lit « le bouton ne fait rien » : l'opération réussit, le journal la
+  garde, et l'écran montre le monde d'avant. La coque relit donc le `Staging`,
+  jamais ce qu'il recouvre. Vérifié par mutation — remplacer la copie de
+  travail par sa source fait rougir le test de jonction, et rien d'autre.
+- **Un fil qui écrit et un fil qui lit n'ont pas besoin d'un verrou** quand un
+  seul écrit. `Staging` prend `&self` partout : un `Arc` suffit, et donner la
+  possession exclusive au moteur aurait obligé à faire revenir les octets par
+  le canal — c'est-à-dire à recopier une région entière à chaque coup de
+  pinceau.
 - **Un test qui PEND ne dit pas ce qui ne va pas.** En cassant `recevoir` pour
   qu'il bloque — la faute même que le fil moteur existe pour empêcher — la
   suite ne rendait plus la main du tout : ni rouge, ni vert, rien à lire. Une

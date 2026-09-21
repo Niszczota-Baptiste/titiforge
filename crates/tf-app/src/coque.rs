@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use tf_app::etat::Etat;
+use tf_app::moteur::Moteur;
 use tf_app::{interface, scene};
 use tf_render::{Appareil, AtlasGpu, Scene};
 use winit::application::ApplicationHandler;
@@ -28,7 +29,7 @@ const SENSIBILITE: f32 = 0.0035;
 /// quand on est contre.
 const PAS_AVANT: f32 = 2.0;
 
-pub fn lancer(monde: scene::Monde, larg: u32, haut: u32) {
+pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32) {
     let boucle = match EventLoop::new() {
         Ok(b) => b,
         Err(e) => {
@@ -37,8 +38,20 @@ pub fn lancer(monde: scene::Monde, larg: u32, haut: u32) {
         }
     };
     boucle.set_control_flow(ControlFlow::Poll);
+    // **Le fil moteur démarre AVANT la fenêtre.** S'il ne démarre pas, autant
+    // le savoir tout de suite : une coque qui ouvre une fenêtre et découvre
+    // ensuite qu'elle ne peut rien éditer aurait menti par omission.
+    let moteur = ouvert.staging.clone().map(|st| {
+        Moteur::lancer(
+            st,
+            tf_world::Dimension::Overworld,
+            tf_world::journal::Journal::new(),
+        )
+    });
     let mut app = Coque {
-        monde,
+        ouvert,
+        moteur,
+        remailler: false,
         taille: (larg, haut),
         fenetre: None,
         gpu: None,
@@ -63,11 +76,22 @@ struct Gpu {
     /// La molette est-elle ENFONCÉE ? C'est elle qui tourne la caméra.
     tourne: bool,
     maj: bool,
+    /// Ctrl est-il tenu ? Regardé, jamais supposé : sans lui, « Z » répondrait
+    /// aussi à Ctrl+Z.
+    ctrl: bool,
     souris: Option<(f64, f64)>,
 }
 
 struct Coque {
-    monde: scene::Monde,
+    ouvert: scene::Ouvert,
+    /// `None` pour la fixture : elle n'a pas de save derrière elle.
+    moteur: Option<Moteur>,
+    /// Le monde a changé : il faut relire la zone et remailler.
+    ///
+    /// Un drapeau et non un appel immédiat : plusieurs réponses peuvent
+    /// arriver dans la même image, et remailler trois fois de suite coûterait
+    /// trois fois pour le même résultat.
+    remailler: bool,
     taille: (u32, u32),
     fenetre: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -89,7 +113,7 @@ impl ApplicationHandler for Coque {
                 return;
             }
         };
-        match preparer(&f, &self.monde) {
+        match preparer(&f, &self.ouvert.monde) {
             Ok(g) => {
                 self.gpu = Some(g);
                 self.fenetre = Some(f);
@@ -125,7 +149,20 @@ impl ApplicationHandler for Coque {
                 if let PhysicalKey::Code(c) = event.physical_key {
                     match c {
                         KeyCode::Escape if bas => evb.exit(),
-                        KeyCode::KeyW | KeyCode::KeyZ => g.avance[0] = bas,
+                        // **Ctrl est REGARDÉ, pas supposé.** « Z » qui répond
+                        // aussi à Ctrl+Z, c'est une annulation qui change
+                        // d'outil au passage — piège payé dans
+                        // `ExeWorldEdit`, et la parade est de comparer les
+                        // modificateurs ABSENTS autant que les présents.
+                        KeyCode::KeyZ if bas && g.ctrl => {
+                            g.etat.demande = Some(tf_app::moteur::Commande::Annuler);
+                        }
+                        KeyCode::KeyY if bas && g.ctrl => {
+                            g.etat.demande = Some(tf_app::moteur::Commande::Refaire);
+                        }
+                        KeyCode::ControlLeft | KeyCode::ControlRight => g.ctrl = bas,
+                        KeyCode::KeyW => g.avance[0] = bas,
+                        KeyCode::KeyZ => g.avance[0] = bas,
                         KeyCode::KeyS => g.avance[1] = bas,
                         KeyCode::KeyA | KeyCode::KeyQ => g.avance[2] = bas,
                         KeyCode::KeyD => g.avance[3] = bas,
@@ -170,8 +207,26 @@ impl ApplicationHandler for Coque {
             }
             WindowEvent::RedrawRequested => {
                 voler(g);
-                if let Err(e) = dessiner(f, g, &self.monde) {
+                // **Ramasser AVANT de dessiner.** Une réponse arrivée pendant
+                // l'image précédente doit être à l'écran maintenant, pas dans
+                // une image de plus : « le bouton met du temps à répondre » et
+                // « le bouton ne répond pas » se ressemblent trop.
+                self.remailler |= ramasser(&mut self.moteur, &mut g.etat);
+                g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
+                g.etat.editable = self.ouvert.editable();
+                if let Err(e) = dessiner(f, g, &self.ouvert.monde) {
                     eprintln!("image perdue : {e}");
+                }
+                // Ce que l'interface a décidé pendant le dessin part
+                // maintenant : le fil travaillera pendant l'image suivante.
+                envoyer(&mut self.moteur, &mut g.etat);
+                if self.remailler {
+                    self.remailler = false;
+                    if let Err(e) = self.ouvert.remailler() {
+                        g.etat.message = format!("remaillage : {e}");
+                    } else if let Err(e) = regarnir(g, &self.ouvert.monde) {
+                        g.etat.message = format!("remaillage : {e}");
+                    }
                 }
             }
             _ => {}
@@ -180,6 +235,54 @@ impl ApplicationHandler for Coque {
     }
 }
 
+/// Ramasse ce que le fil a rendu, et le met à l'écran.
+///
+/// **Ne bloque jamais** : c'est toute la raison d'être du fil. Une réponse qui
+/// n'est pas encore là ne coûte rien, et l'image suivante la trouvera.
+fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> bool {
+    let Some(moteur) = m else { return false };
+    let mut bouge = false;
+    for r in moteur.recevoir() {
+        e.message = r.texte();
+        // **Des bornes, donc des blocs ont changé.** C'est le seul critère :
+        // une opération qui n'a rien écrit ne rend pas de bornes, et
+        // remailler pour rien coûterait la zone entière à chaque clic.
+        bouge |= r.bornes().is_some();
+    }
+    bouge
+}
+
+/// Envoie ce que l'interface a demandé pendant l'image.
+fn envoyer(m: &mut Option<Moteur>, e: &mut Etat) {
+    let Some(demande) = e.demande.take() else {
+        return;
+    };
+    let Some(moteur) = m else {
+        e.message = "la fixture n'a pas de save derrière elle — ouvrir un monde \
+                     avec --monde"
+            .into();
+        return;
+    };
+    if !moteur.envoyer(demande) {
+        e.message = "le moteur s'est arrêté".into();
+    }
+}
+
+/// Reconstruit ce que le GPU dessine après un remaillage.
+///
+/// Le matériau et l'atlas changent avec la scène : un bloc qui apparaît pour
+/// la première fois amène sa texture, et l'atlas ne monte que les textures des
+/// blocs PRÉSENTS. Garder l'ancien afficherait la mauvaise tuile.
+fn regarnir(g: &mut Gpu, m: &scene::Monde) -> Result<(), String> {
+    let atlas = AtlasGpu::avec_mips(
+        &g.appareil,
+        m.atlas.cote,
+        m.atlas.len() as u32,
+        &m.atlas.pyramide(),
+    );
+    g.scene = Scene::pour(&g.appareil, &m.arene, &m.modeles, &atlas, g.config.format);
+    Ok(())
+}
 fn voler(g: &mut Gpu) {
     let v = 0.6;
     let a = (g.avance[0] as i32 - g.avance[1] as i32) as f32;
@@ -248,6 +351,7 @@ fn preparer(f: &Arc<Window>, m: &scene::Monde) -> Result<Gpu, String> {
         avance: [false; 6],
         tourne: false,
         maj: false,
+        ctrl: false,
         souris: None,
     })
 }

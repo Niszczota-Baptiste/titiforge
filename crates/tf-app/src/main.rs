@@ -76,18 +76,28 @@ fn main() {
         }
     }
 
-    let m = match scene::charger(&racine, monde.as_deref(), zone) {
-        Ok(m) => m,
+    let ouvert = match scene::Ouvert::ouvrir(&racine, monde.as_deref(), zone) {
+        Ok(o) => o,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    println!("scène : {} · {} quads, {} poses", m.quoi, m.quads, m.poses);
+    println!(
+        "scène : {} · {} quads, {} poses{}",
+        ouvert.monde.quoi,
+        ouvert.monde.quads,
+        ouvert.monde.poses,
+        if ouvert.editable() {
+            " · éditable (copie de travail)"
+        } else {
+            " · fixture, non éditable"
+        }
+    );
 
     match capture {
-        Some(png) => capturer(&m, &png, larg, haut, mode),
-        None => fenetre(m, larg, haut),
+        Some(png) => capturer(&ouvert.monde, &png, larg, haut, mode, ouvert.editable()),
+        None => fenetre(ouvert, larg, haut),
     }
 }
 
@@ -98,6 +108,7 @@ fn capturer(
     larg: u32,
     haut: u32,
     mode: tf_render::controles::Mode,
+    editable: bool,
 ) {
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -109,6 +120,9 @@ fn capturer(
     println!("adaptateur : {}", app.decrire());
     let aspect = larg as f32 / haut as f32;
     let mut etat = Etat::cadre(m.min, m.max, aspect);
+    // La capture dit la VÉRITÉ de ce qui est ouvert : une image qui montrerait
+    // des boutons actifs sur une fixture non éditable serait une image fausse.
+    etat.editable = editable;
     etat.mode = mode;
     // Une sélection de démonstration : l'interface n'a rien à montrer sans
     // elle, et un panneau vide ne dit pas ce qu'il saurait dire. Posée en
@@ -304,14 +318,14 @@ fn ecrire_png(chemin: &str, larg: u32, haut: u32, pixels: &[u8]) {
 }
 
 #[cfg(not(feature = "fenetre"))]
-fn fenetre(_m: scene::Monde, _l: u32, _h: u32) {
+fn fenetre(_m: scene::Ouvert, _l: u32, _h: u32) {
     eprintln!("compilé sans la fenêtre — utiliser --capture");
     std::process::exit(2);
 }
 
 #[cfg(feature = "fenetre")]
-fn fenetre(m: scene::Monde, larg: u32, haut: u32) {
-    crate::coque::lancer(m, larg, haut);
+fn fenetre(o: scene::Ouvert, larg: u32, haut: u32) {
+    crate::coque::lancer(o, larg, haut);
 }
 
 #[cfg(feature = "fenetre")]

@@ -280,20 +280,50 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
     }
 
     ui.add_space(4.0);
-    let pret = !notes.iter().any(|n| n.bloque());
-    ui.add_enabled_ui(pret, |ui| {
-        if ui.button(RichText::new("Appliquer").strong()).clicked() {
-            e.message = "le moteur n'est pas encore branché à la coque".into();
-        }
+    let pret = !notes.iter().any(|n| n.bloque()) && e.editable && !e.occupe;
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(pret, |ui| {
+            if ui.button(RichText::new("Appliquer").strong()).clicked() {
+                // L'interface DÉCRIT ce qu'elle veut ; c'est la boucle qui
+                // envoie. Tenir un canal ici rendrait l'interface intestable
+                // sans fil.
+                if let Some(sel) = e.selection.boite() {
+                    e.demande = Some(crate::moteur::Commande::Appliquer {
+                        op: e.atelier.op(),
+                        params: e.atelier.params.clone(),
+                        sel,
+                        forme: tf_ops::Forme::Boite,
+                        compter: true,
+                        seed: 0,
+                    });
+                }
+            }
+        });
+        ui.add_enabled_ui(e.editable && !e.occupe, |ui| {
+            if ui.button("Annuler").on_hover_text("Ctrl+Z").clicked() {
+                e.demande = Some(crate::moteur::Commande::Annuler);
+            }
+            if ui.button("Refaire").on_hover_text("Ctrl+Y").clicked() {
+                e.demande = Some(crate::moteur::Commande::Refaire);
+            }
+        });
     });
-    if pret {
+    if e.occupe {
+        ui.label(RichText::new("le moteur travaille…").small().color(ORANGE));
+    } else if !e.editable {
         ui.label(
             RichText::new(
-                "Le bouton ne fait encore rien : le moteur doit tourner dans un FIL \
-                 à part, sinon une opération de trois secondes fige la fenêtre.",
+                "La fixture n'a pas de save derrière elle : rien à éditer. \
+                 Ouvrir un monde avec --monde.",
             )
             .small()
             .color(ORANGE),
+        );
+    } else {
+        ui.label(
+            RichText::new("Tout se fait sur une COPIE de travail : la save n'est pas touchée.")
+                .small()
+                .color(GRIS),
         );
     }
 }

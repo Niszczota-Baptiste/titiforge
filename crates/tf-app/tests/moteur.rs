@@ -30,7 +30,7 @@ fn moteur() -> (Moteur, MemorySource) {
         ZERO,
         src.read_region(&SURFACE, Folder::Region, ZERO).unwrap(),
     );
-    let st = Staging::new(src, MemorySource::new());
+    let st = std::sync::Arc::new(Staging::new(src, MemorySource::new()));
     (Moteur::lancer(st, SURFACE, Journal::new()), miroir)
 }
 

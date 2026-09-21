@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **722**, zéro échec |
+| Tests | **723**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-722 tests, répartis par ce qu'ils PROUVENT :
+723 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -69,6 +69,7 @@ cargo test --workspace
 | `tf-world` selection | 20 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, et le VERROU que la pose impose |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 13 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` chantier | 1 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source (demande `TF_PACK`) |
 | `tf-app` moteur | 8 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
@@ -503,7 +504,9 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
-| **La coque ne fait encore RIEN au monde** | la palette des dix opérations est là, les formulaires sont ENGENDRÉS depuis les descripteurs, le coût est annoncé avant de cliquer — mais « Appliquer » ne fait rien : le moteur doit tourner dans un FIL à part, sinon une opération de trois secondes fige la fenêtre. L'interface le dit à l'écran plutôt que de faire croire l'inverse |
+| **Le remaillage refait TOUTE la zone** | après une opération, la coque relit et remaille la zone entière plutôt que ce qui a bougé. Les bornes sont pourtant là, dans la réponse du fil : ce qui manque est une arène GPU qu'on puisse recoudre par morceaux. Sur la zone d'aperçu, tout refaire se mesure en dizaines de millisecondes — ça ne tiendra pas sur un build de ville |
+| **Aucun outil de sélection à la souris** | les deux coins se posent en tapant des chiffres, pas en cliquant : la visée et l'accrochage sont là, le geste ne les appelle pas encore |
+| **Rien n'écrit dans la save depuis la coque** | tout vit dans la copie de travail, et il n'y a pas de bouton « écrire ». La séquence est écrite et testée (refuser si le jeu tient le monde, sauvegarder, écrire) — c'est `editer --ecrire` qui l'emprunte |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 

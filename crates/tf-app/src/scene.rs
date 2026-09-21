@@ -39,29 +39,79 @@ impl Monde {
     }
 }
 
-/// Charge les assets, et un monde — une VRAIE save, ou la fixture.
+/// **Le pack, lu UNE fois.**
+///
+/// Le séparer du monde n'est pas de la cosmétique : sur le pack du serveur,
+/// ouvrir le catalogue, bâtir l'atlas complet et classer les translucides
+/// coûte des secondes. Une opération d'édition remaille la zone ; elle ne doit
+/// pas relire deux mille modèles au passage.
+pub struct Assets {
+    cat: tf_assets::Catalogue,
+    src: tf_assets::Pile,
+    disposition: tf_assets::catalogue::Disposition,
+    translucides: std::collections::BTreeSet<String>,
+    climat: tf_assets::climat::Climat,
+    teintes: tf_assets::Teintes,
+}
+
+impl Assets {
+    pub fn charger(racine: &str) -> Result<Assets, String> {
+        let (cat, src, genre) =
+            tf_assets::jeu::catalogue(racine).map_err(|e| format!("assets illisibles : {e:?}"))?;
+        let disposition = genre.disposition();
+        let atlas_complet =
+            tf_assets::Atlas::batir(&src, tf_assets::catalogue::textures_citees(&cat), &|n| {
+                disposition.chemins_texture(n)
+            });
+        let translucides = tf_assets::catalogue::blocs_translucides(&cat, &atlas_complet);
+        let climat = tf_assets::climat::Climat::charger(&src);
+        Ok(Assets {
+            cat,
+            src,
+            disposition,
+            translucides,
+            climat,
+            teintes: tf_assets::Teintes::default(),
+        })
+    }
+}
+
+/// D'où viennent les chunks.
+///
+/// **La copie de travail compte autant que la save.** Après une opération, ce
+/// qu'il faut redessiner est ce que le staging porte — relire la source
+/// rendrait le monde d'AVANT, ce qui se lit « le bouton ne fait rien ».
+pub enum Ou<'a> {
+    /// La fixture de BUILD, quand aucun monde n'est ouvert.
+    Fixture,
+    /// Une source quelconque : une save, ou la copie de travail par-dessus.
+    Source(
+        &'a (dyn tf_world::source::RegionSource + 'a),
+        [i32; 4],
+        String,
+    ),
+}
+
+/// Charge un monde — une VRAIE save, ou la fixture — avec des assets déjà lus.
 ///
 /// La borne est toujours EXPLICITE : il n'existe aucun état « le monde est
 /// chargé », une région pleine faisant déjà cent millions de blocs. Sans
 /// `zone`, on prend un petit rectangle de chunks, ce qui est un aperçu et pas
 /// un défaut à étendre.
-pub fn charger(racine: &str, monde: Option<&str>, zone: [i32; 4]) -> Result<Monde, String> {
-    let (cat, src, genre) =
-        tf_assets::jeu::catalogue(racine).map_err(|e| format!("assets illisibles : {e:?}"))?;
-    let disposition = genre.disposition();
-
+pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
+    let (cat, src) = (&a.cat, &a.src);
+    let disposition = a.disposition;
     let mut grille = Grille::new();
     let mut interner = Interner::new();
-    let quoi = match monde {
-        Some(dir) => {
-            let source = tf_world::FsSource::open(dir).map_err(|e| format!("monde : {e:?}"))?;
+    let quoi = match ou {
+        Ou::Source(source, zone, nom) => {
             let [x0, z0, x1, z1] = zone;
             let sel = tf_world::BBox::new(
                 BlockPos::new(x0 * 16, -64, z0 * 16),
                 BlockPos::new(x1 * 16 + 15, 319, z1 * 16 + 15),
             );
             let bilan = tf_world::sections_de(
-                &source,
+                source,
                 &tf_world::Dimension::Overworld,
                 tf_world::Folder::Region,
                 &sel,
@@ -75,11 +125,11 @@ pub fn charger(racine: &str, monde: Option<&str>, zone: [i32; 4]) -> Result<Mond
                 },
             );
             format!(
-                "{dir} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections",
+                "{nom} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections",
                 bilan.chunks, bilan.sections
             )
         }
-        None => {
+        Ou::Fixture => {
             // La fixture de BUILD : un bâtiment décoré, pas du terrain. C'est
             // elle qui mesure le rendu dans tout le dépôt — la confondre avec
             // `Terrain` fausserait la comparaison.
@@ -112,18 +162,16 @@ pub fn charger(racine: &str, monde: Option<&str>, zone: [i32; 4]) -> Result<Mond
     let cles: Vec<String> = (0..interner.len() as StateId)
         .map(|i| interner.resolve(i).unwrap_or("minecraft:air").to_string())
         .collect();
-    let voulues = tf_assets::textures_des_etats(&cat, cles.iter().cloned());
-    let atlas = tf_assets::Atlas::batir(&src, voulues, &|n| disposition.chemins_texture(n));
-    let atlas_complet =
-        tf_assets::Atlas::batir(&src, tf_assets::catalogue::textures_citees(&cat), &|n| {
-            disposition.chemins_texture(n)
-        });
-    let translucides = tf_assets::catalogue::blocs_translucides(&cat, &atlas_complet);
-    let teintes = tf_assets::Teintes::default();
-    let climat = tf_assets::climat::Climat::charger(&src);
+    // **On ne monte que les textures des blocs PRÉSENTS.** Un tableau de
+    // textures est plafonné à 2 048 couches, et le pack du serveur en cite
+    // 2 207 : tout charger dépasse la limite ET paie ce qu'aucun bloc de la
+    // scène n'emploie.
+    let voulues = tf_assets::textures_des_etats(cat, cles.iter().cloned());
+    let atlas = tf_assets::Atlas::batir(src, voulues, &|n| disposition.chemins_texture(n));
+    let (climat, teintes) = (&a.climat, &a.teintes);
     let (table, habillage) =
-        tf_assets::table_rendu(&cat, &atlas, &teintes, cles.iter().cloned(), &|n| {
-            translucides.contains(n)
+        tf_assets::table_rendu(cat, &atlas, teintes, cles.iter().cloned(), &|n| {
+            a.translucides.contains(n)
         });
 
     let chantier = grille.mailler_parallele(&table);
@@ -183,6 +231,97 @@ pub fn charger(racine: &str, monde: Option<&str>, zone: [i32; 4]) -> Result<Mond
         min,
         max,
     })
+}
+
+/// **Le monde OUVERT : le pack, la copie de travail, et ce que le GPU dessine.**
+///
+/// Les trois ensemble parce qu'ils ne se séparent pas en pratique : remailler
+/// après une opération demande le pack (déjà lu), la copie de travail (pas la
+/// save — elle rendrait le monde d'AVANT) et la zone regardée.
+pub struct Ouvert {
+    pub assets: Assets,
+    pub monde: Monde,
+    /// La copie de travail, PARTAGÉE avec le fil moteur.
+    ///
+    /// Le fil écrit, la coque relit. Un `Arc` et pas un verrou : `Staging`
+    /// prend `&self` partout, et tout ce qui écrit passe par le fil — la
+    /// coque ne fait que lire. `None` pour la fixture, qui n'a pas de save
+    /// derrière elle et n'est donc pas éditable.
+    pub staging: Option<std::sync::Arc<tf_world::Staging<tf_world::FsSource, tf_world::FsSource>>>,
+    pub zone: [i32; 4],
+    pub nom: String,
+    /// Le dossier temporaire de la copie de travail, à effacer en partant.
+    couche: Option<std::path::PathBuf>,
+}
+
+impl Ouvert {
+    pub fn ouvrir(racine: &str, monde: Option<&str>, zone: [i32; 4]) -> Result<Ouvert, String> {
+        let assets = Assets::charger(racine)?;
+        let Some(dir) = monde else {
+            let m = charger_monde(&assets, Ou::Fixture)?;
+            return Ok(Ouvert {
+                assets,
+                monde: m,
+                staging: None,
+                zone,
+                nom: "fixture".into(),
+                couche: None,
+            });
+        };
+        let source = tf_world::FsSource::open(dir).map_err(|e| format!("monde : {e:?}"))?;
+        // **La copie de travail vit à côté.** La save n'est pas ouverte en
+        // écriture tant qu'on ne l'a pas demandé — invariant n° 1.
+        let couche = std::env::temp_dir().join(format!("titiforge-{}", std::process::id()));
+        std::fs::create_dir_all(&couche).map_err(|e| format!("copie de travail : {e}"))?;
+        let overlay =
+            tf_world::FsSource::open(&couche).map_err(|e| format!("copie de travail : {e:?}"))?;
+        let staging = std::sync::Arc::new(tf_world::Staging::new(source, overlay));
+        let m = charger_monde(&assets, Ou::Source(staging.as_ref(), zone, dir.to_string()))?;
+        Ok(Ouvert {
+            assets,
+            monde: m,
+            staging: Some(staging),
+            zone,
+            nom: dir.to_string(),
+            couche: Some(couche),
+        })
+    }
+
+    /// Relit la zone et remaille. **Depuis la copie de travail**, pas la
+    /// source : c'est elle qui porte ce qu'on vient d'écrire.
+    ///
+    /// Toute la zone, pas seulement ce qui a bougé. Le remaillage incrémental
+    /// viendra ; le faire maintenant demanderait de découper l'arène GPU, et
+    /// une arène mal recousue affiche un mur là où il n'y en a plus — un défaut
+    /// qu'on met des heures à voir. Sur la zone d'aperçu, tout refaire se
+    /// mesure en dizaines de millisecondes.
+    pub fn remailler(&mut self) -> Result<(), String> {
+        let Some(st) = &self.staging else {
+            return Err("la fixture n'a pas de save derrière elle".into());
+        };
+        self.monde = charger_monde(
+            &self.assets,
+            Ou::Source(st.as_ref(), self.zone, self.nom.clone()),
+        )?;
+        Ok(())
+    }
+
+    /// Le monde est-il éditable ? La fixture ne l'est pas, et l'interface doit
+    /// le DIRE plutôt que de griser un bouton sans raison.
+    pub fn editable(&self) -> bool {
+        self.staging.is_some()
+    }
+}
+
+impl Drop for Ouvert {
+    fn drop(&mut self) {
+        // La copie de travail est jetable par construction : la save n'a pas
+        // été touchée. La laisser derrière remplirait le disque d'un
+        // utilisateur qui ouvre dix mondes.
+        if let Some(c) = &self.couche {
+            let _ = std::fs::remove_dir_all(c);
+        }
+    }
 }
 
 /// Le quadrillage à dessiner, depuis l'état et le point regardé.

@@ -117,11 +117,22 @@ pub struct Moteur {
 }
 
 impl Moteur {
-    /// Lance le fil sur un chantier. Le chantier lui APPARTIENT à partir d'ici.
-    pub fn lancer<S, O>(staging: Staging<S, O>, dim: Dimension, journal: Journal) -> Moteur
+    /// Lance le fil sur une copie de travail.
+    ///
+    /// **Un `Arc` et non une possession exclusive**, parce que la coque doit
+    /// RELIRE ce que le fil vient d'écrire pour le remailler. Il n'y a rien à
+    /// verrouiller : `Staging` prend `&self` partout, et tout ce qui écrit
+    /// passe par ce fil-ci. Donner la possession obligerait à faire revenir
+    /// les octets par le canal — c'est-à-dire à recopier une région entière à
+    /// chaque coup de pinceau.
+    pub fn lancer<S, O>(
+        staging: std::sync::Arc<Staging<S, O>>,
+        dim: Dimension,
+        journal: Journal,
+    ) -> Moteur
     where
-        S: RegionSource + Send + 'static,
-        O: RegionStore + Send + 'static,
+        S: RegionSource + Send + Sync + 'static,
+        O: RegionStore + Send + Sync + 'static,
     {
         let (vers, commandes) = channel::<Commande>();
         let (reponses, depuis) = channel::<Reponse>();
@@ -231,7 +242,7 @@ impl Drop for Moteur {
 
 /// Le côté FIL : tout ce qui touche au monde.
 struct Chantier<S: RegionSource, O: RegionStore> {
-    staging: Staging<S, O>,
+    staging: std::sync::Arc<Staging<S, O>>,
     dim: Dimension,
     journal: Journal,
     interner: Interner,
@@ -276,7 +287,7 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         };
         let cr = match executer(
             &travail,
-            &self.staging,
+            self.staging.as_ref(),
             &self.dim,
             Folder::Region,
             &sel,
@@ -330,7 +341,7 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         // `rejouer` est la jonction : elle prend les correctifs dans le bon
         // SENS et dans le bon ORDRE — à l'envers pour annuler, et c'est le
         // genre de détail qu'un appelant refait mal une fois sur deux.
-        match rejouer(&self.staging, entree, sens) {
+        match rejouer(self.staging.as_ref(), entree, sens) {
             Ok(0) => Reponse::Rien(label),
             Ok(_) => match sens {
                 Sens::Annuler => Reponse::Defait { label, bornes },
