@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-549 tests, répartis par ce qu'ils PROUVENT :
+561 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -56,6 +56,7 @@ cargo test --workspace
 | `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
 | `tf-ops` naturaliser | 11 | la portée `Colonne`, et qu'une colonne n'a qu'UNE surface |
 | `tf-ops` forme | 12 | le verdict par section d'une forme, croisé aux 4 096 cases |
+| `tf-ops` creuser | 12 | `//hollow` : le critère est TOPOLOGIQUE, et un coffre vidé ne revient pas en fantôme |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |

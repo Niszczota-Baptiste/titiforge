@@ -15,6 +15,7 @@
 
 pub mod biome;
 pub mod colonnes;
+pub mod creuser;
 pub mod edition;
 pub mod forme;
 pub mod hash;
@@ -27,6 +28,7 @@ pub mod relief;
 
 pub use biome::PoserBiome;
 pub use colonnes::{Colonnes, Portee};
+pub use creuser::{creuser, extrait_creuse, Creux};
 pub use edition::{deplacer, empiler, Pas};
 pub use forme::{Couverture, Forme};
 pub use hash::hash3;

@@ -31,7 +31,9 @@ use tf_blocks::Transfo;
 use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
 use tf_ops::relief::{relever, Lissage};
-use tf_ops::{Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome};
+use tf_ops::{
+    creuser, extrait_creuse, Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome,
+};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
@@ -65,6 +67,8 @@ struct Args {
     profondeur: u32,
     /// Passes de lissage. Zéro vaut une — l'option est facultative.
     passes: u32,
+    /// Couches de paroi que `--creuser` GARDE. Zéro vaut une.
+    epaisseur: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +113,12 @@ enum Op {
     Lisser {
         rayon: u32,
     },
+    /// `//hollow` : vider ce qu'aucun chemin de vide ne relie au DEHORS.
+    ///
+    /// L'épaisseur vit dans `Args` et non ici : `--epaisseur` peut précéder
+    /// `--creuser` sur la ligne de commande, et l'ordre des options n'a
+    /// jamais de sens.
+    Creuser,
 }
 
 fn usage() -> ! {
@@ -145,7 +155,14 @@ fn usage() -> ! {
   --sphere <rayon>           //sphere : restreint l'opération à une sphère
   --cylindre <rayon> <haut>  //cyl, axe vertical
   --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
-  --creux <épaisseur>        creuse la forme (//hsphere, //hcyl…)
+  --creux <épaisseur>        creuse la FORME (//hsphere, //hcyl…) — géométrique :
+                             il retire le centre du volume qu'on vient de poser
+  --creuser                  //hollow : vide ce qu'aucun chemin de VIDE ne relie
+                             au dehors. Topologique, pas géométrique — une salle
+                             déjà ouverte par une porte ne se remplit pas, et une
+                             sphère pleine se vide. Ne se confond pas avec
+                             --creux : celui-ci dessine, celui-là INSPECTE
+  --epaisseur <n>            les couches de paroi que --creuser garde (défaut 1)
   --murs <épaisseur>         //walls : les 4 parois VERTICALES de la sélection
   --faces <épaisseur>        //faces : ses 6 faces, plancher et plafond compris
   Les formes sont CENTRÉES sur la sélection, et l'opération ne paie que la
@@ -203,6 +220,7 @@ fn lire_args() -> Args {
         ],
         profondeur: 3,
         passes: 0,
+        epaisseur: 0,
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -316,6 +334,8 @@ fn lire_args() -> Args {
                 })
             }
             "--passes" => args.passes = nombre(a.next()) as u32,
+            "--creuser" => args.op = Some(Op::Creuser),
+            "--epaisseur" => args.epaisseur = nombre(a.next()) as u32,
             "--couches" => {
                 args.couches = [
                     a.next().unwrap_or_else(|| usage()),
@@ -519,7 +539,8 @@ fn main() {
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
         println!(
             "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
-             --copier-vers / --deplacer / --empiler / --naturaliser / --biome / --lisser)"
+             --copier-vers / --deplacer / --empiler / --naturaliser / --biome / \
+             --lisser / --creuser)"
         );
         return;
     };
@@ -546,7 +567,8 @@ fn main() {
         | Op::Empiler { .. }
         | Op::Naturaliser
         | Op::Biome(_)
-        | Op::Lisser { .. } => Plan::nouveau(Masque::Tout, Motif::Garder),
+        | Op::Lisser { .. }
+        | Op::Creuser => Plan::nouveau(Masque::Tout, Motif::Garder),
     }
     .avec_seed(args.seed);
     let plan = if args.compter {
@@ -684,6 +706,42 @@ fn main() {
         presse = Some(p);
     }
 
+    // ── `//hollow` : la SEULE opération qui matérialise toute la sélection.
+    //
+    // Une diffusion ne se découpe ni par section ni par colonne — un couloir
+    // traverse la sélection de part en part, et décider case par case
+    // demanderait de savoir ce qu'il y a au bout. Le coût est donc celui du
+    // volume, une fois. Il est BORNÉ et il s'ANNONCE : sur une sélection
+    // d'utilisateur, « ça a l'air bloqué » serait la seule chose qu'on verrait.
+    if let Op::Creuser = &op {
+        let epaisseur = args.epaisseur.max(1);
+        println!(
+            "creusage : {} cases à matérialiser (~{:.1} Mo) · paroi de {epaisseur} bloc(s)",
+            sel.volume(),
+            sel.volume() as f64 * 4.0 / 1_048_576.0
+        );
+        let t0 = std::time::Instant::now();
+        let p = match copier(&staging, &args.dim, Folder::Region, &sel, &mut interner) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("extraction refusée : {e}");
+                std::process::exit(1);
+            }
+        };
+        // Ce qui BLOQUE la diffusion, c'est tout ce qui n'est pas de l'air.
+        // C'est ce qui fait qu'une salle déjà percée d'une porte ne se remplit
+        // pas : le vide de la porte relie son intérieur au dehors.
+        let solide = Masque::Non(Box::new(Masque::Etat(air)));
+        let c = creuser(&p, &solide, epaisseur);
+        println!(
+            "creusé : {} case(s) intérieure(s) sur {} en {:.0} ms",
+            c.cases,
+            p.blocs.len(),
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        presse = Some(extrait_creuse(&p, &c, air));
+    }
+
     let collage = presse.as_ref().map(|p| {
         let [dx, dy, dz] = match &op {
             Op::CopierVers { d, .. } => *d,
@@ -696,7 +754,10 @@ fn main() {
                 y: sel.min.y + dy,
                 z: sel.min.z + dz,
             },
-            avec_air: args.avec_air,
+            // **Creuser POSE de l'air.** Sans `avec_air`, le collage sauterait
+            // exactement les cases qu'on vient de calculer et ne changerait
+            // rien — une opération qui s'exécute, se rapporte, et ne fait rien.
+            avec_air: args.avec_air || matches!(op, Op::Creuser),
             air,
             compter: args.compter,
         }

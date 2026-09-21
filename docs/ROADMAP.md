@@ -180,7 +180,7 @@ staging, journal. Manque ce qui DÉPLACE.
 | **Portée d'une opération** (`Portee::Colonne`) | ✅ — une opération déclare ce qu'elle lit, `edition.rs` lui donne la vue correspondante |
 | Naturalisation (`//naturalize`) | ✅ — première opération à portée `Colonne` : « où est la surface » ne se décide pas section par section |
 | Lissage (`//smooth`) | ✅ — résolu par DEUX PASSES plutôt qu'une vue plus large : une lecture qui n'écrit rien, un calcul pur, une écriture à portée `Colonne` |
-| Creuser (`//hollow`) | ⬜ — un remplissage par diffusion sur toute la sélection, donc la seule opération qui demande vraiment de matérialiser le volume. À mesurer avant d'être écrite |
+| Creuser (`//hollow`) | ✅ — topologique et non géométrique : est vidé ce qu'aucun chemin de VIDE ne relie au dehors, donc une salle déjà percée d'une porte ne se remplit pas. La seule opération qui matérialise tout le volume — assumé, borné, et ANNONCÉ avant de commencer. La diffusion est itérative : une récursion déborderait la pile, et un débordement de pile n'est pas rattrapable en Rust |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes : lecture, écriture, `//setbiome` | ✅ — seconde palette par section, grille de 4 × 4 × 4 ; 1.18+ seulement, et 1.13–1.17 est REFUSÉ plutôt que deviné |
 | La COULEUR d'un biome, dérivée du jeu | ✅ — table `colormap/grass.png` × `worldgen/biome/*.json`, formule du jeu à la lettre ; le marais est annoncé APPROCHÉ |

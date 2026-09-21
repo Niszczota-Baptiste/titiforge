@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (549 tests aujourd'hui)
+cargo test            # tous les crates (561 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -248,6 +248,10 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,255,60,255" --naturaliser
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,63,63,63" --biome minecraft:desert
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-60,0,63,-20,63" --lisser 4 --passes 3
+# //hollow : TOPOLOGIQUE. Ce qu'aucun chemin de vide ne relie au dehors s'en va.
+# C'est la seule opération qui matérialise toute la sélection — elle l'annonce.
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,20,-20,20" --creuser
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,20,-20,20" --creuser --epaisseur 3
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -289,7 +293,7 @@ crates/
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
-               //naturalize ✅ · //setbiome ✅ · //smooth ✅ · creuser à venir
+               //naturalize ✅ · //setbiome ✅ · //smooth ✅ · //hollow ✅
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
@@ -979,3 +983,30 @@ propres à ce dépôt.
   pour les EXEMPLES autant que pour les scripts. Corollaire : un outil accepte
   le rendu naturel de son propre shell (la virgule ET l'espace), sinon un
   oubli de guillemets devient un bug à déboguer.
+
+- **Une entité POSÉE gagne sur le verdict d'orphelinage, et c'est voulu.** La
+  jonction retire les block entities dont la case a changé d'état ; mais
+  `liste_voulue` consulte d'ABORD les entités que l'opération pose, sinon
+  reposer un extrait à sa propre place perdrait ses coffres. Conséquence pour
+  `//hollow`, qui repose un extrait dont il vient de vider le cœur : un coffre
+  resté dans cet extrait serait reposé DANS LE VIDE, par-dessus le verdict qui
+  venait justement de le condamner. C'est `extrait_creuse` qui le retire, au
+  moment où il vide la case — pas la jonction, qui a raison de faire l'inverse.
+  Mesuré par mutation : sans ce retrait, `entites_posees` vaut 1 là où il doit
+  valoir 0, et on l'apprendrait en ouvrant un coffre qui n'existe plus.
+- **Creuser est TOPOLOGIQUE, pas géométrique — et les deux se ressemblent sur
+  une capture d'écran.** « Enlever l'intérieur de la boîte » vide une salle
+  déjà ouverte par une porte, et laisse pleine une sphère qui n'est pas une
+  boîte. Le critère est « aucun chemin de VIDE ne le relie au dehors », donc
+  une diffusion. Elle ne se découpe ni par section ni par colonne (un couloir
+  traverse la sélection de part en part), donc `//hollow` est la seule
+  opération qui matérialise tout le volume : c'est assumé, c'est borné, et
+  c'est ANNONCÉ avant de commencer. Et la pile est explicite — une récursion
+  sur une sélection de cent blocs de côté déborde, et un débordement de pile
+  n'est pas rattrapable en Rust.
+- **Le bord de la sélection EST le dehors.** Première écriture : seules les
+  cases non solides du bord étaient semées, ce qui est juste, mais le bord
+  solide n'était pas gardé — un cube entièrement plein n'avait donc aucune
+  graine, aucun dehors, et partait EN ENTIER. La sélection s'arrête là ; ce
+  qu'il y a au-delà ne nous regarde pas, donc sa peau touche l'extérieur par
+  définition.
