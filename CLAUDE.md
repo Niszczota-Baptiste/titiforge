@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (530 tests aujourd'hui)
+cargo test            # tous les crates (539 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -292,7 +292,8 @@ crates/
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
-  tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · AO, LOD à venir
+  tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
+               AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -851,6 +852,20 @@ propres à ce dépôt.
   `0 / 0` propagé dans `<= 1.0` rend `false`, et dans `> 1.0` aussi : la forme
   serait à la fois vide et pleine selon le chemin. Un rayon nul n'accepte que
   le centre exact, et c'est écrit explicitement.
+- **Une clé de fusion porte la VALEUR, jamais l'index qui la désigne.** Pour
+  que la teinte de biome soit exacte, le biome entre dans la clé du mailleur
+  glouton : deux cases de biomes différents ne fusionnent plus. J'y ai d'abord
+  mis la CELLULE (le rang 0..63 qui porte le biome) — elle change à la même
+  frontière, donc elle paraît équivalente. Elle est fausse : deux cellules
+  VOISINES du même biome ont deux rangs différents, donc deux clés, donc plus
+  aucune fusion au-delà de quatre blocs. Mesuré en écrivant la faute : une
+  face de section pleine sortait en **64 quads de 4 × 4 au lieu d'un seul**,
+  sur un terrain d'un seul biome. Le rendu en était juste ; le maillage,
+  seize fois trop cher — et rien à l'écran ne l'aurait dit.
+- **Le biome ne rejoint la clé que pour les états TEINTÉS.** L'y mettre
+  partout couperait les quads d'une muraille de pierre à chaque frontière,
+  pour une couleur que la pierre ne prend pas. C'est `Formes::teinte_biome`,
+  et c'est faux par défaut.
 - **La couleur d'un biome vit dans DEUX moitiés du jeu, pas une.** La table
   `assets/minecraft/textures/colormap/grass.png` donne une couleur par couple
   (température, humidité) ; les températures, elles, sont dans

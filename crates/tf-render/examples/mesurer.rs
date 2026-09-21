@@ -116,13 +116,16 @@ fn main() {
         let ms_maille = t.elapsed().as_secs_f64() * 1000.0;
 
         let t = Instant::now();
-        let arene = Arene::depuis(&chantier, &|id, face| match habillage.get(id as usize) {
-            Some(h) => {
-                let a = h.cube[face.indice()];
-                (a.couche, a.teinte)
-            }
-            None => (0, [1.0; 3]),
-        });
+        let arene = Arene::depuis(
+            &chantier,
+            &|id, face, _biome| match habillage.get(id as usize) {
+                Some(h) => {
+                    let a = h.cube[face.indice()];
+                    (a.couche, a.teinte)
+                }
+                None => (0, [1.0; 3]),
+            },
+        );
         let modeles = AreneModeles::depuis(&chantier, &|id| {
             let Some(h) = habillage.get(id as usize) else {
                 return Vec::new();

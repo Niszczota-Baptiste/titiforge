@@ -86,7 +86,7 @@ fn rendre_un_cube(app: &Appareil, cote: u32) -> (Vec<u8>, u32, u32) {
         }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
     assert_eq!(arene.len(), 6, "un cube isolé montre ses six faces");
 
     let cible = Cible::nouvelle(app, cote, cote);
@@ -217,7 +217,7 @@ fn l_arene_place_chaque_section_a_son_origine() {
         section(2, |x, y, z| if x + y + z == 0 { CUBE } else { AIR }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
 
     let (min, max) = arene.bornes().unwrap();
     assert_eq!(min, [0.0, 0.0, 0.0]);
@@ -252,7 +252,7 @@ fn les_tranches_couvrent_toute_l_arene_sans_trou_ni_recouvrement() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
 
     let mut attendu = 0u32;
     for tr in &arene.tranches {
@@ -275,7 +275,7 @@ fn la_camera_cadre_le_contenu_sans_le_couper() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
     let cible = Cible::nouvelle(&app, 200, 200);
     let scene = Scene::nouvelle(&app, &arene, &atlas_blanc(&app));
     let (min, max) = arene.bornes().unwrap();
@@ -356,7 +356,7 @@ fn rendre_un_cube_teinte(app: &Appareil, teinte: [f32; 3]) -> Vec<u8> {
         }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, teinte));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, teinte));
     let cible = Cible::nouvelle(app, 96, 96);
     let scene = Scene::nouvelle(app, &arene, &atlas_gris_147(app));
     let (min, max) = arene.bornes().unwrap();
@@ -488,7 +488,7 @@ fn rendre_un_bloc(app: &Appareil, id: StateId) -> (Vec<u8>, u32, tf_render::Comp
         ),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
     let modeles = AreneModeles::depuis(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -727,7 +727,7 @@ fn les_deux_arenes_designent_la_meme_section() {
         section(3, |x, y, z| if x + y + z == 0 { 2 } else { AIR }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
     let modeles = AreneModeles::depuis(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -749,4 +749,78 @@ fn les_deux_arenes_designent_la_meme_section() {
     let q = arene.instances[0];
     let o = origines[q.section as usize].position;
     assert_eq!([o[0], o[2]], [0.0, 0.0]);
+}
+
+/// **Le biome doit arriver jusqu'à la TEINTE de l'instance GPU.**
+///
+/// Le maillage le porte, mais entre le quad et l'octet envoyé à la carte il y
+/// a une fonction d'habillage. Si elle ignore son troisième argument, tout
+/// compile, tous les tests de maillage passent, et le sol reste uniformément
+/// « plaines ». C'est la forme « déclaré, branché, testé — et inatteignable »,
+/// et la seule parade est d'exiger la couleur, pas la plomberie.
+#[test]
+fn deux_biomes_donnent_deux_teintes_dans_l_arene() {
+    use tf_anvil::{Section, StateId};
+    use tf_mesh::forme::{Cuboide, TableFormes};
+    use tf_mesh::Grille;
+
+    const HERBE: StateId = 1;
+    const PLAINES: StateId = 10;
+    const DESERT: StateId = 11;
+
+    let mut t = TableFormes::new();
+    t.pousser(true, false, Vec::new());
+    let h = t.pousser(false, true, vec![Cuboide::PLEIN]);
+    t.marquer_teinte(h);
+
+    let mut s = Section::uniform(0, 0);
+    let mut idx = vec![0u16; 4096];
+    s.palette = vec![0, HERBE];
+    for (i, c) in idx.iter_mut().enumerate() {
+        if i < 8 * 256 {
+            *c = 1;
+        }
+    }
+    s.repack(&idx);
+
+    // Moitié plaines, moitié désert, coupé en X.
+    let mut cells = vec![PLAINES; 64];
+    for y in 0..4 {
+        for z in 0..4 {
+            for x in 2..4 {
+                cells[(y << 4) | (z << 2) | x] = DESERT;
+            }
+        }
+    }
+    let mut g = Grille::new();
+    g.poser(0, 0, s);
+    assert!(g.poser_biomes(0, 0, 0, cells));
+    let chantier = g.mailler(&t);
+
+    // On ENREGISTRE ce que l'habillage reçoit : c'est la seule façon de
+    // distinguer « la teinte est juste » de « la teinte est constante ».
+    let vus = std::cell::RefCell::new(std::collections::BTreeMap::<StateId, usize>::new());
+    let arene = Arene::depuis(&chantier, &|_, _, biome| {
+        *vus.borrow_mut().entry(biome).or_default() += 1;
+        let c = match biome {
+            PLAINES => [0.1, 0.9, 0.2],
+            DESERT => [0.9, 0.8, 0.1],
+            _ => [1.0, 0.0, 1.0],
+        };
+        (0, c)
+    });
+    let vus = vus.into_inner();
+    assert_eq!(
+        vus.keys().copied().collect::<Vec<_>>(),
+        vec![PLAINES, DESERT],
+        "l'habillage doit voir les DEUX biomes, et aucun autre"
+    );
+
+    let teintes: std::collections::BTreeSet<u32> =
+        arene.instances.iter().map(|i| i.teinte).collect();
+    assert_eq!(
+        teintes.len(),
+        2,
+        "et deux teintes distinctes doivent en sortir, pas une"
+    );
 }

@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **530**, zéro échec |
+| Tests | **539**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-530 tests, répartis par ce qu'ils PROUVENT :
+539 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -57,6 +57,7 @@ cargo test --workspace
 | `tf-ops` forme | 12 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
+| `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 17 | **au pixel** : ombrage, teinte, dalle, alignement WGSL |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
@@ -453,7 +454,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | Manque | Ce que ça coûte aujourd'hui |
 |---|---|
 | **Les fluides ne sont pas dessinés** | 4,5 % des blocs posés de Mosslorn, dont 6,2 M d'eau. Les fluides n'ont pas de modèle de bloc dans le format : il leur faut leur propre passe |
-| **Les biomes ne sont pas branchés au rendu** | les deux moitiés existent — `tf-anvil` lit le biome d'une case, `tf-assets` en dérive la couleur — mais `tf-mesh` ne reçoit pas encore le biome. C'est un câble, pas une inconnue |
+| **La teinte des blocs-MODÈLES reste un réglage** | la passe gloutonne porte le vrai biome (le SOL de tout terrain) ; une pose fait 16 octets et n'a pas de place pour une couleur. Trois pistes, aucune mesurée : six bits libres dans `Pose::local`, une table par section, ou un second tampon |
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |

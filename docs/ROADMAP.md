@@ -183,7 +183,8 @@ staging, journal. Manque ce qui DÉPLACE.
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes : lecture, écriture, `//setbiome` | ✅ — seconde palette par section, grille de 4 × 4 × 4 ; 1.18+ seulement, et 1.13–1.17 est REFUSÉ plutôt que deviné |
 | La COULEUR d'un biome, dérivée du jeu | ✅ — table `colormap/grass.png` × `worldgen/biome/*.json`, formule du jeu à la lettre ; le marais est annoncé APPROCHÉ |
-| Les biomes branchés à la teinte du rendu | ⬜ — les deux moitiés existent, il manque le câble : `tf-mesh` ne reçoit pas encore le biome d'une case |
+| Les biomes branchés à la teinte du rendu | ✅ pour la passe GLOUTONNE — le biome entre dans la clé de fusion, donc un quad ne peut pas enjamber une frontière là où ça se verrait |
+| La teinte des blocs-MODÈLES (feuilles, vignes) | ⬜ — une pose fait 16 octets et n'a pas de place pour une couleur. Trois pistes, aucune mesurée : six bits libres dans `Pose::local`, une table par section, ou un second tampon |
 
 C'est la phase la moins chère du lot : la partie difficile — savoir qu'un
 escalier `shape=outer` tourné devient tel autre état — est déjà faite et

@@ -22,12 +22,37 @@ pub const VOL_PAD: usize = COTE_PAD * COTE_PAD * COTE_PAD;
 #[derive(Clone)]
 pub struct Voisinage {
     ids: Box<[StateId; VOL_PAD]>,
+    /// Les 64 cellules de biome de la section — 4 × 4 × 4, une pour
+    /// 4 × 4 × 4 blocs.
+    ///
+    /// **Sans peau.** La teinte d'une face se prend dans la case qui la
+    /// porte, pas chez son voisin : un biome de bordure n'a rien à dire de ce
+    /// côté-ci de la frontière, et lui donner une peau ferait déborder sa
+    /// couleur d'un bloc.
+    biomes: Box<[StateId; VOL_BIOME]>,
+}
+
+/// Cellules de biome dans une section.
+pub const VOL_BIOME: usize = 64;
+
+/// La cellule de biome qui porte ce bloc, en coordonnées LOCALES.
+///
+/// Ordre YZX sur quatre, comme le format. Zéro hors de la section : une face
+/// de peau n'a pas de biome à elle, et lui en donner un ferait déborder une
+/// couleur d'un bloc au bord de chaque section.
+#[inline]
+pub const fn cellule(x: i32, y: i32, z: i32) -> usize {
+    if x < 0 || y < 0 || z < 0 || x >= COTE as i32 || y >= COTE as i32 || z >= COTE as i32 {
+        return 0;
+    }
+    (((y as usize) >> 2) << 4) | (((z as usize) >> 2) << 2) | ((x as usize) >> 2)
 }
 
 impl Default for Voisinage {
     fn default() -> Self {
         Voisinage {
             ids: Box::new([0; VOL_PAD]),
+            biomes: Box::new([0; VOL_BIOME]),
         }
     }
 }
@@ -93,5 +118,27 @@ impl Voisinage {
 
     pub fn ids(&self) -> &[StateId; VOL_PAD] {
         &self.ids
+    }
+    /// Le biome de la cellule qui porte ce bloc.
+    #[inline]
+    pub fn biome(&self, x: i32, y: i32, z: i32) -> StateId {
+        self.biomes[cellule(x, y, z)]
+    }
+
+    /// Le biome d'une cellule, par son rang.
+    #[inline]
+    pub fn biome_cellule(&self, c: usize) -> StateId {
+        self.biomes[c.min(VOL_BIOME - 1)]
+    }
+
+    /// Pose les 64 cellules d'un coup. Une longueur inattendue est ignorée
+    /// plutôt que tronquée : un biome posé de travers est un sol de la
+    /// mauvaise couleur, et rien ne le dirait.
+    pub fn poser_biomes(&mut self, cells: &[StateId]) {
+        if cells.len() == VOL_BIOME {
+            self.biomes.copy_from_slice(cells);
+        } else {
+            self.biomes.fill(0);
+        }
     }
 }

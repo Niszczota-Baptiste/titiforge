@@ -21,6 +21,12 @@ pub struct Quad {
     pub face: Face,
     /// L'état qui a produit ce quad — c'est lui qui désigne la tuile d'atlas.
     pub id: StateId,
+    /// Le biome de la case, pour les états qui en prennent la couleur.
+    ///
+    /// Zéro — « on ne sait pas » — pour tous les autres, et c'est voulu :
+    /// mettre le biome partout casserait la fusion gloutonne à chaque
+    /// frontière, sur des blocs dont la couleur n'en dépend pas.
+    pub biome: StateId,
 }
 
 impl Quad {

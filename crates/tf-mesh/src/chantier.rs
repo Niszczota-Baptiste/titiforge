@@ -30,6 +30,13 @@ pub type Adresse = (i32, i32, i8);
 #[derive(Default)]
 pub struct Grille {
     sections: HashMap<Adresse, Section>,
+    /// Les 64 cellules de biome d'une section, quand on les a.
+    ///
+    /// Une table à part plutôt qu'un champ de `Section` : les biomes sont une
+    /// SECONDE palette, ils n'existent que depuis 1.18, et la moitié des
+    /// appelants du mailleur — bancs, tests — n'en a rien à faire. Les rendre
+    /// obligatoires ferait payer un décodage à tout le monde.
+    biomes: HashMap<Adresse, Vec<StateId>>,
 }
 
 impl Grille {
@@ -39,6 +46,17 @@ impl Grille {
 
     pub fn poser(&mut self, chunk_x: i32, chunk_z: i32, s: Section) {
         self.sections.insert((chunk_x, chunk_z, s.y), s);
+    }
+
+    /// Pose les 64 cellules de biome d'une section. Une longueur inattendue
+    /// est REFUSÉE plutôt que tronquée : un biome décalé donne un sol de la
+    /// mauvaise couleur, et rien ne le dirait.
+    pub fn poser_biomes(&mut self, chunk_x: i32, chunk_z: i32, y: i8, cells: Vec<StateId>) -> bool {
+        if cells.len() != crate::voisinage::VOL_BIOME {
+            return false;
+        }
+        self.biomes.insert((chunk_x, chunk_z, y), cells);
+        true
     }
 
     pub fn len(&self) -> usize {
@@ -111,6 +129,13 @@ impl Grille {
                         self.sections.get(&(cx + dx, cz + dz, ny));
                 }
             }
+        }
+
+        // Les biomes de LA section, sans peau : la teinte d'une face se prend
+        // dans la case qui la porte.
+        match self.biomes.get(&a) {
+            Some(b) => v.poser_biomes(b),
+            None => v.poser_biomes(&[]),
         }
 
         // Le cœur vient de la section elle-même, dépackée d'un coup : 4 096

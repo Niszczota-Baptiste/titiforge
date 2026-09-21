@@ -28,6 +28,7 @@ pub mod rotation;
 pub mod source;
 pub mod texture;
 
+pub use apparence::GenreTeinte;
 pub use apparence::{textures_des_etats, Apparence, Habillage, Teintes};
 pub use archive::Archive;
 pub use atlas::Atlas;

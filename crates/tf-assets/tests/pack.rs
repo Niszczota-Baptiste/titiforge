@@ -34,6 +34,10 @@ impl TempDir {
         &self.0
     }
     fn ecrire(&self, chemin: &str, contenu: &str) {
+        self.ecrire_octets(chemin, contenu.as_bytes());
+    }
+
+    fn ecrire_octets(&self, chemin: &str, contenu: &[u8]) {
         let p = self.0.join(chemin);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, contenu).unwrap();
@@ -202,7 +206,7 @@ fn pack_des_formes() -> TempDir {
         "assets/minecraft/models/block/grass_block.json",
         r##"{"elements":[
             {"from":[0,0,0],"to":[16,16,16],
-             "faces":{"up":{"texture":"t","cullface":"up"},
+             "faces":{"up":{"texture":"t","cullface":"up","tintindex":0},
                       "down":{"texture":"d","cullface":"down"},
                       "north":{"texture":"s","cullface":"north"},
                       "south":{"texture":"s","cullface":"south"},
@@ -767,4 +771,97 @@ fn le_chargement_d_un_pack_decouvre_ses_namespaces() {
     let mut noms: Vec<&str> = cat.blocs().map(|(n, _)| n.as_str()).collect();
     noms.sort();
     assert_eq!(noms, vec!["minecraft:stone", "minefield:marbre_blanc"]);
+}
+
+/// **Le maillon qui fait que la couleur du biome arrive jusqu'au quad.**
+///
+/// `table_rendu` doit marquer comme teinté tout état dont une face porte un
+/// `tintindex` — c'est ce que la passe gloutonne consulte pour décider de
+/// casser un quad à une frontière de biome. Sans ce marquage, tout compile,
+/// tout le reste passe, et le sol reste uniformément « plaines ».
+///
+/// C'est la quatrième fois que ce dépôt écrit un maillon qu'aucun hôte
+/// n'appelle. Le test qui l'attrape n'est jamais « est-ce que ça compile »,
+/// c'est « est-ce que la propriété est LÀ ».
+#[test]
+fn table_rendu_marque_les_etats_teintes_par_le_biome() {
+    let d = pack_des_formes();
+    // Il faut des blockstates : `table_rendu` part des clés d'état.
+    d.ecrire(
+        "assets/minecraft/blockstates/stone.json",
+        r##"{"variants":{"":{"model":"minecraft:block/stone"}}}"##,
+    );
+    d.ecrire(
+        "assets/minecraft/blockstates/grass_block.json",
+        r##"{"variants":{"":{"model":"minecraft:block/grass_block"}}}"##,
+    );
+    // Des textures, pour que l'atlas ait des couches à donner.
+    // Les modèles de cette fixture nomment leurs textures « a », « t »… sans
+    // préfixe : l'atlas doit être indexé sur CES noms-là, pas sur un chemin
+    // qu'on aurait inventé.
+    for n in ["a", "t", "d", "s", "o"] {
+        d.ecrire_octets(
+            &format!("assets/minecraft/textures/{n}.png"),
+            &uni(4, [200, 200, 200, 255]),
+        );
+    }
+    let src = Dossier::ouvrir(d.path()).unwrap();
+
+    let mut cat = Catalogue::new(Disposition::Pack);
+    cat.charger_pack(&src).unwrap();
+    cat.resoudre_modeles(&src);
+
+    let cles = vec![
+        "minecraft:stone".to_string(),
+        "minecraft:grass_block".to_string(),
+    ];
+    let atlas = tf_assets::Atlas::batir(
+        &src,
+        ["a", "t", "d", "s", "o"].into_iter().map(str::to_string),
+        &|n: &str| vec![format!("assets/minecraft/textures/{n}.png")],
+    );
+    assert!(
+        atlas.couche("o").is_some(),
+        "l'atlas doit porter la tuile teintée"
+    );
+    let teintes = tf_assets::Teintes::default();
+    let (table, hab) = tf_assets::table_rendu(&cat, &atlas, &teintes, cles.into_iter(), &|_| false);
+
+    assert!(
+        !table.teinte_biome(0),
+        "la pierre ne prend pas la couleur de son biome : la marquer couperait \
+         les quads d'une muraille à chaque frontière, pour rien"
+    );
+    assert!(
+        table.teinte_biome(1),
+        "`grass_block` porte un `tintindex` : sans cette marque, le sol de tout \
+         terrain reste de la couleur du réglage"
+    );
+    // Et le GENRE est posé sur les faces qui portent le `tintindex`, pas sur
+    // les autres : comme dans le vrai modèle, le DESSUS d'un bloc d'herbe est
+    // teinté et son dessous ne l'est pas. Les traiter pareil verdirait sa
+    // terre.
+    let genres: Vec<tf_assets::GenreTeinte> = hab[1].cube.iter().map(|a| a.genre).collect();
+    assert!(
+        genres.contains(&tf_assets::GenreTeinte::Herbe),
+        "le dessus est teinté : {genres:?}"
+    );
+    assert!(
+        genres.contains(&tf_assets::GenreTeinte::Aucune),
+        "le dessous ne l'est pas : {genres:?}"
+    );
+}
+
+fn uni(cote: u32, c: [u8; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut e = png::Encoder::new(&mut out, cote, cote);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        e.write_header()
+            .unwrap()
+            .write_image_data(&c.repeat((cote * cote) as usize))
+            .unwrap();
+    }
+    out
 }

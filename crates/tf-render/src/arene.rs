@@ -121,9 +121,19 @@ impl Arene {
     /// Par face, et pas seulement par état : un modèle déclare une texture par
     /// face, et prendre celle du dessus habille les côtés d'un bloc d'herbe
     /// avec de l'herbe.
+    ///
+    /// Le troisième argument est le BIOME de la case. Il vaut zéro partout où
+    /// le bloc n'en prend pas la couleur — la fusion gloutonne ne coupe un
+    /// quad sur une frontière de biome que pour les états teintés. Un
+    /// appelant qui n'a pas de biomes passe donc la même fonction qu'avant et
+    /// l'ignore.
     pub fn depuis(
         chantier: &Chantier,
-        apparence: &dyn Fn(tf_anvil::StateId, tf_mesh::forme::Face) -> (u32, [f32; 3]),
+        apparence: &dyn Fn(
+            tf_anvil::StateId,
+            tf_mesh::forme::Face,
+            tf_anvil::StateId,
+        ) -> (u32, [f32; 3]),
     ) -> Arene {
         let mut a = Arene {
             origines: crate::modeles::origines(chantier),
@@ -132,7 +142,7 @@ impl Arene {
         for (section, lot) in chantier.lots.iter().enumerate() {
             let debut = a.instances.len() as u32;
             for q in &lot.quads.quads {
-                let (couche, teinte) = apparence(q.id, q.face);
+                let (couche, teinte) = apparence(q.id, q.face, q.biome);
                 a.instances.push(InstanceQuad {
                     geo: empaqueter(q.min, q.taille, q.face as u32),
                     couche,

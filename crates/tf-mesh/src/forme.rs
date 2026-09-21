@@ -154,6 +154,17 @@ pub trait Formes {
     /// Les cuboïdes du modèle. Vide pour un cube plein — celui-là passe par la
     /// passe gloutonne, qui n'a pas besoin de sa géométrie.
     fn cuboides(&self, id: StateId) -> &[Cuboide];
+
+    /// Ce bloc prend-il la couleur de son BIOME ?
+    ///
+    /// Faux par défaut, et ce défaut est le bon : la grande majorité des blocs
+    /// ne sont pas teintés, et c'est cette réponse qui leur laisse la fusion
+    /// gloutonne intacte. Seuls les teintés cassent un quad à une frontière de
+    /// biome — herbe, feuilles, eau — et seulement là où la frontière passe.
+    fn teinte_biome(&self, id: StateId) -> bool {
+        let _ = id;
+        false
+    }
 }
 
 /// Une table plate indexée par `StateId`. Ce que fabriquera `tf-assets`, et ce
@@ -163,6 +174,7 @@ pub struct TableFormes {
     air: Vec<bool>,
     opaque: Vec<bool>,
     modeles: Vec<Vec<Cuboide>>,
+    teinte: Vec<bool>,
 }
 
 impl TableFormes {
@@ -181,7 +193,19 @@ impl TableFormes {
         self.air.push(air);
         self.opaque.push(opaque);
         self.modeles.push(modele);
+        self.teinte.push(false);
         (self.air.len() - 1) as StateId
+    }
+
+    /// Marque un état comme teinté par son biome.
+    ///
+    /// Séparé de `pousser` exprès : la teinte se DÉCOUVRE dans le pack (une
+    /// face qui porte un `tintindex`), pas au moment où l'on déclare la
+    /// forme, et les deux parcours n'ont pas la même source.
+    pub fn marquer_teinte(&mut self, id: StateId) {
+        if let Some(t) = self.teinte.get_mut(id as usize) {
+            *t = true;
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -210,5 +234,10 @@ impl Formes for TableFormes {
     #[inline]
     fn cuboides(&self, id: StateId) -> &[Cuboide] {
         self.modeles.get(id as usize).map(|v| &v[..]).unwrap_or(&[])
+    }
+
+    #[inline]
+    fn teinte_biome(&self, id: StateId) -> bool {
+        self.teinte.get(id as usize).copied().unwrap_or(false)
     }
 }

@@ -29,6 +29,12 @@ use crate::source::{Dimension, Folder, RegionSource};
 pub struct SectionLue {
     pub chunk: ChunkPos,
     pub section: Section,
+    /// Les 64 cellules de biome, quand la section en porte.
+    ///
+    /// `None` veut dire « on ne sait pas » — 1.13–1.17, ou une palette d'un
+    /// type inattendu — jamais « pas de biome ». L'appelant doit pouvoir
+    /// retomber sur son réglage plutôt que de colorer au jugé.
+    pub biomes: Option<Vec<tf_anvil::StateId>>,
 }
 
 /// Ce qu'une lecture a rencontré. Rendu d'office : un relevé qui ne dit pas ce
@@ -43,6 +49,8 @@ pub struct Bilan {
     pub sans_blocs: usize,
     /// Charges qu'on n'a pas su lire. Zéro sur une save saine.
     pub illisibles: usize,
+    /// Sections dont on a su lire les biomes.
+    pub avec_biomes: usize,
 }
 
 /// Les sections d'une emprise, matérialisées.
@@ -95,7 +103,27 @@ pub fn sections_de<S: RegionSource>(
                 match decode_section(&inflated, &sc, s, interner) {
                     Ok(Some(section)) => {
                         bilan.sections += 1;
-                        poser(SectionLue { chunk, section });
+                        // Les biomes sont une SECONDE palette. On les lit ici
+                        // parce que le chunk est déjà inflaté et balayé : les
+                        // relire plus tard coûterait un second passage
+                        // complet sur la save.
+                        let biomes = match tf_anvil::decode_biomes(&inflated, s, interner) {
+                            Ok(Some(b)) => {
+                                bilan.avec_biomes += 1;
+                                let idx = b.unpack();
+                                Some(
+                                    idx.iter()
+                                        .map(|&k| b.palette.get(k as usize).copied().unwrap_or(0))
+                                        .collect(),
+                                )
+                            }
+                            _ => None,
+                        };
+                        poser(SectionLue {
+                            chunk,
+                            section,
+                            biomes,
+                        });
                     }
                     Ok(None) => bilan.sans_blocs += 1,
                     Err(_) => bilan.illisibles += 1,

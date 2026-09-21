@@ -369,6 +369,10 @@ fn forme_et_habillage(
     // vraie save, avec un `mushroom_stem` dont les six parts se superposaient
     // en un seul plan, à lui seul 38 % de la passe de modèles.
     let couleur = teintes.map(|t| t.pour(nom));
+    // Le GENRE se décide sur le nom, la COULEUR sur le biome. Le premier est
+    // une propriété de l'état, donc il a sa place dans la table ; la seconde
+    // varie d'une case à l'autre et se résout au maillage.
+    let genre = crate::apparence::GenreTeinte::pour(nom);
     let mut cub: Vec<Cuboide> = Vec::new();
     let mut hab: Vec<[Apparence; 6]> = Vec::new();
     let mut plein = false;
@@ -385,14 +389,14 @@ fn forme_et_habillage(
                 // premier élément » prendrait la couche d'herbe transparente de
                 // `grass_block` au lieu du cube lui-même.
                 if let (Some(atlas), Some(e)) = (atlas, m.elements.get(i)) {
-                    cube = crate::apparence::habiller(e, a, atlas, couleur);
+                    cube = crate::apparence::habiller(e, a, atlas, couleur, genre);
                 }
             }
             plein = true;
         }
         if let Some(atlas) = atlas {
             for e in &m.elements {
-                hab.push(crate::apparence::habiller(e, a, atlas, couleur));
+                hab.push(crate::apparence::habiller(e, a, atlas, couleur, genre));
             }
         }
         cub.extend(c);
@@ -447,7 +451,27 @@ pub fn table_rendu(
     let mut h = Vec::new();
     for cle in cles {
         let (forme, hab) = forme_et_habillage(cat, Some(atlas), Some(teintes), &cle, translucide);
-        t.pousser(forme.air, forme.opaque, forme.cuboides);
+        let id = t.pousser(forme.air, forme.opaque, forme.cuboides);
+        // **Le maillon qui fait que le biome arrive jusqu'au quad.**
+        //
+        // La fusion gloutonne ne casse un quad sur une frontière de biome que
+        // pour les états teintés, et c'est ici qu'elle l'apprend. Sans cette
+        // ligne, tout se compile, tous les tests passent, et le sol reste
+        // uniformément « plaines » — une capacité déclarée, branchée, testée
+        // et inatteignable, exactement le piège que le dépôt a déjà payé
+        // trois fois.
+        //
+        // La teinte se lit sur les faces du CUBE et sur celles des cuboïdes :
+        // l'herbe est teintée par son dessus, une feuille par toutes ses
+        // faces, et ne regarder que le cube raterait la moitié du décor.
+        let teintee = hab
+            .cube
+            .iter()
+            .chain(hab.cuboides.iter().flatten())
+            .any(|a| a.genre != crate::apparence::GenreTeinte::Aucune);
+        if teintee {
+            t.marquer_teinte(id);
+        }
         h.push(hab);
     }
     (t, h)

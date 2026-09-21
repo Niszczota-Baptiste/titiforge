@@ -82,6 +82,9 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, f: &F, op: &Opacite, out:
                             ],
                             taille,
                             face,
+                            // Ici, aucune fusion : chaque cuboïde sort avec
+                            // le biome de SA case, sans compromis à faire.
+                            biome: v.biome(x, y, z),
                             id,
                         });
                         out.quads_modele += 1;

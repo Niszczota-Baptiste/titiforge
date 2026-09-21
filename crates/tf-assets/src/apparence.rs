@@ -42,6 +42,26 @@ pub struct Apparence {
     /// absente ne se voit pas du tout, et c'est l'ordre dans lequel on les
     /// traite.
     pub uv: [f32; 4],
+    /// Par quoi cette face est teintée — rien, l'herbe, le feuillage, l'eau.
+    ///
+    /// Le GENRE et pas la couleur : la couleur dépend du BIOME, qui varie
+    /// d'une case à l'autre et n'a rien à faire dans une table indexée par
+    /// état. C'est ce qui permet de baker la table une fois et de résoudre la
+    /// couleur au moment du maillage.
+    pub genre: GenreTeinte,
+}
+
+/// Ce qui donne sa couleur à une face teintée.
+///
+/// Trois familles, parce que le jeu en a trois : `colormap/grass.png`,
+/// `colormap/foliage.png`, et la couleur d'eau que chaque biome déclare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GenreTeinte {
+    #[default]
+    Aucune,
+    Herbe,
+    Feuillage,
+    Eau,
 }
 
 impl Default for Apparence {
@@ -50,6 +70,7 @@ impl Default for Apparence {
             couche: 0,
             teinte: [1.0; 3],
             uv: [0.0, 0.0, 16.0, 16.0],
+            genre: GenreTeinte::Aucune,
         }
     }
 }
@@ -88,13 +109,10 @@ impl Teintes {
     /// Minefield en compte 1 678, et une liste écrite à la main en raterait la
     /// moitié le jour de la prochaine mise à jour du serveur.
     pub fn pour(&self, nom: &str) -> [u8; 3] {
-        let feuille = nom.rsplit(':').next().unwrap_or(nom);
-        if feuille.contains("water") || feuille.contains("cauldron") {
-            self.eau
-        } else if feuille.contains("leaves") || feuille.contains("vine") {
-            self.feuillage
-        } else {
-            self.herbe
+        match GenreTeinte::pour(nom) {
+            GenreTeinte::Eau => self.eau,
+            GenreTeinte::Feuillage => self.feuillage,
+            _ => self.herbe,
         }
     }
 }
@@ -151,6 +169,26 @@ pub fn teinte_finale(couleur: [u8; 3]) -> [f32; 3] {
     out
 }
 
+impl GenreTeinte {
+    /// Le genre de teinte d'un bloc, d'après son NOM.
+    ///
+    /// Sur les noms plutôt que sur une liste exhaustive : le catalogue
+    /// Minefield en compte 1 678, et une liste écrite à la main en raterait la
+    /// moitié le jour de la prochaine mise à jour du serveur. C'est l'herbe
+    /// par défaut, parce que c'est ce que le jeu fait de tout ce qui porte un
+    /// `tintindex` sans être ni feuille ni eau.
+    pub fn pour(nom: &str) -> GenreTeinte {
+        let feuille = nom.rsplit(':').next().unwrap_or(nom);
+        if feuille.contains("water") || feuille.contains("cauldron") {
+            GenreTeinte::Eau
+        } else if feuille.contains("leaves") || feuille.contains("vine") {
+            GenreTeinte::Feuillage
+        } else {
+            GenreTeinte::Herbe
+        }
+    }
+}
+
 /// L'habillage d'un état : son cube, et chacun de ses cuboïdes.
 ///
 /// Les deux ne servent jamais ensemble. Un cube plein opaque passe par la
@@ -177,6 +215,7 @@ pub fn habiller(
     axes: crate::rotation::Axes,
     atlas: &Atlas,
     couleur: Option<[u8; 3]>,
+    genre: GenreTeinte,
 ) -> [Apparence; 6] {
     let mut faces = [Apparence::default(); 6];
     for f in FACES {
@@ -191,6 +230,14 @@ pub fn habiller(
             teinte: match (fd.tintindex, couleur) {
                 (Some(_), Some(c)) => teinte_finale(c),
                 _ => [1.0; 3],
+            },
+            // Le genre ne se pose que si la face est VRAIMENT teintée : c'est
+            // `tintindex` qui le dit, pas le nom du bloc. Un bloc d'herbe a
+            // des faces teintées et d'autres non, et les traiter pareil
+            // verdirait sa terre.
+            genre: match fd.tintindex {
+                Some(_) => genre,
+                None => GenreTeinte::Aucune,
             },
             uv: crate::modele::uv_de(e, f, fd),
         };

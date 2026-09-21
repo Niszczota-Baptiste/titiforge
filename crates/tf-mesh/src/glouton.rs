@@ -48,6 +48,35 @@ const fn compose(axe: usize, d: i32, u: i32, v: i32) -> [i32; 3] {
     }
 }
 
+/// La clé de fusion d'une case : l'identifiant, et le BIOME quand il compte.
+///
+/// `id + 1` parce que zéro veut dire « rien à dessiner ici » dans le masque.
+/// Le biome ne rejoint la clé que pour un état teinté : l'ajouter partout
+/// couperait les quads d'une muraille de pierre à chaque frontière de biome,
+/// pour une couleur que la pierre ne prend pas.
+///
+/// **C'est le BIOME qu'on met dans la clé, pas la cellule qui le porte.** La
+/// cellule y paraît équivalente — elle change à la même frontière — et elle
+/// est fausse : deux cellules VOISINES du même biome ont deux indices
+/// différents, donc deux clés, donc plus aucune fusion au-delà de quatre
+/// blocs. Mesuré en écrivant la faute : une face de section pleine sortait en
+/// 64 quads de 4 × 4 au lieu d'un seul, sur un terrain d'un seul biome. Le
+/// rendu en était juste ; le maillage, seize fois trop cher.
+///
+/// `biome + 1` pour la même raison que l'identifiant : un état non teinté
+/// laisse les bits hauts à zéro, et c'est ce qui permet de relire « aucun
+/// biome » à l'émission au lieu de lire la cellule zéro.
+#[inline]
+fn cle<F: Formes + ?Sized>(v: &Voisinage, f: &F, x: i32, y: i32, z: i32) -> u64 {
+    let id = v.get(x, y, z);
+    let base = id as u64 + 1;
+    if f.teinte_biome(id) {
+        base | (v.biome(x, y, z) as u64 + 1) << 32
+    } else {
+        base
+    }
+}
+
 /// Ajoute au maillage les quads gloutons du voisinage.
 pub fn mailler<F: Formes + ?Sized>(v: &Voisinage, f: &F, out: &mut Maillage) {
     mailler_avec(v, f, &Opacite::relever(v, f), out)
@@ -57,7 +86,7 @@ pub fn mailler<F: Formes + ?Sized>(v: &Voisinage, f: &F, out: &mut Maillage) {
 ///
 /// Elle coûte un balayage du voisinage, et les deux passes en ont besoin :
 /// la partager évite de la payer deux fois.
-pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out: &mut Maillage) {
+pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, f: &F, op: &Opacite, out: &mut Maillage) {
     // Deux sorties immédiates, et elles couvrent les deux moitiés d'un monde :
     // le ciel et la roche. Sans elles, une section sans aucune face visible se
     // paie quand même en entier.
@@ -69,7 +98,18 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
     // qu'elle consomme, et elle les consomme toutes : il ressort propre. Le
     // reblanchir à chaque tranche coûterait 24 576 écritures par section —
     // exactement le coût qu'on vient de retirer.
-    let mut masque = [0u32; COTE * COTE];
+    // **La clé de fusion est un `u64`, pas un `u32`.** Les 32 bits du bas
+    // portent l'identifiant plus un ; les bits du haut portent la CELLULE DE
+    // BIOME, et seulement pour les états dont la couleur en dépend. Un quad ne
+    // peut donc pas enjamber une frontière de biome là où ça se verrait — et
+    // il fusionne exactement comme avant partout ailleurs, ce qui est le cas
+    // de l'immense majorité des blocs.
+    //
+    // Sans ça, il n'y a que trois issues et les trois sont mauvaises :
+    // échantillonner le biome à un coin du quad (une bande de la mauvaise
+    // couleur), prendre celui de la section (des coutures tous les seize
+    // blocs), ou renoncer à la fusion (× 400 de quads sur une muraille).
+    let mut masque = [0u64; COTE * COTE];
     // Les rangées visibles d'une face sur X, relevées une fois : une rangée
     // court le long de X, donc elle TRAVERSE les seize tranches. La recalculer
     // par tranche la referait seize fois.
@@ -99,7 +139,7 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
                             if vis_x[(iv * n + iu) as usize] & bit == 0 {
                                 continue;
                             }
-                            masque[(iv * n + iu) as usize] = v.get(d, iu, iv) + 1;
+                            masque[(iv * n + iu) as usize] = cle(v, f, d, iu, iv);
                             vide = false;
                         }
                     }
@@ -114,7 +154,7 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
                         while vis != 0 {
                             let iu = vis.trailing_zeros() as i32 - 1;
                             vis &= vis - 1;
-                            masque[(iv * n + iu) as usize] = v.get(iu, d, iv) + 1;
+                            masque[(iv * n + iu) as usize] = cle(v, f, iu, d, iv);
                             vide = false;
                         }
                     }
@@ -128,7 +168,7 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
                         while vis != 0 {
                             let iu = vis.trailing_zeros() as i32 - 1;
                             vis &= vis - 1;
-                            masque[(iv * n + iu) as usize] = v.get(iu, iv, d) + 1;
+                            masque[(iv * n + iu) as usize] = cle(v, f, iu, iv, d);
                             vide = false;
                         }
                     }
@@ -182,7 +222,14 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, _f: &F, op: &Opacite, out
                         ],
                         taille: [(w * 16) as f32, (h * 16) as f32],
                         face,
-                        id: (marque - 1) as StateId,
+                        id: (marque & 0xFFFF_FFFF) as StateId - 1,
+                        // Le biome voyage dans les bits hauts de la clé. Zéro
+                        // y veut dire « cet état n'en prend pas la couleur »,
+                        // et c'est une réponse, pas une valeur par défaut.
+                        biome: match marque >> 32 {
+                            0 => 0,
+                            b => (b - 1) as StateId,
+                        },
                     });
                     out.quads_glouton += 1;
 

@@ -98,11 +98,18 @@ fn main() {
                 Folder::Region,
                 &sel,
                 &mut interner,
-                |s| grille.poser(s.chunk.x, s.chunk.z, s.section),
+                |s| {
+                    let y = s.section.y;
+                    if let Some(b) = s.biomes {
+                        grille.poser_biomes(s.chunk.x, s.chunk.z, y, b);
+                    }
+                    grille.poser(s.chunk.x, s.chunk.z, s.section);
+                },
             );
             println!(
-                "monde : {dir} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections lues",
-                bilan.chunks, bilan.sections
+                "monde : {dir} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections lues \
+                 ({} avec biomes)",
+                bilan.chunks, bilan.sections, bilan.avec_biomes
             );
             format!("{} × {} blocs", (x1 - x0 + 1) * 16, (z1 - z0 + 1) * 16)
         }
@@ -156,6 +163,18 @@ fn main() {
     // produire séparément laisserait ce couplage implicite, et c'est le genre
     // de contrat qui se casse sans bruit.
     let teintes = tf_assets::Teintes::default();
+    // La couleur d'un biome se DÉRIVE du jeu : la table `colormap/grass.png`
+    // et la température de chaque biome. Sans installation — un codex, un
+    // pack — le climat est vide, et on retombe sur le RÉGLAGE ci-dessus.
+    let climat = tf_assets::climat::Climat::charger(&src);
+    if climat.est_vide() {
+        println!(
+            "climat : aucun ({} manque(s)) — teinte de repli « plaines »",
+            climat.manques.len()
+        );
+    } else {
+        println!("climat : {} biomes lus", climat.nb_biomes());
+    }
     let (table, habillage) =
         tf_assets::table_rendu(&cat, &atlas, &teintes, cles.iter().cloned(), &|n| {
             translucides.contains(n)
@@ -166,12 +185,33 @@ fn main() {
     let chantier = grille.mailler_parallele(&table);
     let t_maille = t.elapsed();
 
-    let arene = Arene::depuis(&chantier, &|id, face| match habillage.get(id as usize) {
-        Some(h) => {
-            let a = h.cube[face.indice()];
-            (a.couche, a.teinte)
+    // La teinte d'une face se compose ici, et pas dans la table : le GENRE
+    // (herbe, feuillage, eau) est une propriété de l'état, la COULEUR une
+    // propriété du biome de la case.
+    let teinte_de = |genre: tf_assets::GenreTeinte, biome: StateId| -> Option<[f32; 3]> {
+        if genre == tf_assets::GenreTeinte::Aucune {
+            return None;
         }
-        None => (0, [1.0; 3]),
+        let nom = interner.resolve(biome)?;
+        let c = match genre {
+            tf_assets::GenreTeinte::Herbe => climat.herbe(nom),
+            tf_assets::GenreTeinte::Feuillage => climat.feuillage(nom),
+            tf_assets::GenreTeinte::Eau => climat.eau(nom),
+            tf_assets::GenreTeinte::Aucune => None,
+        }?;
+        Some(tf_assets::apparence::teinte_finale(c))
+    };
+    let arene = Arene::depuis(&chantier, &|id, face, biome| {
+        match habillage.get(id as usize) {
+            Some(h) => {
+                let a = h.cube[face.indice()];
+                // Le biome quand on le connaît, le réglage sinon. Ne jamais
+                // inventer : une couleur fausse se lit « ce bloc est bizarre »
+                // et ne désigne pas la cause.
+                (a.couche, teinte_de(a.genre, biome).unwrap_or(a.teinte))
+            }
+            None => (0, [1.0; 3]),
+        }
     });
 
     // ── les blocs-modèles : la géométrie UNE fois par état, une pose par bloc
