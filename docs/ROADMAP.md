@@ -11,9 +11,9 @@ n'ont pas :
 
 | | Ce qu'il apporte | Où on en est |
 |---|---|---|
-| **WorldEdit** | les opérations de masse : sélectionner, remplir, remplacer, tourner, copier. Le geste « change dix millions de blocs d'un coup » | le socle est là, les opérations de déplacement manquent |
-| **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | le rendu est là, la coque et les formats manquent |
-| **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | à faire — et c'est le plus structurant |
+| **WorldEdit** | les opérations de masse : sélectionner, remplir, remplacer, tourner, copier. Le geste « change dix millions de blocs d'un coup » | ✅ le socle ET les déplacements ; reste à les brancher à des boutons |
+| **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | le rendu est là, la coque VOLE et SÉLECTIONNE ; les formats d'échange manquent |
+| **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | l'inférence est là et DIT à quoi elle tient ; pousser-tirer et les composants restent — et c'est le plus structurant |
 
 Les deux premiers sont des outils d'ÉDITION : on prend ce qui existe et on le
 transforme. SketchUp est un outil de CONCEPTION : on part de rien et on
@@ -182,7 +182,7 @@ dégradé du premier.
 > **Sortie.** 60 FPS soutenus, rayon 512 blocs, sur un vrai monde Minefield.
 > < 5 appels de dessin (référence : 1 281).
 
-## Phase 3 — Les opérations qui manquent · **en cours**
+## Phase 3 — Les opérations qui manquent · ✅ **faite**
 
 Le socle est là : trois étages, masques booléens complets, motifs pondérés,
 staging, journal. Manque ce qui DÉPLACE.
@@ -221,9 +221,31 @@ mesurée.
 > reposer à sa propre place doit rendre **zéro chunk modifié** — vérifié sur le
 > monde d'essai comme en test.
 
-## Phase 4 — La coque, et le geste SketchUp · le tournant
+## Phase 4 — La coque, et le geste SketchUp · **en cours**
 
-`tf-app` n'existe pas. C'est ce qui transforme un moteur mesuré en outil.
+C'est ce qui transforme un moteur mesuré en outil.
+
+**Ce qui tient debout aujourd'hui** (`cargo run --release -p tf-app -- <assets>`) :
+une fenêtre `winit`, le viewport `wgpu` — le MÊME code que la capture hors
+écran — et l'interface `egui` par-dessus. On vole (molette enfoncée pour
+tourner, +Maj panoramique, roulée pour avancer ; ZQSD/WASD), on vise au
+réticule, on lit la case qu'on casserait et celle où l'on poserait, on pose
+les deux coins d'une sélection, on l'accroche à ce qui est bâti en voyant
+POURQUOI axe par axe, on allume le quadrillage des chunks et celui des `.mca`,
+et le panneau annonce ce que la sélection coûtera — en sections entières
+comptées, jamais en « alignée ».
+
+**Ce qui manque, et l'interface le DIT à l'écran plutôt que de faire croire
+l'inverse :** aucun bouton n'appelle encore `tf-ops`. Les formulaires
+d'opérations doivent être ENGENDRÉS depuis les descripteurs du moteur (voir
+plus bas) — écrire un formulaire à la main serait exactement la dette
+qu'`ExeWorldEdit` n'a pas contractée.
+
+**La coque sait se dessiner dans une TEXTURE** (`--capture ecran.png`),
+interface comprise. Ce n'est pas un mode dégradé : c'est ce qui permet de la
+regarder depuis une machine sans écran, et de la vérifier au pixel comme le
+rendu. Ce que la coque DÉCIDE vit dans `etat.rs`, en types purs, et se teste
+sans monter un GPU — treize tests, cinq mutations, zéro survivant.
 
 ### Deux MODES, et un bouton pour passer de l'un à l'autre
 
@@ -394,12 +416,15 @@ WASM (`docs/VISION.md`, § 6).
 étages et dessine un vrai build en deux appels. Vérifié sur deux vraies saves,
 606 millions de blocs réécrits puis annulés au bit près.
 
-**La phase 3 est presque gratuite** vu ce qui est déjà dérivé, et elle complète
-le socle WorldEdit.
+**La phase 3 est faite**, et elle a bien été presque gratuite vu ce qui était
+déjà dérivé : le socle WorldEdit est complet, déplacements compris.
 
-**La phase 4 est le tournant** : sans coque, rien n'est utilisable ni jugeable,
-et c'est là que titiforge commence à ressembler à SketchUp plutôt qu'à une
-ligne de commande.
+**La phase 4 est le tournant, et elle est commencée** : la fenêtre existe, on
+vole dans une vraie save, on vise, on sélectionne et on s'accroche à ce qui est
+bâti. Ce qui reste est ce qui la rend UTILE — brancher les opérations, par des
+formulaires engendrés depuis les descripteurs du moteur, et le pousser-tirer.
+Sans ça rien n'est jugeable, et c'est là que titiforge commence à ressembler à
+SketchUp plutôt qu'à une ligne de commande.
 
 **La phase 7 est la raison d'être.** Elle peut attendre, mais sa couture non :
 elle est décidée en tête de ce document, et les phases 3 et 4 doivent être

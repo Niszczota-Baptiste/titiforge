@@ -12,6 +12,14 @@ use crate::arene::Arene;
 use crate::camera::{Camera, CameraGpu};
 use crate::Appareil;
 
+/// Le format de la cible HORS ÉCRAN.
+///
+/// **La surface d'une fenêtre n'offre pas forcément celui-là**, et c'est une
+/// leçon payée : sur X11 avec le pilote logiciel, la surface ne propose que
+/// `Bgra8UnormSrgb` — la forcer fait paniquer wgpu à la configuration.
+/// `Scene::pour` prend donc le format en paramètre, et la fenêtre lui donne
+/// celui que sa surface accepte. Ce qui ne se négocie PAS est le sRGB : un
+/// format linéaire ferait sortir toutes les couleurs autrement, sans erreur.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const PROFONDEUR: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -37,6 +45,9 @@ pub struct Scene {
     /// Le QUADRILLAGE — chunks, `.mca`, sélection. Absent par défaut : une
     /// scène qui n'en demande pas n'en paie pas.
     lignes: Option<PasseLignes>,
+    /// Le format de la cible. Gardé parce que le quadrillage se pose APRÈS la
+    /// scène et doit construire son pipeline pour la même.
+    format: wgpu::TextureFormat,
 }
 
 /// Ce que le quadrillage tient au GPU.
@@ -68,6 +79,26 @@ impl Scene {
         modeles: &crate::AreneModeles,
         atlas: &AtlasGpu,
     ) -> Scene {
+        Scene::pour(app, arene, modeles, atlas, FORMAT)
+    }
+
+    /// La même, pour un format de cible donné.
+    ///
+    /// La fenêtre s'en sert avec le format de SA surface : sur X11 et pilote
+    /// logiciel, elle ne propose que `Bgra8UnormSrgb`, et forcer le format du
+    /// hors-écran fait paniquer wgpu. Le sRGB, lui, ne se négocie pas.
+    pub fn pour(
+        app: &Appareil,
+        arene: &Arene,
+        modeles: &crate::AreneModeles,
+        atlas: &AtlasGpu,
+        format: wgpu::TextureFormat,
+    ) -> Scene {
+        debug_assert!(
+            format.is_srgb(),
+            "une cible non sRGB ferait sortir toutes les couleurs autrement, \
+             sans la moindre erreur"
+        );
         let device = app.device.clone();
         let queue = app.queue.clone();
 
@@ -198,7 +229,7 @@ impl Scene {
                 entry_point: "fs",
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
+                    format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -225,7 +256,7 @@ impl Scene {
         });
 
         let passe_modeles = (!modeles.is_empty())
-            .then(|| PasseModeles::nouvelle(&device, &disposition, modeles, FORMAT));
+            .then(|| PasseModeles::nouvelle(&device, &disposition, modeles, format));
 
         Scene {
             appareil: device,
@@ -237,6 +268,7 @@ impl Scene {
             nombre: arene.len() as u32,
             modeles: passe_modeles,
             lignes: None,
+            format,
         }
     }
 
@@ -250,10 +282,114 @@ impl Scene {
     /// Vide le retire.
     pub fn poser_lignes(&mut self, lignes: &crate::Lignes) {
         self.lignes = (!lignes.is_empty())
-            .then(|| PasseLignes::nouvelle(&self.appareil, &self.camera, lignes, FORMAT));
+            .then(|| PasseLignes::nouvelle(&self.appareil, &self.camera, lignes, self.format));
     }
 
     /// Dessine dans une cible hors écran et rend l'image en RGBA8.
+    /// **LA passe, écrite une fois.** La fenêtre et la capture hors écran
+    /// n'en ont pas deux : deux copies finiraient par montrer deux images
+    /// différentes, et on comparerait ce qui ne se compare pas.
+    fn passe(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        couleur: &wgpu::TextureView,
+        profondeur: &wgpu::TextureView,
+    ) {
+        let mut passe = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("quads"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: couleur,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.055,
+                        g: 0.075,
+                        b: 0.086,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: profondeur,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        passe.set_pipeline(&self.pipeline);
+        passe.set_bind_group(0, &self.liaison, &[]);
+        passe.set_vertex_buffer(0, self.instances.slice(..));
+        // UN appel pour toute l'arène.
+        passe.draw(0..6, 0..self.nombre);
+
+        // Et UN pour tous les blocs-modèles, quel que soit leur nombre de
+        // faces : la pose porte le rang de sa première face, le sommet
+        // retrouve la sienne par dichotomie.
+        if let Some(m) = &self.modeles {
+            passe.set_pipeline(&m.pipeline);
+            passe.set_bind_group(0, &self.liaison, &[]);
+            passe.set_bind_group(1, &m.liaison, &[]);
+            passe.draw(0..6, 0..m.faces);
+        }
+
+        // **Le quadrillage passe en DERNIER, et sans test de
+        // profondeur.** Un repère qui disparaît derrière le mur qu'on est
+        // en train d'aligner n'est pas un repère : c'est un calque, il se
+        // dessine par-dessus. La contrepartie — une ligne lointaine peut
+        // recouvrir ce qui est devant — est tenue par le rayon borné du
+        // découpage, qui ne montre que le voisinage.
+        if let Some(l) = &self.lignes {
+            passe.set_pipeline(&l.pipeline);
+            passe.set_bind_group(0, &l.liaison, &[]);
+            passe.set_vertex_buffer(0, l.sommets.slice(..));
+            passe.draw(0..l.nombre, 0..1);
+        }
+    }
+
+    /// Dessine sur des vues QUELCONQUES — la surface d'une fenêtre, par
+    /// exemple.
+    ///
+    /// La cible par défaut reste une texture (`rendre`) : un moteur qui ne
+    /// sait dessiner que dans une fenêtre ne se teste pas. Celle-ci est le
+    /// même code avec d'autres attachements, et c'est ce qui garantit que la
+    /// fenêtre et la capture montrent la MÊME image — deux passes séparées
+    /// divergeraient, et on comparerait deux choses qui ne veulent pas dire la
+    /// même chose.
+    pub fn dessiner_sur(
+        &self,
+        couleur: &wgpu::TextureView,
+        profondeur: &wgpu::TextureView,
+        largeur: u32,
+        hauteur: u32,
+        camera: &Camera,
+    ) -> Compte {
+        let aspect = largeur as f32 / hauteur.max(1) as f32;
+        self.queue
+            .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera.gpu(aspect)));
+        let mut enc = self
+            .appareil
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("scène"),
+            });
+        self.passe(&mut enc, couleur, profondeur);
+        self.queue.submit([enc.finish()]);
+        self.compte()
+    }
+
+    fn compte(&self) -> Compte {
+        Compte {
+            appels_de_dessin: 1
+                + u32::from(self.modeles.is_some())
+                + u32::from(self.lignes.is_some()),
+            instances: self.nombre + self.modeles.as_ref().map_or(0, |m| m.faces),
+        }
+    }
+
     pub fn rendre(&self, cible: &Cible, camera: &Camera) -> (Vec<u8>, Compte) {
         let aspect = cible.largeur as f32 / cible.hauteur as f32;
         self.queue
@@ -264,62 +400,7 @@ impl Scene {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scène"),
             });
-        {
-            let mut passe = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("quads"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &cible.couleur,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.055,
-                            g: 0.075,
-                            b: 0.086,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &cible.profondeur,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            passe.set_pipeline(&self.pipeline);
-            passe.set_bind_group(0, &self.liaison, &[]);
-            passe.set_vertex_buffer(0, self.instances.slice(..));
-            // UN appel pour toute l'arène.
-            passe.draw(0..6, 0..self.nombre);
-
-            // Et UN pour tous les blocs-modèles, quel que soit leur nombre de
-            // faces : la pose porte le rang de sa première face, le sommet
-            // retrouve la sienne par dichotomie.
-            if let Some(m) = &self.modeles {
-                passe.set_pipeline(&m.pipeline);
-                passe.set_bind_group(0, &self.liaison, &[]);
-                passe.set_bind_group(1, &m.liaison, &[]);
-                passe.draw(0..6, 0..m.faces);
-            }
-
-            // **Le quadrillage passe en DERNIER, et sans test de
-            // profondeur.** Un repère qui disparaît derrière le mur qu'on est
-            // en train d'aligner n'est pas un repère : c'est un calque, il se
-            // dessine par-dessus. La contrepartie — une ligne lointaine peut
-            // recouvrir ce qui est devant — est tenue par le rayon borné du
-            // découpage, qui ne montre que le voisinage.
-            if let Some(l) = &self.lignes {
-                passe.set_pipeline(&l.pipeline);
-                passe.set_bind_group(0, &l.liaison, &[]);
-                passe.set_vertex_buffer(0, l.sommets.slice(..));
-                passe.draw(0..l.nombre, 0..1);
-            }
-        }
+        self.passe(&mut enc, &cible.couleur, &cible.profondeur);
         cible.copier(&mut enc);
         self.queue.submit([enc.finish()]);
 
@@ -552,6 +633,30 @@ impl AtlasGpu {
 }
 
 /// Une cible hors écran, relisible en mémoire.
+/// Une texture de PROFONDEUR seule, pour dessiner sur une surface de fenêtre.
+///
+/// La surface fournit sa couleur ; la profondeur, non. Elle se recrée au
+/// redimensionnement — une profondeur restée à l'ancienne taille fait
+/// silencieusement échouer la passe.
+pub fn profondeur(app: &Appareil, largeur: u32, hauteur: u32) -> wgpu::TextureView {
+    app.device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("profondeur de fenêtre"),
+            size: wgpu::Extent3d {
+                width: largeur.max(1),
+                height: hauteur.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: PROFONDEUR,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 pub struct Cible {
     pub largeur: u32,
     pub hauteur: u32,
@@ -610,7 +715,13 @@ impl Cible {
         }
     }
 
-    fn copier(&self, enc: &mut wgpu::CommandEncoder) {
+    /// Copie la couleur vers le tampon relisible.
+    ///
+    /// Publique parce que la COQUE compose son interface dans une seconde
+    /// cible avant de la mélanger : un rendu hors écran qui ne se relit que
+    /// depuis son propre crate n'est plus un rendu hors écran, c'est un détail
+    /// interne.
+    pub fn copier(&self, enc: &mut wgpu::CommandEncoder) {
         enc.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
                 texture: &self.texture,
@@ -634,7 +745,7 @@ impl Cible {
         );
     }
 
-    fn relire(&self, device: &wgpu::Device) -> Vec<u8> {
+    pub fn relire(&self, device: &wgpu::Device) -> Vec<u8> {
         let tranche = self.lecture.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         tranche.map_async(wgpu::MapMode::Read, move |r| {

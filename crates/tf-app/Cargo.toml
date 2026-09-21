@@ -1,0 +1,40 @@
+[package]
+name = "tf-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "La coque : fenêtre, outils, et le même rendu que la capture hors écran"
+
+[dependencies]
+tf-anvil.workspace = true
+# La fixture de BUILD, en attendant que la coque ouvre une save par le menu.
+tf-bench = { path = "../tf-bench" }
+tf-assets.workspace = true
+tf-mesh.workspace = true
+tf-ops.workspace = true
+tf-render.workspace = true
+tf-world.workspace = true
+egui = "0.29"
+# La MÊME version de wgpu que `tf-render` (22). Une majeure d'écart rend deux
+# types `Device` incompatibles, et le message du compilateur ne dit pas que
+# c'est une question de version.
+egui-wgpu = "0.29"
+wgpu = { version = "22", default-features = false, features = ["wgsl", "dx12", "metal", "wgc"] }
+pollster = "0.3"
+
+# La fenêtre est OPTIONNELLE, et c'est le point : la coque doit savoir se
+# dessiner dans une TEXTURE. Un morceau d'interface qui n'existe que derrière
+# un serveur graphique ne se teste pas, et ce dépôt a déjà tranché la question
+# pour le rendu.
+winit = { version = "0.30", optional = true }
+egui-winit = { version = "0.29", optional = true, default-features = false }
+png = "0.17"
+
+[features]
+default = ["fenetre"]
+fenetre = ["dep:winit", "dep:egui-winit"]
+
+[[bin]]
+name = "titiforge"
+path = "src/main.rs"

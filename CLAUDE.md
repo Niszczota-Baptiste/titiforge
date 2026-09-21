@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (660 tests aujourd'hui)
+cargo test            # tous les crates (674 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -302,6 +302,16 @@ cargo run --release -p tf-render --example capture -- ../titisite/public/codex v
 # Le rayon est en CELLULES — 0 = la sienne seulement.
 cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 900 --chunks 3 --mca 1
 TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/public/codex pres.png
+
+# LA COQUE. Une fenêtre, un vol à la Minecraft (molette ENFONCÉE pour tourner,
+# +Maj panoramique, molette roulée pour avancer ; gauche et droit restent aux
+# outils), la visée au réticule, la sélection à deux coins, l'accrochage.
+cargo run --release -p tf-app -- ../titisite/public/codex
+cargo run --release -p tf-app -- ../titisite/public/codex --monde D:\monde --zone "4,7,10,12"
+# Elle se dessine aussi dans une TEXTURE — interface comprise — donc elle se
+# regarde depuis une machine sans écran, et elle se vérifiera au pixel.
+cargo run --release -p tf-app -- ../titisite/public/codex --capture ecran.png --taille 1400x900
+cargo run --release -p tf-app -- ../titisite/public/codex --capture concep.png --mode conception
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -346,7 +356,10 @@ crates/
                pilotage ✅ : le JOUEUR est le point fixe (pur, sans écran)
                viser ✅ : quel bloc, quelle FACE sous le curseur
                quadrillage ✅ : un calque de lignes, chunks et .mca
-  tf-app/      coque winit + egui, outils, commandes
+  tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
+               accrochage, quadrillage) · outils et commandes à venir.
+               Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
+               n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
 
@@ -1270,3 +1283,38 @@ propres à ce dépôt.
   dit. `r.point.x >= i32::MIN` ne peut pas échouer ; ce qui pouvait déborder
   était le MILIEU du domaine entier, où `MIN + MAX + 1` s'enroule en `i32`.
   Un test qui borne ce que le type borne déjà donne un vert gratuit.
+
+- **Le format d'une surface se NÉGOCIE, il ne se choisit pas.** Le rendu hors
+  écran fabrique sa cible, donc il impose son format ; une fenêtre reçoit le
+  sien du pilote. En forçant `Rgba8UnormSrgb` — celui de toutes les captures du
+  dépôt — la première ouverture est morte sur
+  « *not in list of supported formats: [Bgra8UnormSrgb, Bgra8Unorm]* ». Le
+  format traverse donc la `Scene` jusqu'aux pipelines, et on prend le premier
+  qui soit **sRGB** : la conversion que les shaders attendent est une propriété
+  de la cible, pas une préférence. Corollaire : la passe de rendu est écrite
+  UNE fois et sert les deux chemins (`rendre` et `dessiner_sur`), sinon la
+  fenêtre et la capture divergeraient — et seule la capture est testée.
+- **Les couleurs SATURÉES sont des points fixes de la conversion sRGB.** Le
+  calque de lignes envoyait ses couleurs telles quelles à une cible sRGB, qui
+  les réencode : elles passaient deux fois dans la courbe et sortaient
+  délavées. Le test de couleur existant ne l'a pas vu parce qu'il n'employait
+  que du rouge et du vert PURS — 0 et 255 se transforment en eux-mêmes, dans
+  les deux sens et dans les deux espaces. Mesuré sur une demi-teinte :
+  (120, 220, 140) ressortait en (184, 240, 196), qui se lit « blanc ». Un test
+  de couleur qui n'emploie que des primaires ne teste pas la couleur. Même
+  famille que les couleurs de sommet d'`ExeWorldEdit`, et la troisième fois que
+  l'espace de couleur se venge dans ce dépôt.
+- **egui met sa fonte dans le PREMIER `textures_delta`, et nulle part
+  ailleurs.** La capture fait tourner l'interface deux fois — une pour que les
+  panneaux se mesurent, une pour dessiner — et je n'appliquais que les deltas
+  de la seconde. Résultat : une interface complète, correctement disposée, et
+  **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
+  texture manquante est simplement vide. Les deltas des deux passes
+  s'enchaînent.
+- **Des coordonnées de démonstration écrites en dur mentent poliment.** Le
+  contour de sélection de la capture était cadré à y = 64..97, une hauteur de
+  surface vanilla ; la fixture de BUILD vit autour de y = −10. Le contour était
+  donc HORS CHAMP, et l'image restait une image parfaitement plausible — c'est
+  « une absence ne se voit pas », appliqué à ce qui sert à montrer que ça
+  marche. Ce qu'une capture met en scène se DÉRIVE des bornes de ce qu'elle
+  vient de charger.

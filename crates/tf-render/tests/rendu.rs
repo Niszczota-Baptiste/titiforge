@@ -1174,12 +1174,42 @@ fn un_quadrillage_vide_ne_coute_pas_un_appel() {
     assert_eq!(avec.appels_de_dessin, 2, "un appel pour le calque");
 }
 
+/// **Une DEMI-teinte ne se délave pas** — et c'est le seul test qui puisse le
+/// dire.
+///
+/// Le test d'à côté n'essaie que des primaires SATURÉES, et 0 comme 255 sont
+/// des points FIXES de la conversion sRGB ↔ linéaire : il passait des deux
+/// côtés pendant que le quadrillage sortait délavé. Mesuré, (120, 220, 140)
+/// s'affichait en (184, 240, 196) — un vert qui se lit BLANC. C'est le piège
+/// des couleurs de sommet d'`ExeWorldEdit`, mot pour mot, dans un autre
+/// moteur.
+///
+/// La tolérance de 6 est ce que coûte l'aller-retour sur huit bits ; l'écart
+/// qu'on cherche est de SOIXANTE-QUATRE. Le test discrimine d'un facteur dix,
+/// il ne tient pas à un cheveu.
+#[test]
+fn une_demi_teinte_ne_se_delave_pas() {
+    let Some(app) = app() else { return };
+    for (r, v, b) in [(120u8, 220u8, 140u8), (128, 128, 128), (90, 170, 255)] {
+        let mut l = tf_render::Lignes::new();
+        l.contour([0.0; 3], [16.0; 3], tf_render::rgba(r, v, b, 255));
+        let (image, _) = rendre_avec_lignes(&app, &l);
+        let n = pixels_de(&image, [r, v, b], 6);
+        assert!(
+            n > 50,
+            "couleur ({r}, {v}, {b}) : {n} pixels seulement — la demi-teinte \
+             a été déplacée par la conversion"
+        );
+    }
+}
+
 /// **Les octets de la couleur traversent dans le bon sens.**
 ///
 /// Deux conventions inverses entre `rgba()` et le shader donneraient un
 /// quadrillage bleu là où on a demandé du rouge, sans la moindre erreur — et
 /// « le bleu et le rouge sont inversés » est le défaut qu'on attribue au
-/// thème avant de l'attribuer au code.
+/// thème avant de l'attribuer au code. Il ne dit rien de l'ESPACE de couleur,
+/// pour la raison ci-dessus : c'est le test d'à côté qui le tient.
 #[test]
 fn la_couleur_demandee_est_la_couleur_dessinee() {
     let Some(app) = app() else { return };
