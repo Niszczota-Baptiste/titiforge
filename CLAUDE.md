@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (744 tests aujourd'hui)
+cargo test            # tous les crates (757 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -369,7 +369,9 @@ crates/
                  à ce qui est bâti et DIT à quoi il tient
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
                · ÉCRIRE DANS LA SAVE ✅ (refus, sauvegarde, écriture)
-               · remaillage encore global, mode Conception à écrire.
+               · OUTILS de Conception ✅ (tirer / poser / casser)
+               · FORMES, comptage et graine réglables ✅
+               · remaillage encore global, composants à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -390,6 +392,8 @@ couvriront le même terrain.
 | Un plafond réglable | les bornes du `Param`, jamais une constante dans l'interface. Le champ se génère depuis elles et le serrage s'y réfère |
 | Le nom d'une direction | `Direction::nom` (`tf-world/src/selection.rs`) — une seule table, et c'est sur Z que la seconde se tromperait |
 | Une capacité de la coque | `etat.rs` si ça DÉCIDE (pur, testable sans écran), `interface.rs` si ça dessine. L'interface ne décide rien |
+| Une FORME (sphère, cylindre…) | `Volume` (`tf-ops/src/forme.rs`) — sa variante, son rang dans `rang` (exhaustif), son entrée dans `TOUS`, son cas dans `forme()`, puis son bras dans `interface::volume`. Les deux hôtes la voient aussitôt |
+| Un OUTIL de Conception | `Outil` (`tf-app/src/etat.rs`) : sa variante, son `nom`, sa `legende`, et son cas dans le `match` du clic (`coque.rs`). Un test exige que chaque outil dise ce que font les DEUX boutons |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -1334,6 +1338,22 @@ propres à ce dépôt.
   n° 8 appliqué au geste. Et la tranche commence à `ancien_max + 1`, parce que
   les bornes d'une `BBox` sont INCLUSES : un bloc d'écart et la dernière rangée
   de l'ancien volume est écrasée.
+- **« Déclaré, branché, testé — et inatteignable » ne se referme pas une fois
+  pour toutes.** Un audit de fin de phase a trouvé QUATRE trous du même genre,
+  tous creusés par le même hôte neuf : la coque câblait `Forme::Boite`,
+  `compter: true` et `seed: 0` en dur dans un bouton — donc cinq formes
+  perdues, un invariant violé (le comptage coûte × 31, il ne se rend jamais
+  d'office) et tous les mélanges identiques d'un projet à l'autre — et
+  `point_de_pose`, l'accrochage à la pose, n'était appelé que par ses propres
+  tests. Le piège se rouvre à chaque hôte qui n'expose pas ce que le moteur
+  offre. Remède : construire la commande dans l'ÉTAT (testable), jamais au
+  milieu d'un bouton que personne ne teste.
+- **`cargo build -p A -p B --example X` ne construit que l'exemple.** Le
+  `--example` s'applique à l'invocation entière : le binaire de `A` reste
+  celui d'avant, cargo dit « Finished » en cinq secondes, et la capture montre
+  l'interface de la version précédente. J'ai cherché pourquoi un panneau
+  n'apparaissait pas dans du code qui le dessinait bien. Une commande qui
+  réussit en ne faisant pas ce qu'on croit est pire qu'une qui échoue.
 - **Un coin de sélection ne s'accroche PAS.** L'inférence sert à poser un bloc
   au nu d'un mur ; appliquée à un coin, elle sélectionnerait autre chose que ce
   qu'on a visé — et le bord d'une paroi, qui est justement ce qu'on vise le

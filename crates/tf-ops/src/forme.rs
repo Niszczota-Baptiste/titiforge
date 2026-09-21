@@ -558,3 +558,138 @@ fn croiser(a: Couverture, b: Couverture) -> Couverture {
         _ => Couverture::Partielle,
     }
 }
+
+/// **Ce qu'un HÔTE demande, avant de connaître la sélection.**
+///
+/// `Forme` est géométrique : un centre, des rayons, des bornes. `Volume` est
+/// ce qu'on DEMANDE — « une sphère de rayon 20 » — dont le centre viendra de
+/// la sélection. Les séparer n'est pas de la coquetterie : sur la ligne de
+/// commande, `--sphere 20` peut précéder `--sel`, et l'ordre des options n'a
+/// jamais de sens ; dans une interface, le réglage doit survivre au
+/// changement de sélection, sinon on le retape à chaque fois.
+///
+/// **Une seule table, pour tous les hôtes.** Elle vivait dans l'exemple
+/// `editer` ; la coque en aurait écrit une seconde, et ce dépôt a payé quatre
+/// fois le piège des tables qui divergent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Volume {
+    /// Toute la sélection. Le défaut, et le seul qui ne coûte rien.
+    Aucun,
+    Sphere {
+        rayon: f64,
+    },
+    /// Ellipse en XZ, hauteur franche. L'axe est Y.
+    Cylindre {
+        rayon: f64,
+        hauteur: f64,
+    },
+    Pyramide {
+        demi_base: f64,
+        hauteur: f64,
+        renversee: bool,
+    },
+    /// Les quatre parois VERTICALES de la sélection — `//walls`.
+    Murs {
+        epaisseur: f64,
+    },
+    /// Ses six faces, plancher et plafond compris — `//faces`.
+    Faces {
+        epaisseur: f64,
+    },
+}
+
+impl Volume {
+    /// Toutes les variantes, à leurs valeurs par défaut — pour qu'une
+    /// interface les propose sans en recopier la liste.
+    ///
+    /// L'exhaustivité est portée par `rang`, dont le `match` ne compile pas si
+    /// une variante manque, et un test exige que les rangs couvrent
+    /// exactement `0..TOUS.len()`.
+    pub const TOUS: [Volume; 6] = [
+        Volume::Aucun,
+        Volume::Sphere { rayon: 8.0 },
+        Volume::Cylindre {
+            rayon: 8.0,
+            hauteur: 8.0,
+        },
+        Volume::Pyramide {
+            demi_base: 8.0,
+            hauteur: 8.0,
+            renversee: false,
+        },
+        Volume::Murs { epaisseur: 1.0 },
+        Volume::Faces { epaisseur: 1.0 },
+    ];
+
+    pub const fn rang(&self) -> usize {
+        match self {
+            Volume::Aucun => 0,
+            Volume::Sphere { .. } => 1,
+            Volume::Cylindre { .. } => 2,
+            Volume::Pyramide { .. } => 3,
+            Volume::Murs { .. } => 4,
+            Volume::Faces { .. } => 5,
+        }
+    }
+
+    pub const fn nom(&self) -> &'static str {
+        match self {
+            Volume::Aucun => "toute la sélection",
+            Volume::Sphere { .. } => "sphère",
+            Volume::Cylindre { .. } => "cylindre",
+            Volume::Pyramide { .. } => "pyramide",
+            Volume::Murs { .. } => "murs",
+            Volume::Faces { .. } => "faces",
+        }
+    }
+
+    /// Une ENVELOPPE est prise sur la sélection, pas posée sur un centre.
+    /// Le dire autrement laisserait croire qu'on peut la déplacer.
+    pub const fn enveloppe(&self) -> bool {
+        matches!(self, Volume::Murs { .. } | Volume::Faces { .. })
+    }
+
+    /// La forme géométrique, une fois la sélection connue.
+    ///
+    /// `creux` évide la forme — `//hsphere`, `//hcyl`. **Géométrique**, pas
+    /// topologique : il retire le centre du volume qu'on vient de poser, là où
+    /// `//hollow` INSPECTE ce qui est relié au dehors. Confondre les deux
+    /// donne deux résultats qui se ressemblent sur une capture d'écran.
+    pub fn forme(&self, sel: &BBox, creux: Option<f64>) -> Forme {
+        // Le milieu se prend en division PLANCHER : `(-9 + -1) / 2` vaut −5
+        // dans les deux sens, mais `(-9 + 0) / 2` vaut −4 dans un sens et −5
+        // dans l'autre — et le bloc −1 est dans la région −1, pas la 0.
+        let centre = [
+            (sel.min.x + sel.max.x).div_euclid(2),
+            (sel.min.y + sel.max.y).div_euclid(2),
+            (sel.min.z + sel.max.z).div_euclid(2),
+        ];
+        let f = match *self {
+            Volume::Aucun => return Forme::Boite,
+            Volume::Sphere { rayon } => Forme::sphere(centre, rayon),
+            Volume::Cylindre { rayon, hauteur } => Forme::cylindre(centre, rayon, hauteur),
+            // La pyramide se pose sur le BAS de la sélection, pas sur son
+            // centre : une pyramide flottante n'est ce que personne ne demande.
+            Volume::Pyramide {
+                demi_base,
+                hauteur,
+                renversee,
+            } => Forme::pyramide(
+                [
+                    centre[0],
+                    if renversee { sel.max.y } else { sel.min.y },
+                    centre[2],
+                ],
+                demi_base,
+                hauteur,
+                renversee,
+            ),
+            Volume::Murs { epaisseur } => Forme::murs(*sel, epaisseur),
+            Volume::Faces { epaisseur } => Forme::faces(*sel, epaisseur),
+        };
+        match creux {
+            Some(e) => f.creuse(e),
+            None => f,
+        }
+    }
+}

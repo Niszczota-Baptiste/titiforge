@@ -469,3 +469,114 @@ fn une_epaisseur_plus_grande_que_la_boite_donne_un_bloc_plein() {
     let n = cases(&b).filter(|p| murs.contient(p.x, p.y, p.z)).count();
     assert_eq!(n, 125, "tout est paroi, rien n'est creux");
 }
+
+// ── `Volume` : ce qu'un hôte demande ────────────────────────────────────────
+
+/// `TOUS` doit être complet : c'est elle qu'une interface parcourt pour
+/// proposer les formes. Incomplète, elle rend une forme INATTEIGNABLE — le
+/// piège « déclaré, branché, testé, et personne ne le propose ».
+#[test]
+fn toutes_les_formes_demandables_sont_enumerees() {
+    use tf_ops::Volume;
+    let mut rangs: Vec<usize> = Volume::TOUS.iter().map(|v| v.rang()).collect();
+    rangs.sort_unstable();
+    assert_eq!(rangs, (0..Volume::TOUS.len()).collect::<Vec<_>>());
+    for v in Volume::TOUS {
+        assert!(!v.nom().is_empty());
+    }
+}
+
+/// **Un volume se pose sur la SÉLECTION**, et chacun à sa manière : une sphère
+/// sur le centre, une pyramide sur le BAS, une enveloppe sur les parois. Se
+/// tromper d'ancrage donne une pyramide flottante ou des murs décalés — et
+/// les deux sont des images parfaitement plausibles.
+#[test]
+fn chaque_volume_se_pose_ou_il_doit() {
+    use tf_ops::{Forme, Volume};
+    use tf_world::coords::{BBox, BlockPos};
+
+    let sel = BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(20, 20, 20));
+
+    assert!(matches!(Volume::Aucun.forme(&sel, None), Forme::Boite));
+
+    // La sphère est CENTRÉE, et ses bornes tiennent dans la sélection.
+    let b = Volume::Sphere { rayon: 5.0 }
+        .forme(&sel, None)
+        .bornes()
+        .expect("une sphère est bornée");
+    assert_eq!(b.min.x, 5);
+    assert_eq!(b.max.x, 15);
+
+    // La pyramide part du BAS : sa base est à y = 0, pas au centre.
+    let b = Volume::Pyramide {
+        demi_base: 6.0,
+        hauteur: 8.0,
+        renversee: false,
+    }
+    .forme(&sel, None)
+    .bornes()
+    .expect("une pyramide est bornée");
+    assert_eq!(b.min.y, 0, "la pyramide flotte");
+
+    // Renversée, elle pend du HAUT.
+    let b = Volume::Pyramide {
+        demi_base: 6.0,
+        hauteur: 8.0,
+        renversee: true,
+    }
+    .forme(&sel, None)
+    .bornes()
+    .unwrap();
+    assert_eq!(b.max.y, 20);
+
+    // Une enveloppe est PRISE sur la sélection : elle en couvre les bornes.
+    let b = Volume::Murs { epaisseur: 1.0 }
+        .forme(&sel, None)
+        .bornes()
+        .unwrap();
+    assert_eq!((b.min.x, b.max.x), (0, 20));
+    assert!(Volume::Murs { epaisseur: 1.0 }.enveloppe());
+    assert!(!Volume::Sphere { rayon: 1.0 }.enveloppe());
+}
+
+/// **Un volume négatif se prend en division PLANCHER.** Le bloc −1 est dans la
+/// région −1 : tronquer vers zéro décale le centre d'un bloc d'un seul côté de
+/// l'origine, ce qui se lit « la sphère n'est pas au milieu », et seulement
+/// pour les builds à coordonnées négatives.
+#[test]
+fn le_centre_d_un_volume_se_prend_en_division_plancher() {
+    use tf_ops::Volume;
+    use tf_world::coords::{BBox, BlockPos};
+
+    let sel = BBox::new(BlockPos::new(-9, -9, -9), BlockPos::new(0, 0, 0));
+    let b = Volume::Sphere { rayon: 2.0 }
+        .forme(&sel, None)
+        .bornes()
+        .unwrap();
+    // (−9 + 0) / 2 vaut −5 en plancher, −4 en troncature.
+    assert_eq!(b.min.x, -7);
+    assert_eq!(b.max.x, -3);
+}
+
+/// Creuser une forme la vide GÉOMÉTRIQUEMENT — il retire le centre du volume
+/// qu'on vient de poser, là où `//hollow` INSPECTE ce qui est relié au dehors.
+#[test]
+fn un_volume_creux_est_une_coque() {
+    use tf_ops::{Couverture, Forme, Volume};
+    use tf_world::coords::{BBox, BlockPos};
+
+    let sel = BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(20, 20, 20));
+    let pleine = Volume::Sphere { rayon: 8.0 }.forme(&sel, None);
+    let creuse = Volume::Sphere { rayon: 8.0 }.forme(&sel, Some(2.0));
+    assert!(matches!(creuse, Forme::Coque { .. }));
+
+    // Le CENTRE est dans la pleine et hors de la creuse. C'est toute la
+    // différence, et elle se dit sur un point, pas sur un type.
+    let c = [10, 10, 10];
+    assert!(pleine.contient(c[0], c[1], c[2]));
+    assert!(!creuse.contient(c[0], c[1], c[2]));
+    // Et la paroi est dans les deux.
+    assert!(pleine.contient(17, 10, 10));
+    assert!(creuse.contient(17, 10, 10));
+    let _ = Couverture::Dedans;
+}

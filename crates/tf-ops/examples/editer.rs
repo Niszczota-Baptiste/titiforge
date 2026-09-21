@@ -30,7 +30,7 @@ use tf_anvil::Interner;
 use tf_blocks::Transfo;
 use tf_ops::catalogue::{construire, Params, Valeur, OPS};
 use tf_ops::executer::{executer, Options};
-use tf_ops::Forme;
+use tf_ops::Volume;
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::decoupe::Niveau;
 use tf_world::selection::{Direction, Selection, DIRECTIONS};
@@ -65,6 +65,10 @@ struct Args {
     /// sens.
     volume: Volume,
     creux: Option<f64>,
+    /// **Un drapeau à part, appliqué à la FIN.** `--renversee` peut précéder
+    /// `--pyramide` sur la ligne de commande, et l'ordre des options n'a
+    /// jamais de sens. Le poser directement dans le volume le perdait quand
+    /// il arrivait le premier — regression attrapée en essayant la commande.
     renversee: bool,
     /// Gestes de SÉLECTION, appliqués dans l'ordre AVANT l'opération.
     ///
@@ -84,18 +88,6 @@ enum Geste {
     /// Étend la HAUTEUR aux sections entières — l'autre moitié de ce qui
     /// donne l'étage palette.
     AlignerSections,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Volume {
-    Aucun,
-    Sphere(f64),
-    Cylindre(f64, f64),
-    Pyramide(f64, f64),
-    /// Les quatre parois verticales de la sélection — `//walls`.
-    Murs(f64),
-    /// Ses six faces — `//faces`.
-    Faces(f64),
 }
 
 fn usage() -> ! {
@@ -382,12 +374,35 @@ fn lire_args() -> Args {
                 args.params
                     .poser("profondeur", Valeur::Entier(nombre(a.next()) as i64));
             }
-            "--sphere" => args.volume = Volume::Sphere(nombre(a.next())),
-            "--cylindre" => args.volume = Volume::Cylindre(nombre(a.next()), nombre(a.next())),
-            "--pyramide" => args.volume = Volume::Pyramide(nombre(a.next()), nombre(a.next())),
+            "--sphere" => {
+                args.volume = Volume::Sphere {
+                    rayon: nombre(a.next()),
+                }
+            }
+            "--cylindre" => {
+                args.volume = Volume::Cylindre {
+                    rayon: nombre(a.next()),
+                    hauteur: nombre(a.next()),
+                }
+            }
+            "--pyramide" => {
+                args.volume = Volume::Pyramide {
+                    demi_base: nombre(a.next()),
+                    hauteur: nombre(a.next()),
+                    renversee: false,
+                }
+            }
             "--creux" => args.creux = Some(nombre(a.next())),
-            "--murs" => args.volume = Volume::Murs(nombre(a.next())),
-            "--faces" => args.volume = Volume::Faces(nombre(a.next())),
+            "--murs" => {
+                args.volume = Volume::Murs {
+                    epaisseur: nombre(a.next()),
+                }
+            }
+            "--faces" => {
+                args.volume = Volume::Faces {
+                    epaisseur: nombre(a.next()),
+                }
+            }
             "--renversee" => args.renversee = true,
             "--tourner" => {
                 transfo = Some(match a.next().unwrap_or_else(|| usage()).as_str() {
@@ -425,6 +440,11 @@ fn lire_args() -> Args {
     if let Some(v) = transfo {
         args.params
             .poser("transformation", Valeur::Transformation(Some(v)));
+    }
+    if args.renversee {
+        if let Volume::Pyramide { renversee, .. } = &mut args.volume {
+            *renversee = true;
+        }
     }
     args
 }
@@ -645,50 +665,25 @@ fn main() {
         );
     }
 
-    // Les formes sont centrées sur la SÉLECTION. Le milieu se prend en
-    // division PLANCHER : `(-9 + -1) / 2` vaut −5 en Rust comme en euclidien,
-    // mais `(-9 + 0) / 2` vaut −4 dans un sens et −5 dans l'autre — et le
-    // bloc −1 est dans la région −1, pas la région 0.
-    let centre = [
-        (sel.min.x + sel.max.x).div_euclid(2),
-        (sel.min.y + sel.max.y).div_euclid(2),
-        (sel.min.z + sel.max.z).div_euclid(2),
-    ];
-    let forme = match args.volume {
-        Volume::Aucun => Forme::Boite,
-        Volume::Sphere(r) => Forme::sphere(centre, r),
-        Volume::Cylindre(r, h) => Forme::cylindre(centre, r, h),
-        // La pyramide se pose sur le BAS de la sélection, pas sur son centre :
-        // une pyramide flottante n'est ce que personne ne demande.
-        Volume::Pyramide(b, h) => Forme::pyramide(
-            [
-                centre[0],
-                if args.renversee { sel.max.y } else { sel.min.y },
-                centre[2],
-            ],
-            b,
-            h,
-            args.renversee,
-        ),
-        // Les murs et les faces se prennent sur la SÉLECTION, pas sur un
-        // centre et un rayon : c'est une enveloppe, pas un volume posé.
-        Volume::Murs(e) => Forme::murs(sel, e),
-        Volume::Faces(e) => Forme::faces(sel, e),
-    };
-    let forme = match args.creux {
-        Some(e) => forme.creuse(e),
-        None => forme,
-    };
+    // Les formes sont centrées sur la SÉLECTION, et `Volume::forme` est la
+    // seule table qui le sache — la coque y lit la même chose.
+    let forme = args.volume.forme(&sel, args.creux);
     if let Some(b) = forme.bornes() {
         let (fx, fy, fz) = b.size();
         // Une enveloppe n'est pas « centrée » : elle est PRISE sur la
         // sélection. Le dire autrement laisserait croire qu'on peut la
         // déplacer avec un centre.
-        let ou = match args.volume {
-            Volume::Murs(_) | Volume::Faces(_) => "prise sur la sélection".to_string(),
-            _ => format!("centrée sur {},{},{}", centre[0], centre[1], centre[2]),
+        let ou = if args.volume.enveloppe() {
+            "prise sur la sélection".to_string()
+        } else {
+            format!(
+                "centrée sur {},{},{}",
+                (sel.min.x + sel.max.x).div_euclid(2),
+                (sel.min.y + sel.max.y).div_euclid(2),
+                (sel.min.z + sel.max.z).div_euclid(2)
+            )
         };
-        println!("forme : {fx} × {fy} × {fz} · {ou}");
+        println!("forme : {} · {fx} × {fy} × {fz} · {ou}", args.volume.nom());
     }
 
     // La copie de travail vit à côté, dans un dossier temporaire. La save

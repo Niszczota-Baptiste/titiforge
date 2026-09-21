@@ -60,10 +60,13 @@ fn barre(ui: &mut Ui, e: &mut Etat) {
                 .color(GRIS),
         );
         ui.separator();
+        // La légende vient de l'OUTIL, pas d'une phrase écrite à côté : deux
+        // constantes indépendantes finissent par diverger, et une barre qui
+        // annonce le mauvais bouton est pire qu'une barre muette.
         ui.label(
             RichText::new(match e.mode {
                 Mode::Edition => "gauche : coin 1 · droit : coin 2",
-                Mode::Conception => "gauche : tirer une FACE · droit : abandonner",
+                Mode::Conception => e.outil.legende(),
             })
             .color(if e.mode == Mode::Edition {
                 VERT
@@ -229,8 +232,36 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
 /// fois.** SketchUp affiche le nombre pendant le glissement, et c'est la
 /// moitié de sa précision.
 fn tirage(ui: &mut Ui, e: &mut Etat) {
+    use crate::etat::Outil;
     ui.add_space(10.0);
     ui.separator();
+    ui.label(RichText::new("OUTIL").strong().color(GRIS));
+    ui.horizontal_wrapped(|ui| {
+        for o in Outil::TOUS {
+            ui.selectable_value(&mut e.outil, o, o.nom());
+        }
+    });
+    if e.outil != Outil::Tirer {
+        ui.label(
+            RichText::new(
+                "Poser et casser ne visent pas la même case : un rayon touche \
+                 une FACE, donc un plan ENTRE deux cases. Le panneau du \
+                 réticule montre les deux.",
+            )
+            .small()
+            .color(GRIS),
+        );
+        ui.horizontal(|ui| {
+            ui.label("bloc");
+            ui.add(
+                egui::TextEdit::singleline(&mut e.bloc_tirage)
+                    .desired_width(180.0)
+                    .hint_text("minecraft:stone"),
+            );
+        });
+        return;
+    }
+    ui.add_space(6.0);
     ui.label(RichText::new("POUSSER-TIRER").strong().color(GRIS));
     match &e.tirage {
         None => {
@@ -350,6 +381,22 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
         }
     }
 
+    if d.cout.forme {
+        volume(ui, e);
+    }
+
+    // ── les réglages qui ne sont pas des paramètres d'opération
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut e.compter, "compter les blocs")
+            .on_hover_text(
+                "Coûte × 31 à l'étage palette : c'est le parcours qu'on vient \
+                 d'éviter. Un choix, jamais un service rendu d'office.",
+            );
+        ui.label("graine");
+        ui.add(egui::DragValue::new(&mut e.seed).speed(1.0));
+    });
+
     // ── ce que ça coûterait, avant de le faire
     ui.add_space(6.0);
     let resume = e.resume_selection();
@@ -373,18 +420,11 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
         ui.add_enabled_ui(pret, |ui| {
             if ui.button(RichText::new("Appliquer").strong()).clicked() {
                 // L'interface DÉCRIT ce qu'elle veut ; c'est la boucle qui
-                // envoie. Tenir un canal ici rendrait l'interface intestable
-                // sans fil.
-                if let Some(sel) = e.selection.boite() {
-                    e.demande = Some(crate::moteur::Commande::Appliquer {
-                        op: e.atelier.op(),
-                        params: e.atelier.params.clone(),
-                        sel,
-                        forme: tf_ops::Forme::Boite,
-                        compter: true,
-                        seed: 0,
-                    });
-                }
+                // envoie, et c'est l'ÉTAT qui construit la commande. La bâtir
+                // ici est ce qui avait fait perdre la forme, la graine et le
+                // comptage — trois réglages câblés en dur dans un bouton que
+                // personne ne teste.
+                e.demande = e.demande_operation();
             }
         });
         ui.add_enabled_ui(e.editable && !e.occupe, |ui| {
@@ -442,6 +482,84 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
             RichText::new("Tout se fait sur une COPIE de travail : la save n'est pas touchée.")
                 .small()
                 .color(GRIS),
+        );
+    }
+}
+
+/// Le VOLUME visé dans la sélection — et il n'apparaît que pour les
+/// opérations qui en acceptent un.
+///
+/// **Le catalogue le DIT** (`cout.forme`). Proposer une sphère à `//move`
+/// donnerait un réglage sans effet, ce qui est pire qu'un réglage absent :
+/// l'utilisateur croit avoir demandé quelque chose.
+fn volume(ui: &mut Ui, e: &mut Etat) {
+    use tf_ops::Volume;
+    ui.add_space(6.0);
+    ui.label(RichText::new("FORME").strong().color(GRIS));
+    let courant = e.volume.rang();
+    let mut choix = None;
+    ui.horizontal_wrapped(|ui| {
+        for v in Volume::TOUS {
+            if ui.selectable_label(v.rang() == courant, v.nom()).clicked() {
+                choix = Some(v);
+            }
+        }
+    });
+    if let Some(v) = choix {
+        // On repart des valeurs par défaut de la variante : garder un rayon
+        // en changeant de forme donnerait une pyramide de « rayon 8 », qui ne
+        // veut rien dire.
+        e.volume = v;
+    }
+    // Les champs de la forme choisie, engendrés depuis sa variante.
+    match &mut e.volume {
+        Volume::Aucun => {}
+        Volume::Sphere { rayon } => {
+            ui.add(egui::Slider::new(rayon, 1.0..=256.0).text("rayon"));
+        }
+        Volume::Cylindre { rayon, hauteur } => {
+            ui.add(egui::Slider::new(rayon, 1.0..=256.0).text("rayon"));
+            ui.add(egui::Slider::new(hauteur, 1.0..=256.0).text("demi-hauteur"));
+        }
+        Volume::Pyramide {
+            demi_base,
+            hauteur,
+            renversee,
+        } => {
+            ui.add(egui::Slider::new(demi_base, 1.0..=256.0).text("demi-base"));
+            ui.add(egui::Slider::new(hauteur, 1.0..=256.0).text("hauteur"));
+            ui.checkbox(renversee, "pointe en bas");
+        }
+        Volume::Murs { epaisseur } | Volume::Faces { epaisseur } => {
+            ui.add(egui::Slider::new(epaisseur, 1.0..=32.0).text("épaisseur"));
+        }
+    }
+    if !matches!(e.volume, Volume::Aucun) {
+        let mut creux = e.creux.is_some();
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut creux, "creuse").changed() {
+                e.creux = creux.then_some(1.0);
+            }
+            if let Some(ep) = &mut e.creux {
+                ui.add(egui::DragValue::new(ep).speed(0.5).range(0.5..=32.0));
+            }
+        });
+        ui.label(
+            RichText::new(
+                "« creuse » évide la FORME (//hsphere). Géométrique — à ne pas \
+                 confondre avec « Creuser », qui INSPECTE ce qui touche le dehors.",
+            )
+            .small()
+            .color(GRIS),
+        );
+        ui.label(
+            RichText::new(if e.volume.enveloppe() {
+                "prise sur la sélection"
+            } else {
+                "centrée sur la sélection"
+            })
+            .small()
+            .color(GRIS),
         );
     }
 }

@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use tf_app::etat::Etat;
+use tf_app::etat::Outil;
 use tf_app::moteur::Moteur;
 use tf_app::{interface, scene};
 use tf_render::controles::Mode;
@@ -203,14 +204,27 @@ impl ApplicationHandler for Coque {
                         (Mode::Edition, MouseButton::Right) => {
                             g.etat.poser_coin(false);
                         }
-                        // **Conception** : gauche attrape une FACE et la
-                        // tire ; droit abandonne le geste en cours.
-                        (Mode::Conception, MouseButton::Left) => {
+                        // **Conception** : l'OUTIL décide. Le mode dit ce
+                        // qu'on manipule, l'outil dit avec quoi.
+                        (Mode::Conception, b) => {
                             let (cam, aspect) = vue_courante(g);
-                            g.etat.attraper(&cam, aspect);
-                        }
-                        (Mode::Conception, MouseButton::Right) => {
-                            g.etat.abandonner();
+                            match (g.etat.outil, b) {
+                                (Outil::Tirer, MouseButton::Left) => {
+                                    g.etat.attraper(&cam, aspect);
+                                }
+                                (Outil::Tirer, MouseButton::Right) => {
+                                    g.etat.abandonner();
+                                }
+                                (Outil::Poser, MouseButton::Left)
+                                | (Outil::Casser, MouseButton::Right) => {
+                                    g.etat.demande = g.etat.poser_un_bloc();
+                                }
+                                (Outil::Poser, MouseButton::Right)
+                                | (Outil::Casser, MouseButton::Left) => {
+                                    g.etat.demande = g.etat.casser_un_bloc();
+                                }
+                                _ => {}
+                            }
                         }
                         _ => {}
                     }

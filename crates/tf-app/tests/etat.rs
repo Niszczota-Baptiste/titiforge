@@ -724,3 +724,227 @@ fn tirer_une_face_negative_va_dans_le_bon_sens() {
         BBox::new(BlockPos::new(-4, 0, 0), BlockPos::new(-1, 9, 9))
     );
 }
+
+// ── ce qu'un « Appliquer » envoie vraiment ──────────────────────────────────
+
+fn avec_selection() -> Etat {
+    let mut e = Etat::cadre([0.0; 3], [64.0; 3], 1.0);
+    e.selection.poser_coin1(BlockPos::new(0, 0, 0));
+    e.selection.poser_coin2(BlockPos::new(31, 31, 31));
+    e
+}
+
+/// **La FORME choisie doit arriver au moteur.** Elle était câblée à
+/// `Forme::Boite` dans le bouton : sphère, cylindre, pyramide, murs et faces
+/// étaient écrits, testés, offerts par la ligne de commande — et
+/// inatteignables depuis l'interface. « Déclaré, branché, testé, et personne
+/// ne le propose », dans sa version la plus coûteuse : cinq formes perdues.
+#[test]
+fn la_commande_porte_la_forme_choisie() {
+    let mut e = avec_selection();
+    assert!(e.atelier.choisir("poser"));
+
+    // Sans forme : toute la sélection.
+    let tf_app::moteur::Commande::Appliquer { forme, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    assert!(matches!(forme, tf_ops::Forme::Boite));
+
+    // Avec une sphère : la forme est bornée, et PLUS PETITE que la sélection.
+    e.volume = tf_ops::Volume::Sphere { rayon: 5.0 };
+    let tf_app::moteur::Commande::Appliquer { forme, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    let b = forme.bornes().expect("une sphère est bornée");
+    assert_eq!(b.size(), (11, 11, 11));
+
+    // Et « creuse » en fait une coque.
+    e.creux = Some(2.0);
+    let tf_app::moteur::Commande::Appliquer { forme, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    assert!(matches!(forme, tf_ops::Forme::Coque { .. }));
+}
+
+/// **Une opération qui n'accepte pas de forme n'en reçoit pas.** Le catalogue
+/// le dit (`cout.forme`) ; lui en passer une quand même ferait `//move`
+/// déplacer une sphère de son contenu, et le réglage resterait à l'écran en
+/// laissant croire qu'il fait quelque chose.
+#[test]
+fn une_operation_sans_forme_n_en_recoit_pas() {
+    let mut e = avec_selection();
+    e.volume = tf_ops::Volume::Sphere { rayon: 5.0 };
+
+    assert!(e.atelier.choisir("deplacer"));
+    assert!(!e.atelier.descripteur().cout.forme);
+    let tf_app::moteur::Commande::Appliquer { forme, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    assert!(
+        matches!(forme, tf_ops::Forme::Boite),
+        "« déplacer » a reçu une forme"
+    );
+
+    // Alors que « remplir », qui en accepte une, la reçoit.
+    assert!(e.atelier.choisir("poser"));
+    assert!(e.atelier.descripteur().cout.forme);
+    let tf_app::moteur::Commande::Appliquer { forme, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    assert!(!matches!(forme, tf_ops::Forme::Boite));
+}
+
+/// **Le comptage est un CHOIX, la graine un réglage.** Les deux étaient câblés
+/// en dur dans le bouton : `compter: true` viole un invariant écrit noir sur
+/// blanc (× 31 à l'étage palette, jamais rendu d'office), et `seed: 0` rendait
+/// tous les mélanges identiques d'un projet à l'autre.
+#[test]
+fn la_commande_porte_le_comptage_et_la_graine() {
+    let mut e = avec_selection();
+    e.compter = false;
+    e.seed = 4242;
+    let tf_app::moteur::Commande::Appliquer { compter, seed, .. } = e.demande_operation().unwrap()
+    else {
+        panic!()
+    };
+    assert!(!compter);
+    assert_eq!(seed, 4242);
+
+    e.compter = true;
+    let tf_app::moteur::Commande::Appliquer { compter, .. } = e.demande_operation().unwrap() else {
+        panic!()
+    };
+    assert!(compter);
+}
+
+/// Sans sélection, il n'y a rien à envoyer — et surtout pas une commande sur
+/// une boîte inventée.
+#[test]
+fn sans_selection_il_n_y_a_pas_de_commande() {
+    let e = Etat::cadre([0.0; 3], [64.0; 3], 1.0);
+    assert!(e.selection.boite().is_none());
+    assert!(e.demande_operation().is_none());
+}
+
+/// Le pousser-tirer porte les mêmes réglages, SAUF la forme : on tire une
+/// face, donc on remplit une dalle. Une sphère appliquée à une tranche n'a
+/// aucun sens.
+#[test]
+fn le_tirage_porte_les_reglages_mais_pas_la_forme() {
+    let (mut e, cam) = devant_un_cube();
+    e.compter = false;
+    e.seed = 7;
+    e.volume = tf_ops::Volume::Sphere { rayon: 5.0 };
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [14.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    let tf_app::moteur::Commande::Appliquer {
+        forme,
+        compter,
+        seed,
+        ..
+    } = e.lacher().unwrap()
+    else {
+        panic!()
+    };
+    assert!(
+        matches!(forme, tf_ops::Forme::Boite),
+        "une tranche est une dalle"
+    );
+    assert!(!compter);
+    assert_eq!(seed, 7);
+}
+
+// ── les outils de Conception ────────────────────────────────────────────────
+
+/// **Le geste qui rend l'inférence ATTEIGNABLE.**
+///
+/// Elle était écrite, testée, affichée dans le panneau — et aucun outil ne
+/// s'en servait. « Déclaré, branché, testé, et inatteignable » dans sa forme
+/// la plus discrète : la pièce marche, personne ne l'appelle.
+#[test]
+fn poser_un_bloc_passe_par_l_accrochage() {
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let accroche = e.reticule.accroche.unwrap().position;
+    assert_ne!(
+        Some(accroche),
+        e.reticule.pose,
+        "sinon le test ne distingue rien"
+    );
+
+    e.bloc_tirage = "minecraft:glowstone".into();
+    let tf_app::moteur::Commande::Appliquer {
+        op, sel, params, ..
+    } = e.poser_un_bloc().expect("le réticule désigne une case")
+    else {
+        panic!()
+    };
+    assert_eq!(op, "poser");
+    // **Une case, et une seule** : l'invariant « une opération ne paie que sa
+    // portée » à sa plus petite échelle.
+    assert_eq!(sel, BBox::single(accroche));
+    assert_eq!(
+        params.get("bloc"),
+        Some(&tf_ops::catalogue::Valeur::texte("minecraft:glowstone"))
+    );
+}
+
+/// **Poser et casser ne visent pas la même case.** Un rayon touche une FACE,
+/// donc un plan ENTRE deux cases : c'est le piège d'`ExeWorldEdit` que `viser`
+/// existe pour fermer, et il se refermerait si l'un des deux gestes prenait la
+/// case de l'autre.
+#[test]
+fn casser_vise_la_case_arretee_et_poser_celle_d_avant() {
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let visee = e.reticule.case.unwrap();
+
+    let tf_app::moteur::Commande::Appliquer { sel, params, .. } = e.casser_un_bloc().unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(sel, BBox::single(visee), "casser doit viser le bloc touché");
+    assert_eq!(
+        params.get("bloc"),
+        Some(&tf_ops::catalogue::Valeur::texte("minecraft:air"))
+    );
+
+    // Et la pose est AILLEURS — devant le mur, pas dedans.
+    let tf_app::moteur::Commande::Appliquer { sel: pose, .. } = e.poser_un_bloc().unwrap() else {
+        panic!()
+    };
+    assert_ne!(pose, sel, "poser dans le mur qu'on casse");
+}
+
+/// Rien sous le réticule : aucun geste. Un clic dans le ciel ne doit pas
+/// poser un bloc à une coordonnée inventée.
+#[test]
+fn sans_reticule_il_n_y_a_ni_pose_ni_cassure() {
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    assert!(e.poser_un_bloc().is_none());
+    assert!(e.casser_un_bloc().is_none());
+}
+
+/// La légende de la barre vient de l'OUTIL. Deux constantes indépendantes
+/// finissent par diverger, et une barre qui annonce le mauvais bouton est pire
+/// qu'une barre muette.
+#[test]
+fn chaque_outil_dit_ce_que_font_les_boutons() {
+    use tf_app::etat::Outil;
+    let mut vus = std::collections::BTreeSet::new();
+    for o in Outil::TOUS {
+        assert!(!o.nom().is_empty());
+        let l = o.legende();
+        assert!(l.contains("gauche") && l.contains("droit"), "{l}");
+        assert!(vus.insert(l), "deux outils annoncent la même chose : {l}");
+    }
+    assert_eq!(vus.len(), Outil::TOUS.len());
+}

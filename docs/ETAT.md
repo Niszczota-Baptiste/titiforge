@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **744**, zéro échec |
+| Tests | **757**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-744 tests, répartis par ce qu'ils PROUVENT :
+757 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -56,7 +56,7 @@ cargo test --workspace
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
 | `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
 | `tf-ops` naturaliser | 11 | la portée `Colonne`, et qu'une colonne n'a qu'UNE surface |
-| `tf-ops` forme | 12 | le verdict par section d'une forme, croisé aux 4 096 cases |
+| `tf-ops` forme | 16 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-ops` creuser | 12 | `//hollow` : le critère est TOPOLOGIQUE, et un coffre vidé ne revient pas en fantôme |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
@@ -68,7 +68,7 @@ cargo test --workspace
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 28 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` chantier | 2 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; et que la SAUVEGARDE porte le monde d'AVANT, octet pour octet (demande `TF_PACK`) |
 | `tf-app` moteur | 9 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
@@ -99,6 +99,14 @@ Trois propriétés valent d'être nommées :
   d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
   croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
   pas vu ce qui le fait rougir.
+- **L'AUDIT de fin de phase a trouvé quatre trous, tous du même genre.** Les
+  formes (sphère, cylindre, pyramide, murs, faces), le comptage, la graine et
+  l'accrochage à la POSE étaient écrits, testés, offerts par la ligne de
+  commande — et inatteignables depuis l'interface : trois réglages câblés en
+  dur dans un bouton, et une fonction que seuls ses propres tests appelaient.
+  « Déclaré, branché, testé — et inatteignable » ne se referme pas une fois
+  pour toutes ; il se rouvre chaque fois qu'un hôte nouveau n'expose pas ce que
+  le moteur offre. Quatre mutations le tiennent maintenant fermé.
 - **L'accrochage du pousser-tirer aussi, et c'est lui qui a le plus appris.**
   Quatre mutations, TROIS survivantes au premier tour. La première disait que
   j'avais écrit du code mort : les deux axes verrouillés « parce qu'une face ne

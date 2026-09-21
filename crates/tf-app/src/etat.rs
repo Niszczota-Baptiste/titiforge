@@ -209,6 +209,51 @@ pub fn octets(n: u64) -> String {
     }
 }
 
+/// **Ce que le clic gauche fait, en Conception.**
+///
+/// Le mode dit ce qu'on manipule ; l'outil dit avec quoi. Deux constantes
+/// indépendantes finiraient par diverger — `ExeWorldEdit` a livré une liste
+/// affichant « Copier » pendant que le bouton disait « Remplir » — donc
+/// l'outil est porté par l'état, la barre le LIT, et le clic l'interroge.
+///
+/// Trois outils, et pas un de plus pour l'instant : c'est le minimum qui
+/// rende l'inférence ATTEIGNABLE. Elle était écrite, testée, affichée — et
+/// aucun geste ne s'en servait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Outil {
+    /// Attraper une face de la sélection et la tirer.
+    #[default]
+    Tirer,
+    /// Poser un bloc devant ce qu'on vise, à l'endroit que l'inférence
+    /// désigne.
+    Poser,
+    /// Casser le bloc visé.
+    Casser,
+}
+
+impl Outil {
+    pub const TOUS: [Outil; 3] = [Outil::Tirer, Outil::Poser, Outil::Casser];
+
+    pub const fn nom(self) -> &'static str {
+        match self {
+            Outil::Tirer => "Tirer une face",
+            Outil::Poser => "Poser",
+            Outil::Casser => "Casser",
+        }
+    }
+
+    /// Ce que la barre annonce. **Le clic droit garde toujours le même sens
+    /// dans un outil donné** — un bouton qui change de rôle selon l'outil est
+    /// un bouton qu'on n'ose plus cliquer.
+    pub const fn legende(self) -> &'static str {
+        match self {
+            Outil::Tirer => "gauche : tirer une FACE · droit : abandonner",
+            Outil::Poser => "gauche : poser · droit : casser",
+            Outil::Casser => "gauche : casser · droit : poser",
+        }
+    }
+}
+
 /// **Un pousser-tirer en cours.**
 ///
 /// Le premier tiers de SketchUp, et c'est un GESTE, pas une structure de
@@ -243,9 +288,30 @@ pub struct Etat {
     pub quadrillage: Quadrillage,
     /// Tolérance d'accrochage, en blocs. Zéro l'éteint.
     pub tolerance: i32,
+    /// Le VOLUME visé dans la sélection — sphère, cylindre, murs…
+    ///
+    /// Gardé ici et non dans les paramètres de l'opération : il vient des
+    /// gestes, pas du descripteur, et il doit survivre au changement
+    /// d'opération. Le mettre dans le formulaire le ferait réapparaître comme
+    /// un champ de chaque opération, ce qu'il n'est pas.
+    pub volume: tf_ops::Volume,
+    /// Évide la FORME — `//hsphere`. Géométrique, pas topologique.
+    pub creux: Option<f64>,
+    /// Compter les blocs modifiés exactement.
+    ///
+    /// **× 31 à l'étage palette** : c'est le parcours qu'on vient d'éviter.
+    /// Un choix, jamais un service rendu d'office — je l'avais câblé à `true`
+    /// dans le bouton, ce qui est très exactement ce que ce dépôt s'interdit.
+    pub compter: bool,
+    /// La graine des tirages. Zéro en dur rendait tous les mélanges
+    /// identiques d'un projet à l'autre, et elle n'était réglable nulle part.
+    pub seed: u64,
     pub reticule: SousLeReticule,
     /// L'opération choisie et ses paramètres.
     pub atelier: Atelier,
+    /// L'outil de Conception. Sans effet en Édition, où gauche et droit
+    /// posent les deux coins.
+    pub outil: Outil,
     /// Le pousser-tirer en cours, s'il y en a un.
     pub tirage: Option<Tirage>,
     /// Le bloc que le pousser-tirer pose. Celui de l'opération choisie quand
@@ -300,8 +366,13 @@ impl Etat {
             selection: Selection::nouvelle(),
             quadrillage: Quadrillage::default(),
             tolerance: TOLERANCE,
+            volume: tf_ops::Volume::Aucun,
+            creux: None,
+            compter: true,
+            seed: 0,
             reticule: SousLeReticule::default(),
             atelier: Atelier::default(),
+            outil: Outil::default(),
             tirage: None,
             bloc_tirage: "minecraft:stone".into(),
             demande: None,
@@ -550,9 +621,12 @@ impl Etat {
             op: "poser",
             params,
             sel: zone,
+            // **La tranche n'est pas un volume.** Une sphère appliquée à ce
+            // qu'un tirage ajoute n'aurait aucun sens : on tire une face,
+            // donc on remplit une dalle.
             forme: tf_ops::Forme::Boite,
-            compter: true,
-            seed: 0,
+            compter: self.compter,
+            seed: self.seed,
         })
     }
 
@@ -566,6 +640,76 @@ impl Etat {
         self.selection = t.depart;
         self.message = "tirage abandonné".into();
         true
+    }
+
+    /// La commande qu'un « Appliquer » enverrait, ou rien si la sélection
+    /// manque.
+    ///
+    /// **Ici et pas dans le dessin de l'interface** : une commande construite
+    /// au milieu d'un bouton est une commande qu'aucun test ne voit passer, et
+    /// c'est là que les réglages se perdent — la forme, la graine et le
+    /// comptage y étaient câblés en dur.
+    pub fn demande_operation(&self) -> Option<crate::moteur::Commande> {
+        let sel = self.selection.boite()?;
+        let d = self.atelier.descripteur();
+        Some(crate::moteur::Commande::Appliquer {
+            op: self.atelier.op(),
+            params: self.atelier.params.clone(),
+            sel,
+            // Une opération qui n'accepte pas de forme n'en reçoit pas : le
+            // catalogue le DIT (`cout.forme`), et lui en passer une quand
+            // même ferait `//move` déplacer une sphère de son contenu.
+            forme: if d.cout.forme {
+                self.volume.forme(&sel, self.creux)
+            } else {
+                tf_ops::Forme::Boite
+            },
+            compter: self.compter,
+            seed: self.seed,
+        })
+    }
+
+    /// **Pose un bloc là où l'inférence le désigne.**
+    ///
+    /// C'est le geste qui rend l'accrochage ATTEIGNABLE : il était écrit,
+    /// testé, affiché dans le panneau — et aucun outil ne s'en servait.
+    /// « Déclaré, branché, testé — et inatteignable », dans sa forme la plus
+    /// discrète : la pièce marche, personne ne l'appelle.
+    ///
+    /// La case est celle d'AVANT — on pose devant le mur, pas dedans — et
+    /// l'accrochage l'a déjà corrigée axe par axe, l'axe de la face resté
+    /// verrouillé.
+    pub fn poser_un_bloc(&mut self) -> Option<crate::moteur::Commande> {
+        let p = self.point_de_pose()?;
+        self.commande_une_case(p, self.bloc_tirage.clone())
+    }
+
+    /// Casse le bloc VISÉ — celui qui a arrêté le rayon, pas celui d'avant.
+    ///
+    /// Poser et casser ne visent pas la même case : un rayon touche une FACE,
+    /// donc un plan ENTRE deux cases. C'est le piège d'`ExeWorldEdit` que
+    /// `viser` existe pour fermer, et il se refermerait ici si l'un des deux
+    /// gestes prenait la case de l'autre.
+    pub fn casser_un_bloc(&mut self) -> Option<crate::moteur::Commande> {
+        let c = self.reticule.case?;
+        self.commande_une_case(c, "minecraft:air".to_string())
+    }
+
+    /// Une opération sur UNE case. Elle ne paie que sa portée — c'est
+    /// l'invariant n° 8, à sa plus petite échelle.
+    fn commande_une_case(&self, p: BlockPos, bloc: String) -> Option<crate::moteur::Commande> {
+        let mut params = Params::new();
+        params.poser("bloc", Valeur::Texte(bloc));
+        Some(crate::moteur::Commande::Appliquer {
+            op: "poser",
+            params,
+            sel: tf_world::coords::BBox::single(p),
+            forme: tf_ops::Forme::Boite,
+            // Un bloc : le compte ne coûte rien et il RENSEIGNE — zéro dit
+            // « c'était déjà ça », ce qui n'est pas une panne.
+            compter: true,
+            seed: self.seed,
+        })
     }
 
     /// Ce que le panneau de sélection affiche.

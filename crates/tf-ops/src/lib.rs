@@ -37,7 +37,7 @@ pub use colonnes::{Colonnes, Portee};
 pub use creuser::{creuser, extrait_creuse, Creux};
 pub use edition::{deplacer, empiler, Pas};
 pub use executer::{executer, CompteRendu, Options, Regle};
-pub use forme::{Couverture, Forme};
+pub use forme::{Couverture, Forme, Volume};
 pub use hash::hash3;
 pub use masque::Masque;
 pub use motif::{Motif, Tirage};
