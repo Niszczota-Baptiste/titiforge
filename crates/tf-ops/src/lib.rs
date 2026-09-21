@@ -23,6 +23,7 @@ pub mod motif;
 pub mod naturaliser;
 pub mod plan;
 pub mod presse;
+pub mod relief;
 
 pub use biome::PoserBiome;
 pub use colonnes::{Colonnes, Portee};
@@ -34,3 +35,4 @@ pub use motif::{Motif, Tirage};
 pub use naturaliser::Naturaliser;
 pub use plan::{Etage, Operation, Plan, Rapport};
 pub use presse::{Collage, Presse, TransfoBoite, Transforme};
+pub use relief::{relever, Carte, Lissage, SANS_SOL};

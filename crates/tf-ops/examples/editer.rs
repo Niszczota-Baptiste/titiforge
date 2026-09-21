@@ -30,6 +30,7 @@ use tf_anvil::Interner;
 use tf_blocks::Transfo;
 use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::{Operation, Plan};
+use tf_ops::relief::{relever, Lissage};
 use tf_ops::{Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::source::{Dimension, Folder, RegionSource};
@@ -62,6 +63,8 @@ struct Args {
     /// Surface, sous-sol, roche d'une naturalisation.
     couches: [String; 3],
     profondeur: u32,
+    /// Passes de lissage. Zéro vaut une — l'option est facultative.
+    passes: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -102,6 +105,10 @@ enum Op {
     Naturaliser,
     /// `//setbiome` : poser un biome. Grille de 4 × 4 × 4, pas de bloc.
     Biome(String),
+    /// `//smooth` : moyenner la hauteur du terrain avec celle de ses voisines.
+    Lisser {
+        rayon: u32,
+    },
 }
 
 fn usage() -> ! {
@@ -130,6 +137,11 @@ fn usage() -> ! {
   --biome <nom>              //setbiome. ATTENTION : un biome se pose par
                              CELLULE de 4 × 4 × 4 blocs — une sélection qui ne
                              tombe pas sur un multiple de 4 déborde d'autant
+  --lisser <rayon>           //smooth : moyenne la hauteur du terrain avec
+                             celle de ses voisines. La lecture DÉBORDE de la
+                             sélection du rayon, sinon son bord se lisserait
+                             contre le vide
+  --passes <n>               répétitions du lissage (défaut 1)
   --sphere <rayon>           //sphere : restreint l'opération à une sphère
   --cylindre <rayon> <haut>  //cyl, axe vertical
   --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
@@ -190,6 +202,7 @@ fn lire_args() -> Args {
             "minecraft:stone".to_string(),
         ],
         profondeur: 3,
+        passes: 0,
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -293,6 +306,16 @@ fn lire_args() -> Args {
             "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
             "--naturaliser" => args.op = Some(Op::Naturaliser),
             "--biome" => args.op = Some(Op::Biome(a.next().unwrap_or_else(|| usage()))),
+            // Le nombre de passes est une option à part et non un second
+            // argument positionnel : `std::env::Args` ne se relit pas, donc
+            // « est-ce un nombre ou l'option suivante ? » ne se décide pas
+            // sans consommer. Une option nommée ne pose pas la question.
+            "--lisser" => {
+                args.op = Some(Op::Lisser {
+                    rayon: nombre(a.next()) as u32,
+                })
+            }
+            "--passes" => args.passes = nombre(a.next()) as u32,
             "--couches" => {
                 args.couches = [
                     a.next().unwrap_or_else(|| usage()),
@@ -496,7 +519,7 @@ fn main() {
     let (Some(op), Some(sel)) = (args.op, args.sel) else {
         println!(
             "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
-             --copier-vers / --deplacer / --empiler / --naturaliser / --biome)"
+             --copier-vers / --deplacer / --empiler / --naturaliser / --biome / --lisser)"
         );
         return;
     };
@@ -522,7 +545,8 @@ fn main() {
         | Op::Deplacer { .. }
         | Op::Empiler { .. }
         | Op::Naturaliser
-        | Op::Biome(_) => Plan::nouveau(Masque::Tout, Motif::Garder),
+        | Op::Biome(_)
+        | Op::Lisser { .. } => Plan::nouveau(Masque::Tout, Motif::Garder),
     }
     .avec_seed(args.seed);
     let plan = if args.compter {
@@ -729,6 +753,54 @@ fn main() {
                 compter: args.compter,
             };
             appliquer(&staging, &args.dim, Folder::Region, &sel, &op, &interner)
+        }
+        Op::Lisser { rayon } => {
+            let passes = args.passes.max(1);
+            // **La lecture déborde de la sélection**, du rayon du noyau. Sans
+            // cette marge, le bord se moyennerait contre des colonnes qu'on
+            // n'a pas lues — donc contre du vide — et s'effondrerait.
+            let m = *rayon as i32;
+            let large = BBox::new(
+                BlockPos {
+                    x: sel.min.x - m,
+                    y: sel.min.y,
+                    z: sel.min.z - m,
+                },
+                BlockPos {
+                    x: sel.max.x + m,
+                    y: sel.max.y,
+                    z: sel.max.z + m,
+                },
+            );
+            let solide = Masque::Non(Box::new(Masque::Etat(air)));
+            let t0 = std::time::Instant::now();
+            match relever(
+                &staging,
+                &args.dim,
+                Folder::Region,
+                &large,
+                &solide,
+                &mut interner,
+            ) {
+                Ok(brute) => {
+                    let (sx, _, sz) = sel.size();
+                    let voulue = brute
+                        .lissee(*rayon, passes)
+                        .resserree(sel.min.x, sel.min.z, sx, sz);
+                    println!(
+                        "relief : {} colonnes relevées en {:.0} ms · rayon {rayon}, {passes} passe(s)",
+                        brute.h.len(),
+                        t0.elapsed().as_secs_f64() * 1000.0
+                    );
+                    let op = Lissage {
+                        carte: &voulue,
+                        vide: air,
+                        compter: args.compter,
+                    };
+                    appliquer(&staging, &args.dim, Folder::Region, &sel, &op, &interner)
+                }
+                Err(e) => Err(e),
+            }
         }
         Op::Naturaliser => {
             let mut n = Naturaliser::nouveau(

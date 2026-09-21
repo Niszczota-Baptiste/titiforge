@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **539**, zéro échec |
+| Tests | **549**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates non commencés | **tf-formats** (schematics) · **tf-app** (la coque) |
@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-539 tests, répartis par ce qu'ils PROUVENT :
+549 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -53,6 +53,7 @@ cargo test --workspace
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
+| `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
 | `tf-ops` naturaliser | 11 | la portée `Colonne`, et qu'une colonne n'a qu'UNE surface |
 | `tf-ops` forme | 12 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |

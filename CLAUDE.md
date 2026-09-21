@@ -181,7 +181,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (539 tests aujourd'hui)
+cargo test            # tous les crates (549 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -247,6 +247,7 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,31,-21,31" --poser minecraft:stone --murs 1
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,255,60,255" --naturaliser
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-64,0,63,63,63" --biome minecraft:desert
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-60,0,63,-20,63" --lisser 4 --passes 3
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -288,7 +289,7 @@ crates/
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
-               //naturalize ✅ · //setbiome ✅ · lissage, creuser à venir
+               //naturalize ✅ · //setbiome ✅ · //smooth ✅ · creuser à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
@@ -892,6 +893,22 @@ propres à ce dépôt.
   seul bloc en peint quatre par axe, parce que c'est l'unité du format. Taire
   le débordement ferait passer une propriété d'Anvil pour un bug de l'outil ;
   le rapport l'annonce à chaque `//setbiome`.
+- **Ce qui ne tient dans aucune portée se fait en DEUX PASSES.** Lisser
+  moyenne la hauteur d'une colonne avec celle de ses voisines, qui sont
+  parfois dans un autre chunk. Élargir la vue coûterait cher à tenir juste —
+  c'est le piège `cold_read`. La sortie est une passe de LECTURE, qui n'écrit
+  rien et n'a donc aucune portée à respecter, un calcul PUR sur la carte de
+  hauteurs, puis une écriture à portée `Colonne` qui applique une carte déjà
+  calculée. Une carte de mille blocs de côté fait quatre mégaoctets : elle
+  tient, et chaque chunk la lit en entier sans rien lui coûter.
+  **La lecture déborde de la sélection du rayon du noyau** — sans cette marge,
+  le bord se moyennerait contre des colonnes qu'on n'a pas lues, donc contre
+  du vide, et s'effondrerait.
+- **Une hauteur négative se moyenne en division PLANCHER.** Le monde descend à
+  −64 depuis 1.18. Une division qui tronque vers zéro remonte le relief d'un
+  bloc sous y = 0 et pas au-dessus : une marche d'un bloc à l'altitude zéro,
+  exactement là où personne ne la cherche. Et `SANS_SOL` n'est pas une hauteur
+  basse : le compter comme zéro creuse une fosse au bord de chaque sélection.
 - **Une opération qui lit HORS de sa section ne peut pas être une opération de
   section.** « Où est la surface » est une propriété de la COLONNE : décidée
   section par section, la naturalisation poserait une bande d'herbe tous les

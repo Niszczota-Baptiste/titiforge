@@ -179,7 +179,8 @@ staging, journal. Manque ce qui DÉPLACE.
 | Murs et faces (`//walls`, `//faces`) | ✅ — un pavé moins un pavé plus petit ; rien de neuf à tenir juste |
 | **Portée d'une opération** (`Portee::Colonne`) | ✅ — une opération déclare ce qu'elle lit, `edition.rs` lui donne la vue correspondante |
 | Naturalisation (`//naturalize`) | ✅ — première opération à portée `Colonne` : « où est la surface » ne se décide pas section par section |
-| Lissage, creuser | ⬜ — le lissage lit le voisin d'à CÔTÉ, donc au-delà du chunk ; creuser lit tout le volume. Il leur faut une portée de plus, et elle se mesurera avant d'être écrite |
+| Lissage (`//smooth`) | ✅ — résolu par DEUX PASSES plutôt qu'une vue plus large : une lecture qui n'écrit rien, un calcul pur, une écriture à portée `Colonne` |
+| Creuser (`//hollow`) | ⬜ — un remplissage par diffusion sur toute la sélection, donc la seule opération qui demande vraiment de matérialiser le volume. À mesurer avant d'être écrite |
 | **Les coffres suivent les blocs** | ✅ — l'entrée voyage par ses OCTETS et seules ses trois coordonnées sont réécrites ; une entité dont la case a changé d'état part avec son bloc |
 | Biomes : lecture, écriture, `//setbiome` | ✅ — seconde palette par section, grille de 4 × 4 × 4 ; 1.18+ seulement, et 1.13–1.17 est REFUSÉ plutôt que deviné |
 | La COULEUR d'un biome, dérivée du jeu | ✅ — table `colormap/grass.png` × `worldgen/biome/*.json`, formule du jeu à la lettre ; le marais est annoncé APPROCHÉ |
