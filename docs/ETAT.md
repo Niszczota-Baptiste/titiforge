@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **771**, zéro échec |
+| Tests | **772**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-771 tests, répartis par ce qu'ils PROUVENT :
+772 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -69,7 +69,7 @@ cargo test --workspace
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
-| `tf-app` chantier | 8 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
+| `tf-app` chantier | 9 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
 | `tf-app` moteur | 9 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
@@ -573,6 +573,18 @@ CHARGEMENT :
 Après quoi le poids s'est déplacé une fois de plus, et c'est écrit dans les
 trous : les arènes GPU se reconstruisent en entier, 3,5 ms sur 4,4. Sous le
 budget de 8 ms de la phase 5, donc pas encore le bon combat.
+
+**Et une mesure qui a servi à NE PAS écrire du code.** Un état que l'atlas ne
+connaît pas force un rechargement complet — j'allais rendre l'atlas
+extensible. Mesuré d'abord : le pack coûte 540 ms *une fois*, et le
+rechargement d'une zone de 64 chunks **31 ms**, une fois par type de bloc et
+par séance. Ça ne vaut pas un atlas incrémental aujourd'hui ; ça le vaudra
+quand la résidence sera pilotée par la caméra, parce qu'alors de nouveaux états
+arriveront en volant. La mesure dit quand, pas seulement combien.
+
+```bash
+TF_PACK=<pack> cargo test -p tf-app --test chantier mesurer_le_rechargement -- --nocapture
+```
 
 ---
 

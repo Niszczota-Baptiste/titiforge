@@ -435,3 +435,36 @@ fn mesurer_la_relecture() {
     drop(o);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Ce que coûte le RECHARGEMENT complet, découpé — c'est lui qu'un état
+/// inconnu déclenche, une fois par type de bloc et par séance.
+#[test]
+fn mesurer_le_rechargement() {
+    let Ok(pack) = std::env::var("TF_PACK") else {
+        eprintln!("TF_PACK absent — mesure sautée");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("tf-recharge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    semer(&dir).expect("monde jetable");
+
+    let t = std::time::Instant::now();
+    let assets = tf_app::scene::Assets::charger(&pack).unwrap();
+    let pack_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let mut o = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 7, 7]).unwrap();
+    let mut v = Vec::new();
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        o.remailler(None).unwrap();
+        v.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "chargement · pack (une fois) {pack_ms:.0} ms · zone de 64 chunks {:.0} ms",
+        v[1]
+    );
+    drop(assets);
+    drop(o);
+    let _ = std::fs::remove_dir_all(&dir);
+}

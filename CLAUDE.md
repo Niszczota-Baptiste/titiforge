@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (771 tests aujourd'hui)
+cargo test            # tous les crates (772 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1339,6 +1339,13 @@ propres à ce dépôt.
   n° 8 appliqué au geste. Et la tranche commence à `ancien_max + 1`, parce que
   les bornes d'une `BBox` sont INCLUSES : un bloc d'écart et la dernière rangée
   de l'ancien volume est écrasée.
+- **Une mesure sert aussi à NE PAS écrire du code.** Un état que l'atlas ne
+  connaît pas force un rechargement complet de la zone, et j'allais rendre
+  l'atlas extensible — une vraie pièce, avec une vraie surface de bug. Mesuré
+  d'abord : 31 ms pour une zone de 64 chunks, une fois par type de bloc et par
+  séance. Ça ne vaut pas la peine aujourd'hui ; ça la vaudra quand la résidence
+  sera pilotée par la caméra. Le chiffre ne dit pas seulement combien, il dit
+  QUAND.
 - **J'ai optimisé le maillage pendant que la relecture coûtait cent fois
   plus.** Le remaillage incrémental écrit, mesuré : **× 1,1**. La découpe par
   phases a dit pourquoi — 18 ms sur 18,3 dans la RELECTURE, 0,2 dans le
