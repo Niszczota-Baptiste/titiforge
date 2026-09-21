@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (701 tests aujourd'hui)
+cargo test            # tous les crates (713 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -345,6 +345,8 @@ crates/
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                CATALOGUE ✅ : ce que les opérations disent d'elles-mêmes —
                noms, paramètres, bornes, coût. Un hôte ne réécrit plus rien
+               EXÉCUTEUR ✅ : un seul aiguillage, et le REJEU d'une entrée de
+               journal sur la copie de travail (annuler / refaire)
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
@@ -374,7 +376,7 @@ couvriront le même terrain.
 
 | Ajouter… | …dans |
 |---|---|
-| **Une opération** | son entrée dans `OPS` (`tf-ops/src/catalogue.rs`) — nom, noms WorldEdit, paramètres, bornes, coût — puis son bras dans `construire`, puis le calcul. **Aucune ligne d'interface** : le formulaire se génère depuis le descripteur, et deux tests l'exigent (chaque descripteur se construit ; chaque paramètre se dessine) |
+| **Une opération** | son entrée dans `OPS` (`tf-ops/src/catalogue.rs`) — nom, noms WorldEdit, paramètres, bornes, coût — son bras dans `construire`, son bras dans `executer` (`executer.rs`), puis le calcul. **Aucune ligne d'interface** : le formulaire se génère depuis le descripteur, et trois tests l'exigent (chaque descripteur se construit ; chaque paramètre se dessine ; chaque opération s'EXÉCUTE vraiment sur un monde) |
 | Un PARAMÈTRE à une opération | le `Param` dans son descripteur, et sa lecture dans le bras de `construire`. Le normaliseur n'a rien à savoir : il recopie ce que le descripteur déclare. C'est le piège `seed` d'`ExeWorldEdit`, fermé par construction |
 | Un GENRE de paramètre | une variante de `Saisie`, son rang dans `Saisie::rang` (exhaustif, donc le compilateur l'exige), son entrée dans `TOUTES`, et son bras dans `interface::champ`. Un test exige un champ pour chaque variante — sans quoi le paramètre retombe muet, comme `blocklist` dans `ExeWorldEdit` |
 | Un état de bloc à transformer | rien : les règles sont DÉRIVÉES du pack (`tf-blocks`). Ce qu'elles ne savent pas faire est NOMMÉ, jamais deviné |
@@ -1295,6 +1297,20 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Une jonction que personne n'écrit, deuxième fois — et je l'ai vue écrite
+  DANS UN TEST.** Rejouer une entrée de journal sur la copie de travail
+  n'existait nulle part : le test d'édition le refaisait à la main, sous le
+  commentaire « c'est exactement ce que l'application fera ». C'est la
+  définition du piège, et cette fois avec un aveu écrit à côté. Chaque hôte
+  l'aurait réinventé, avec la faute que ce dépôt a déjà payée — les correctifs
+  s'annulent À L'ENVERS. `edition::rejouer` le fait une fois.
+- **Une mutation peut survivre parce que la FIXTURE ne sépare pas les deux
+  cas.** Rejouer une annulation dans le sens d'enregistrement passait tous les
+  tests : tant qu'une opération ne touche chaque chunk qu'une fois, `a_annuler`
+  et `a_refaire` rendent le MÊME ensemble et seul l'ordre change. Il a fallu un
+  `//move` dont la source et la destination se chevauchent. Même leçon que les
+  coffres aux `y` croissants, un cran plus haut : quand une mutation survit,
+  c'est souvent que le motif de test ne distingue pas ce qu'on croit tester.
 - **Un identifiant DÉDUIT de la forme de l'objet n'est pas un identifiant.**
   `Travail::id()` devait se lire dans le plan — masque `Tout` et motif
   `Melange` pour un mélange, et ainsi de suite. Ça paraissait plus sûr que de

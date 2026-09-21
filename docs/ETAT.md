@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **701**, zéro échec |
+| Tests | **713**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-701 tests, répartis par ce qu'ils PROUVENT :
+713 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -70,6 +70,7 @@ cargo test --workspace
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 13 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
+| `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 17 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
@@ -96,6 +97,15 @@ Trois propriétés valent d'être nommées :
   d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
   croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
   pas vu ce qui le fait rougir.
+- **L'exécuteur et le rejeu aussi.** Six mutations : `//hollow` qui ne pose
+  plus d'air (donc ne change rien), `//stack` qui avance d'un bloc au lieu de
+  la taille de la sélection, le rejeu qui ignore l'empreinte de garde, le rejeu
+  qui prend les correctifs dans le sens d'enregistrement, le lissage qui ne
+  déborde plus sur Z, la forme ignorée. La quatrième a d'abord SURVÉCU : tant
+  qu'une opération ne touche chaque chunk qu'une fois, les deux sens rendent le
+  même ensemble et seul l'ORDRE diffère. Il a fallu un `//move` dont la source
+  et la destination se chevauchent — c'est le seul motif qui les sépare, et
+  c'est la leçon déjà écrite dans ce dépôt, re-payée à l'identique.
 - **Le catalogue d'opérations aussi, et son formulaire.** Cinq mutations sur
   `tf-ops/catalogue` (la normalisation sautée, un bras de `match` recopié,
   `//replace` qui perd son masque, l'inconnu ignoré au lieu d'être refusé, un
@@ -486,7 +496,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **La coque ne fait encore RIEN au monde** | la palette des dix opérations est là, les formulaires sont ENGENDRÉS depuis les descripteurs, le coût est annoncé avant de cliquer — mais « Appliquer » ne fait rien : le moteur doit tourner dans un FIL à part, sinon une opération de trois secondes fige la fenêtre. L'interface le dit à l'écran plutôt que de faire croire l'inverse |
-| **La ligne de commande a encore SON aiguillage** | `tf-ops/examples/editer.rs` garde son `enum Op` et son `usage()` écrit à la main, alors que le catalogue les porte désormais. Deux tables, donc une divergence en attente — c'est le prochain nettoyage, pas une option |
+| **La ligne de commande a encore SON aiguillage** | `tf-ops/examples/editer.rs` garde son `enum Op`, son `usage()` et sa chaîne d'appels écrits à la main, alors que `catalogue.rs` et `executer.rs` les portent désormais. Deux chaînes d'appels, donc une divergence en attente — c'est le prochain nettoyage, pas une option |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 

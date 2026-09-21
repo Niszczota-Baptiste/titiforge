@@ -193,6 +193,16 @@ pub enum Erreur {
         octets: u64,
         plafond: u64,
     },
+    /// Un correctif de journal ne s'applique pas : le chunk a changé sous lui.
+    ///
+    /// **Garde, pas accident.** Chaque correctif porte l'empreinte de l'état
+    /// qu'il attend ; sans elle, rejouer une annulation sur un chunk modifié
+    /// depuis produirait un mélange des deux, parfaitement plausible et faux.
+    /// On refuse plutôt que d'écrire à peu près.
+    Divergence {
+        region: RegionPos,
+        chunk: u16,
+    },
 }
 
 macro_rules! de {
@@ -224,6 +234,12 @@ impl std::fmt::Display for Erreur {
             Erreur::Nbt(e) => write!(f, "balayage de chunk : {e:?}"),
             Erreur::Encode(e) => write!(f, "encodage de section : {e:?}"),
             Erreur::Splice(e) => write!(f, "recollement : {e:?}"),
+            Erreur::Divergence { region, chunk } => write!(
+                f,
+                "le chunk {chunk} de la région r.{}.{} a changé depuis : \
+                 l'annulation ne s'applique plus. Rien n'a été écrit",
+                region.x, region.z
+            ),
             Erreur::TropGros { octets, plafond } => write!(
                 f,
                 "sélection trop grande à matérialiser : {:.1} Go demandés pour \
@@ -824,6 +840,105 @@ pub fn copier<S: RegionSource, O: RegionStore>(
         .entites
         .sort_by_key(|e| (e.case[1], e.case[2], e.case[0]));
     Ok(presse)
+}
+
+/// Dans quel sens on rejoue une entrée de journal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sens {
+    Annuler,
+    Refaire,
+}
+
+/// **Rejoue une entrée de journal sur la copie de travail.**
+///
+/// La jonction symétrique de `RapportRegion::journaliser` — et elle n'existait
+/// nulle part. Les tests la réécrivaient à la main sous le commentaire
+/// « c'est exactement ce que l'application fera », ce qui est la définition
+/// même d'une jonction qu'aucun hôte n'écrit : chaque hôte l'aurait
+/// réinventée, avec trois occasions de se tromper dont ce dépôt a déjà payé
+/// une — **les correctifs s'annulent À L'ENVERS**, et l'ordre ne se voit que
+/// sur une opération qui repasse deux fois sur le même chunk.
+///
+/// Rend le nombre de chunks touchés. **Tout ou rien par région** : un
+/// correctif qui diverge arrête la région avant la moindre écriture, plutôt
+/// que de laisser la moitié d'une annulation appliquée.
+pub fn rejouer<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    entree: &tf_world::journal::Entree,
+    sens: Sens,
+) -> Result<usize, Erreur> {
+    // Les correctifs dans le SENS demandé. `a_annuler` les rend à l'envers ;
+    // un appelant qui écrirait `corrections.iter()` aurait raison jusqu'au
+    // jour où il aurait tort, sans prévenir.
+    // Deux itérateurs opaques de types différents : on les matérialise
+    // séparément plutôt que de les boxer, la liste fait quelques dizaines
+    // d'entrées.
+    let corrections: Vec<&Correction> = match sens {
+        Sens::Annuler => entree.a_annuler().collect(),
+        Sens::Refaire => entree.a_refaire().collect(),
+    };
+    let patches: Vec<&ChunkPatch> = corrections
+        .into_iter()
+        .filter_map(|c| match c {
+            Correction::Chunk(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+
+    // Groupés par région, SANS réordonner à l'intérieur d'une région : deux
+    // correctifs sur le même chunk s'enchaînent par leurs empreintes.
+    let mut ordre: Vec<(Dimension, Folder, RegionPos)> = Vec::new();
+    for p in &patches {
+        let cle = (p.cible.dim.clone(), p.cible.folder, p.cible.region);
+        if !ordre.contains(&cle) {
+            ordre.push(cle);
+        }
+    }
+
+    let mut touches = 0;
+    for (dim, folder, pos) in ordre {
+        let bytes = staging.read_region(&dim, folder, pos)?;
+        let mut region = read(&bytes, pos.x, pos.z)?;
+        let mut n = 0;
+        for p in patches
+            .iter()
+            .filter(|p| p.cible.dim == dim && p.cible.folder == folder && p.cible.region == pos)
+        {
+            let (lx, lz) = ((p.cible.chunk % 32) as i32, (p.cible.chunk / 32) as i32);
+            let Some(c) = region.get_mut(lx, lz) else {
+                return Err(Erreur::Divergence {
+                    region: pos,
+                    chunk: p.cible.chunk,
+                });
+            };
+            let courant = inflate(&c.payload, c.compression)?;
+            let attendu = match sens {
+                Sens::Annuler => p.apres_hash,
+                Sens::Refaire => p.avant_hash,
+            };
+            if tf_world::journal::empreinte(&courant) != attendu {
+                return Err(Erreur::Divergence {
+                    region: pos,
+                    chunk: p.cible.chunk,
+                });
+            }
+            let mut edits = match sens {
+                Sens::Annuler => p.annuler.clone(),
+                Sens::Refaire => p.refaire.clone(),
+            };
+            let neuf = splice(&courant, &mut edits)?;
+            // Le niveau de la copie de travail, pas celui par défaut : elle se
+            // réécrit à chaque action pendant que l'utilisateur attend, et
+            // s'optimise donc pour le TEMPS. Mesuré : 230 ms contre 550.
+            c.payload = Cow::Owned(deflate_level(&neuf, c.compression, NIVEAU_STAGING)?);
+            n += 1;
+        }
+        if n > 0 {
+            staging.write_region(&dim, folder, pos, &write(&region)?.region)?;
+            touches += n;
+        }
+    }
+    Ok(touches)
 }
 
 pub fn appliquer_region<S: RegionSource, O: RegionStore>(
