@@ -42,6 +42,7 @@ fn operation(label: &str, corrections: Vec<Correction>) -> (String, Genre) {
         label.to_string(),
         Genre::Operation {
             op: "replace".into(),
+            params: Vec::new(),
             bounds: Some(BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(15, 15, 15))),
             corrections,
         },
@@ -653,6 +654,7 @@ fn operer_sur_une_vraie_region_puis_annuler_la_rend_octet_pour_octet() {
         1_700_000_000_000,
         Genre::Operation {
             op: "replace".into(),
+            params: Vec::new(),
             bounds: None,
             corrections,
         },
@@ -716,6 +718,7 @@ fn lourde(j: &mut Journal, nom: &str, n: usize) {
         1,
         Genre::Operation {
             op: "set".into(),
+            params: Vec::new(),
             bounds: None,
             corrections: vec![Correction::Chunk(p)],
         },
@@ -798,4 +801,111 @@ fn un_journal_compacte_se_relit_a_l_identique() {
     let (relu, _) = decoder(&fichier(&j.reecrire())).unwrap();
     assert_eq!(relu.entrees(), j.entrees());
     assert_eq!(relu.curseur(), j.curseur());
+}
+
+// ── de quoi REJOUER, et pas seulement défaire ────────────────────────────────
+
+/// **La couture des composants.**
+///
+/// Un composant posé quarante fois doit se mettre à jour partout quand on
+/// modifie sa définition. Ça demande de REJOUER l'opération depuis ses
+/// paramètres — les octets d'après la modification n'existent pas encore, donc
+/// le sens « refaire » du journal ne sait pas le faire. Les paramètres sont
+/// opaques au journal, exactement comme `op` : le cœur ne les interprète pas,
+/// et c'est ce qui permet à un greffon d'en inventer.
+#[test]
+fn des_parametres_de_rejeu_traversent_le_disque() {
+    let avant = vec![7u8; 256];
+    let (p, _) = patch(0, &avant, vec![ed(0, 4, b"abcd")]);
+    // Des octets qui ne veulent rien dire pour le journal : c'est le propos.
+    let params = vec![0u8, 255, 1, 128, 42];
+
+    let mut j = Journal::new();
+    let recs = j.pousser(
+        "Poser un composant",
+        1_700_000_000_000,
+        Genre::Operation {
+            op: "composant".into(),
+            params: params.clone(),
+            bounds: Some(BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(3, 3, 3))),
+            corrections: vec![Correction::Chunk(p)],
+        },
+    );
+
+    let (relu, valides) = decoder(&fichier(&recs)).unwrap();
+    assert_eq!(valides, fichier(&recs).len());
+    let e = &relu.entrees()[0];
+    assert_eq!(e.params(), &params[..], "les paramètres doivent survivre");
+    assert!(e.est_rejouable());
+    assert_eq!(
+        e.bounds(),
+        Some(BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(3, 3, 3))),
+        "et les bornes avec — c'est par elles que l'invalidation se fera"
+    );
+}
+
+/// **Une entrée sans paramètres reste une entrée valide.**
+///
+/// Rien n'oblige une opération à se déclarer rejouable. Exiger des paramètres
+/// ferait de « je sais m'annuler » une capacité de second rang, alors que
+/// c'est ce que fait tout le moteur aujourd'hui.
+#[test]
+fn une_entree_sans_parametres_s_annule_comme_avant() {
+    let avant = vec![7u8; 256];
+    let (p, _) = patch(0, &avant, vec![ed(0, 4, b"abcd")]);
+    let mut j = Journal::new();
+    let recs = j.pousser(
+        "Remplacer",
+        0,
+        Genre::Operation {
+            op: "replace".into(),
+            params: Vec::new(),
+            bounds: None,
+            corrections: vec![Correction::Chunk(p)],
+        },
+    );
+    let (relu, _) = decoder(&fichier(&recs)).unwrap();
+    assert!(!relu.entrees()[0].est_rejouable());
+    assert!(relu.peut_annuler());
+}
+
+/// **Un journal écrit AVANT que les paramètres existent reste lisible.**
+///
+/// C'est pour ça qu'ils sont écrits en DERNIER dans le corps de l'entrée :
+/// un lecteur qui arrive au bout des octets rend des paramètres vides au lieu
+/// de décaler tout ce qui suit. Glissés entre `op` et `bounds`, ils auraient
+/// rendu illisible ce qui est déjà sur le disque de quelqu'un — et le journal
+/// s'arrête à la première entrée qu'il ne comprend pas, donc c'est tout
+/// l'historique qui serait parti.
+///
+/// Le corps est fabriqué ici à la main, tronqué juste avant le blob : c'est
+/// exactement ce qu'un `TFJ1` d'avant contient.
+#[test]
+fn un_journal_ecrit_avant_les_parametres_se_relit() {
+    let avant = vec![7u8; 256];
+    let (p, _) = patch(0, &avant, vec![ed(0, 4, b"abcd")]);
+    let mut j = Journal::new();
+    let recs = j.pousser(
+        "Remplacer",
+        0,
+        Genre::Operation {
+            op: "replace".into(),
+            params: vec![9, 9, 9],
+            bounds: None,
+            corrections: vec![Correction::Chunk(p)],
+        },
+    );
+    // Le corps complet, puis le même AMPUTÉ de son blob de paramètres
+    // (4 octets de longueur + 3 de charge) : la forme d'avant, au bit près.
+    let complet = tf_world::journal::corps(&recs[0]);
+    let ancien = &complet[..complet.len() - 7];
+    let ancienne = tf_world::journal::lire_corps(ancien).expect("relisible");
+    match ancienne {
+        Record::Entree(e) => {
+            assert_eq!(e.params(), b"", "pas de paramètres, et pas d'erreur");
+            assert_eq!(e.label, "Remplacer");
+            assert_eq!(e.corrections().len(), 1, "le reste est intact");
+        }
+        autre => panic!("attendu une entrée, reçu {autre:?}"),
+    }
 }

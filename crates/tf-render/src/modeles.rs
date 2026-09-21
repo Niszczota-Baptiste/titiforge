@@ -117,24 +117,40 @@ impl AreneModeles {
 
     /// Empile la passe de modèles d'un chantier.
     ///
-    /// `modele` rend, pour un état, ses cuboïdes et l'habillage de chacun. Un
-    /// état qui n'en a pas ne pose rien — et une pose sans face serait une
-    /// instance qui ne dessine rien, donc du travail pur.
+    /// `modele` rend, pour un état ET UN BIOME, ses cuboïdes et l'habillage de
+    /// chacun. Un état qui n'en a pas ne pose rien — et une pose sans face
+    /// serait une instance qui ne dessine rien, donc du travail pur.
+    ///
+    /// **Le biome entre dans la clé de la table, pas dans la pose.** Une
+    /// `FaceModele` porte déjà sa teinte ; ce qu'il lui manquait, c'est de
+    /// pouvoir en avoir une par biome. La table est mémoïsée, donc il suffit
+    /// de la mémoïser sur `(état, biome)` : la pose reste à SEIZE octets, le
+    /// shader ne change pas d'une ligne, et il n'y a ni nouveau tampon ni
+    /// nouvel empaquetage à tenir juste — c'est-à-dire aucun des trois
+    /// endroits où cette chose se serait cassée en silence.
+    ///
+    /// Ce que ça coûte est borné par le zéro que le mailleur écrit : `biome`
+    /// vaut 0 pour tout état qui ne prend pas la couleur de son biome, donc la
+    /// quasi-totalité du catalogue garde UNE table, exactement comme avant.
+    /// Seuls les feuillages et les vignes se dupliquent, et seulement autant
+    /// de fois qu'il y a de biomes où ils POUSSENT.
     pub fn depuis(
         chantier: &Chantier,
-        modele: &dyn Fn(StateId) -> Vec<FaceModele>,
+        modele: &dyn Fn(StateId, StateId) -> Vec<FaceModele>,
     ) -> AreneModeles {
         let mut a = AreneModeles::default();
-        // La géométrie d'un état n'est construite QU'UNE fois, quel que soit
-        // le nombre de blocs qui la portent. C'est tout l'intérêt.
-        let mut connus: std::collections::HashMap<StateId, (u32, u32)> =
+        // La géométrie d'un état n'est construite QU'UNE fois par biome où il
+        // se teinte — une seule fois tout court pour le reste du catalogue,
+        // quel que soit le nombre de blocs qui la portent. C'est tout
+        // l'intérêt.
+        let mut connus: std::collections::HashMap<(StateId, StateId), (u32, u32)> =
             std::collections::HashMap::new();
 
         for (section, lot) in chantier.lots.iter().enumerate() {
             let debut_pose = a.poses.len() as u32;
             for p in &lot.poses.poses {
-                let (debut_modele, nombre) = *connus.entry(p.id).or_insert_with(|| {
-                    let f = modele(p.id);
+                let (debut_modele, nombre) = *connus.entry((p.id, p.biome)).or_insert_with(|| {
+                    let f = modele(p.id, p.biome);
                     let debut = a.faces.len() as u32;
                     a.faces.extend(f);
                     (debut, a.faces.len() as u32 - debut)
@@ -160,6 +176,19 @@ impl AreneModeles {
                 .push((lot.adresse, debut_pose, a.poses.len() as u32 - debut_pose));
         }
         a
+    }
+
+    /// La même, pour un appelant qui n'a pas de biomes.
+    ///
+    /// Bancs et tests de géométrie : leur catalogue n'est pas teinté, donc le
+    /// mailleur leur écrit `biome = 0` partout et la table se mémoïse sur
+    /// l'état seul, au bit près comme avant que les biomes existent. La porte
+    /// est là pour le DIRE, pas pour offrir un second comportement.
+    pub fn sans_biome(
+        chantier: &Chantier,
+        modele: &dyn Fn(StateId) -> Vec<FaceModele>,
+    ) -> AreneModeles {
+        AreneModeles::depuis(chantier, &|id, _| modele(id))
     }
 }
 

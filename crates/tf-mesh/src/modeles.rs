@@ -84,7 +84,15 @@ pub fn mailler_avec<F: Formes + ?Sized>(v: &Voisinage, f: &F, op: &Opacite, out:
                             face,
                             // Ici, aucune fusion : chaque cuboïde sort avec
                             // le biome de SA case, sans compromis à faire.
-                            biome: v.biome(x, y, z),
+                            // Zéro pour un état non teinté quand même — les
+                            // deux chemins de la passe de modèles doivent
+                            // répondre la même chose, sinon comparer l'un à
+                            // l'autre ne prouve plus rien.
+                            biome: if f.teinte_biome(id) {
+                                v.biome(x, y, z)
+                            } else {
+                                0
+                            },
                             id,
                         });
                         out.quads_modele += 1;
@@ -138,6 +146,18 @@ pub fn instancier_avec<F: Formes + ?Sized>(
                     pos: [x as u8, y as u8, z as u8],
                     voisins_opaques: voisins,
                     id,
+                    // **Zéro pour un état non teinté**, la même règle que la
+                    // clé de fusion gloutonne. Ici rien ne fusionne, donc le
+                    // biome ne coûterait pas un quad de plus — mais il
+                    // coûterait une COPIE de la géométrie du modèle par biome
+                    // de la scène, puisque la table du rendu se mémoïse sur
+                    // `(état, biome)`. Un escalier n'a pas de couleur de
+                    // biome ; il ne doit pas payer comme s'il en avait une.
+                    biome: if f.teinte_biome(id) {
+                        v.biome(x, y, z)
+                    } else {
+                        0
+                    },
                 });
             }
         }

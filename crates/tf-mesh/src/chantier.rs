@@ -283,9 +283,9 @@ impl Chantier {
         self.lots.iter().map(|l| l.poses.len()).sum()
     }
 
-    /// Octets que ça pèse : 16 par quad, 8 par pose.
+    /// Octets que ça pèse : 16 par quad, 12 par pose.
     pub fn octets(&self) -> usize {
-        self.quads() * 16 + self.poses() * 8
+        self.quads() * 16 + self.poses() * std::mem::size_of::<crate::maillage::Instance>()
     }
 
     pub fn fusionner(&mut self, autre: Chantier) {

@@ -35,7 +35,7 @@ use tf_anvil::entites::Entite;
 use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
 use tf_anvil::{edition_entites, Interner, StateId};
 use tf_world::coords::{BBox, BlockPos, ChunkPos, RegionPos, SectionPos};
-use tf_world::journal::{ChunkPatch, Cible};
+use tf_world::journal::{ChunkPatch, Cible, Correction, Genre, Journal};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
@@ -85,6 +85,62 @@ pub struct RapportRegion {
 impl RapportRegion {
     pub fn est_vide(&self) -> bool {
         self.patches.is_empty()
+    }
+
+    /// Le genre d'entrée de journal qui correspond à ce rapport.
+    ///
+    /// **La jonction, écrite UNE fois.** Sans elle, chaque hôte — la ligne de
+    /// commande, la coque, un greffon — recompose à la main les correctifs,
+    /// le nom de l'opération et les bornes ; trois occasions de se tromper, et
+    /// l'une d'elles est un piège que ce dépôt a déjà payé (l'ordre des
+    /// correctifs, qui ne se voit que sur une opération à plusieurs passes).
+    /// Une jonction qu'on laisse à l'appelant est une jonction que personne ne
+    /// teste.
+    ///
+    /// `params` porte de quoi REJOUER l'opération, pas seulement la défaire.
+    /// Le journal ne les interprète pas ; c'est la couture des composants, et
+    /// `Vec::new()` reste licite pour une opération qui ne se déclare pas
+    /// rejouable.
+    pub fn genre(&self, op: &str, params: Vec<u8>) -> Genre {
+        Genre::Operation {
+            op: op.to_string(),
+            params,
+            // Ce que l'opération a VRAIMENT écrit — pas la sélection. C'est
+            // l'invariant n° 8, et c'est ce dont l'invalidation d'un document
+            // et le remaillage incrémental se serviront.
+            bounds: self.bornes,
+            corrections: self
+                .patches
+                .iter()
+                .cloned()
+                .map(Correction::Chunk)
+                .collect(),
+        }
+    }
+
+    /// Pousse ce rapport dans un journal, en UNE entrée.
+    ///
+    /// Une seule, quel que soit le nombre de chunks touchés et le nombre de
+    /// passes qu'une opération composée a faites : un `Ctrl+Z` défait le
+    /// déplacement entier, pas son dernier tiers.
+    ///
+    /// Un rapport vide ne pousse RIEN et rend `false`. Une entrée sans
+    /// correctif serait une case de plus dans la pile d'annulation qui ne
+    /// défait rien — et l'utilisateur appuierait deux fois sur Ctrl+Z sans
+    /// voir quoi que ce soit bouger.
+    pub fn journaliser(
+        &self,
+        journal: &mut Journal,
+        label: &str,
+        op: &str,
+        params: Vec<u8>,
+        horodatage: i64,
+    ) -> bool {
+        if self.est_vide() {
+            return false;
+        }
+        journal.pousser(label, horodatage, self.genre(op, params));
+        true
     }
 
     /// Absorbe le rapport d'une autre passe.

@@ -66,9 +66,12 @@ Minecraft.
 
 **Conséquence directe sur tout ce qui s'écrit dès maintenant :** un composant
 suppose qu'une opération soit REJOUABLE depuis ses paramètres, pas seulement
-annulable depuis ses octets. Toute opération nouvelle garde donc son `Plan`, et
-pas seulement ses éditions. La couture est détaillée dans `docs/ROADMAP.md` —
-ne pas la poser coûterait une refonte de la pile d'annulation. PNJ, quêtes, routes, outils
+annulable depuis ses octets. La couture est POSÉE : `Genre::Operation` porte
+un `params: Vec<u8>` opaque au journal, et `RapportRegion::journaliser` est la
+seule jonction entre une opération et le journal. Une opération nouvelle qui
+veut être rejouable y sérialise son `Plan` ; celle qui ne le veut pas passe
+`Vec::new()` et s'annule comme avant. Détail dans `docs/ROADMAP.md`, « La
+couture à poser avant la coque ». PNJ, quêtes, routes, outils
 cinématiques, génération procédurale, rendu shaders viendront par **greffons**,
 jamais dans le cœur.
 
@@ -181,7 +184,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (561 tests aujourd'hui)
+cargo test            # tous les crates (568 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -290,7 +293,9 @@ crates/
                block entities ✅ · biomes 1.18+ ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
+               (typé, ajout seul, avec paramètres de REJEU)
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
+               jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
                //naturalize ✅ · //setbiome ✅ · //smooth ✅ · //hollow ✅
@@ -298,7 +303,7 @@ crates/
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
-               AO, LOD à venir
+               (gloutonne ET modèles) · AO, LOD à venir
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1010,3 +1015,34 @@ propres à ce dépôt.
   graine, aucun dehors, et partait EN ENTIER. La sélection s'arrête là ; ce
   qu'il y a au-delà ne nous regarde pas, donc sa peau touche l'extérieur par
   définition.
+
+- **Une jonction que personne n'écrit est une jonction que chaque hôte
+  réécrira.** Le journal savait annuler, les opérations savaient produire des
+  correctifs, et RIEN ne reliait les deux : les tests recomposaient l'entrée à
+  la main sous le commentaire « comme l'application le tiendra ». Trois
+  occasions de se tromper par hôte — les correctifs, le nom, les bornes — dont
+  une que ce dépôt a déjà payée : l'ordre des correctifs ne se voit que sur une
+  opération qui repasse deux fois sur un chunk. Même famille que « déclaré,
+  branché, testé — et inatteignable », et c'est la forme la plus coûteuse :
+  celle où chaque appelant a l'air d'avoir raison.
+- **Un champ ajouté au MILIEU d'un format décale tout ce qui est déjà sur le
+  disque.** Les paramètres de rejeu s'écrivent en dernier dans le corps d'une
+  entrée, et le lecteur traite « plus d'octets » comme « pas de paramètres ».
+  Glissés entre `op` et `bounds`, ils auraient rendu illisible la première
+  entrée d'un journal existant — et la lecture s'arrête à la première entrée
+  incomprise, donc c'est tout l'historique qui serait parti, pas une ligne.
+- **Un outil de CONTRÔLE qui accuse à tort coûte plus cher qu'un silence.**
+  `verite_terrain` remplace la cible par `minecraft:stone` ; appelé avec
+  `minecraft:stone`, il n'écrivait rien — ce qui est JUSTE — et annonçait une
+  FAUTE du moteur. On part alors chercher un bug qui n'existe pas. Un argument
+  dégénéré se refuse à l'entrée, en disant lequel.
+- **La teinte d'un bloc-MODÈLE ne tient pas dans sa pose, et n'a pas à y
+  tenir.** J'avais listé trois pistes, toutes coûteuses : des bits libres dans
+  `Pose::local`, une table par section, un second tampon. Les trois passaient à
+  côté du fait que la table de géométrie est déjà MÉMOÏSÉE — il suffit de la
+  mémoïser sur `(état, biome)`. La pose reste à seize octets, le shader ne
+  bouge pas d'une ligne, et il n'y a ni nouvel empaquetage ni nouveau tampon à
+  tenir juste : aucun des trois endroits où ça se serait cassé en silence. Ce
+  qui borne le coût est le ZÉRO que le mailleur écrit pour un état non teinté,
+  la même règle que la clé de fusion gloutonne — sans lui, la géométrie d'un
+  escalier se copierait autant de fois qu'il y a de biomes dans la scène.

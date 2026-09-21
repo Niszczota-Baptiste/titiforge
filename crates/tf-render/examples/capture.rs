@@ -214,15 +214,30 @@ fn main() {
         }
     });
 
-    // ── les blocs-modèles : la géométrie UNE fois par état, une pose par bloc
-    let modeles = tf_render::AreneModeles::depuis(&chantier, &|id| {
+    // ── les blocs-modèles : la géométrie UNE fois par (état, biome)
+    //
+    // Les feuilles et les vignes sont des blocs-MODÈLES, pas des cubes : elles
+    // ne passent pas par la gloutonne, donc la teinte qu'on vient de brancher
+    // ne les atteignait pas. Sans ça, un chêne sortait GRIS au milieu d'un
+    // terrain vert — la texture de feuille du jeu vaut (97, 97, 97), c'est le
+    // biome qui la colore. La composition est la MÊME qu'au-dessus, ligne pour
+    // ligne : le genre vient de l'état, la couleur du biome de la case.
+    let modeles = tf_render::AreneModeles::depuis(&chantier, &|id, biome| {
         let Some(h) = habillage.get(id as usize) else {
             return Vec::new();
         };
         let hab: Vec<tf_render::HabillageFaces> = h
             .cuboides
             .iter()
-            .map(|f| std::array::from_fn(|k| (f[k].couche, f[k].teinte, f[k].uv)))
+            .map(|f| {
+                std::array::from_fn(|k| {
+                    (
+                        f[k].couche,
+                        teinte_de(f[k].genre, biome).unwrap_or(f[k].teinte),
+                        f[k].uv,
+                    )
+                })
+            })
             .collect();
         tf_render::faces_de(table.cuboides(id), &hab)
     });

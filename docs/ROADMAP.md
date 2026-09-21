@@ -38,17 +38,36 @@ celles-là :
   corrections `Inconnu` qu'il traverse sans comprendre — donc il accueille des
   entrées qu'il ne sait pas interpréter.
 
-Il manque trois choses, et elles ne sont pas petites :
+Il manquait trois choses. **Deux sont posées ; la troisième appartient au
+document, qui n'existe pas encore.**
 
-1. **rejouer une entrée depuis ses PARAMÈTRES**, pas seulement l'annuler depuis
-   ses octets — le journal garde les deux sens en octets, il devra garder aussi
-   le plan ;
-2. **une identité stable** par élément, pour que l'instance n° 37 reste la 37
-   après vingt modifications ;
-3. **l'invalidation par EMPRISE** — modifier l'élément 12 oblige à rejouer
+1. ✅ **rejouer une entrée depuis ses PARAMÈTRES**, pas seulement l'annuler
+   depuis ses octets. `Genre::Operation` porte un `params: Vec<u8>` **opaque au
+   journal**, comme `op` l'est déjà : le cœur ne l'interprète pas, celui qui a
+   écrit l'opération sait le relire, et un greffon y met ce qu'il veut. Écrit
+   en DERNIER dans le corps de l'entrée, pour qu'un journal d'avant reste
+   lisible au lieu d'être décalé — un journal s'arrête à la première entrée
+   qu'il ne comprend pas, donc un décalage coûterait tout l'historique.
+   `Entree::est_rejouable` pose la question en toutes lettres.
+2. ⬜ **une identité stable** par élément, pour que l'instance n° 37 reste la 37
+   après vingt modifications. Rien à poser aujourd'hui : elle vit dans le
+   document de projet, qui est de la phase 7. L'`id` monotone du journal n'en
+   est pas une — il numérote des ACTIONS, pas des objets.
+3. ✅ **l'invalidation par EMPRISE** — modifier l'élément 12 oblige à rejouer
    12..N sur sa seule portée. L'invariant n° 8 (« une opération ne paie que sa
    portée, et ses bornes décrivent ce qu'elle a vraiment écrit ») existe
-   précisément pour ça.
+   précisément pour ça ; `Entree::bounds()` les rend, et
+   `RapportRegion::genre` les y met depuis ce que l'opération a VRAIMENT
+   écrit, jamais depuis la sélection.
+
+Et une quatrième, qui ne figurait sur aucune liste parce qu'elle avait l'air
+faite : **la jonction entre une opération et le journal n'existait nulle
+part.** Les tests la recomposaient à la main, en commentant « comme
+l'application le tiendra » — c'est-à-dire que chaque hôte allait la réécrire,
+avec trois occasions de se tromper dont une que ce dépôt a déjà payée (l'ordre
+des correctifs, invisible tant qu'aucune opération ne repasse sur un chunk).
+`RapportRegion::genre` / `journaliser` la posent une fois, et un test la
+MUTE pour le prouver.
 
 Et une décision qui se prend **maintenant**, même si elle s'implémente plus
 tard : **le monde reste souverain.** Les composants sont une COUCHE qui s'y
@@ -185,7 +204,7 @@ staging, journal. Manque ce qui DÉPLACE.
 | Biomes : lecture, écriture, `//setbiome` | ✅ — seconde palette par section, grille de 4 × 4 × 4 ; 1.18+ seulement, et 1.13–1.17 est REFUSÉ plutôt que deviné |
 | La COULEUR d'un biome, dérivée du jeu | ✅ — table `colormap/grass.png` × `worldgen/biome/*.json`, formule du jeu à la lettre ; le marais est annoncé APPROCHÉ |
 | Les biomes branchés à la teinte du rendu | ✅ pour la passe GLOUTONNE — le biome entre dans la clé de fusion, donc un quad ne peut pas enjamber une frontière là où ça se verrait |
-| La teinte des blocs-MODÈLES (feuilles, vignes) | ⬜ — une pose fait 16 octets et n'a pas de place pour une couleur. Trois pistes, aucune mesurée : six bits libres dans `Pose::local`, une table par section, ou un second tampon |
+| La teinte des blocs-MODÈLES (feuilles, vignes) | ✅ — et par AUCUNE des trois pistes envisagées : la table de géométrie est déjà mémoïsée, il suffit de la mémoïser sur `(état, biome)`. La pose reste à 16 octets, le shader ne bouge pas d'une ligne, et il n'y a ni nouveau tampon ni nouvel empaquetage à tenir juste. Le coût est borné par le ZÉRO que le mailleur écrit pour un état non teinté : la quasi-totalité du catalogue garde une table, comme avant |
 
 C'est la phase la moins chère du lot : la partie difficile — savoir qu'un
 escalier `shape=outer` tourné devient tel autre état — est déjà faite et
@@ -271,7 +290,7 @@ Le deuxième tiers de SketchUp, et le seul qui touche à l'architecture. Voir
 |---|---|
 | **Groupes** | une sélection nommée qu'on déplace et duplique d'un bloc |
 | **Composants** | une définition + N instances. Modifier la définition met à jour les N |
-| **Réévaluation** | une entrée de journal qu'on rejoue depuis ses paramètres, pas depuis ses octets |
+| **Réévaluation** | une entrée de journal qu'on rejoue depuis ses paramètres, pas depuis ses octets — la couture est posée (`Genre::Operation::params`), reste à écrire ce qu'on y met |
 | **Identité stable** | l'instance n° 37 reste la 37 |
 | **Invalidation par emprise** | rejouer 12..N sur la seule portée de 12 |
 | **Calques** | organiser, masquer, verrouiller |

@@ -126,7 +126,7 @@ fn main() {
                 None => (0, [1.0; 3]),
             },
         );
-        let modeles = AreneModeles::depuis(&chantier, &|id| {
+        let modeles = AreneModeles::sans_biome(&chantier, &|id| {
             let Some(h) = habillage.get(id as usize) else {
                 return Vec::new();
             };

@@ -489,7 +489,7 @@ fn rendre_un_bloc(app: &Appareil, id: StateId) -> (Vec<u8>, u32, tf_render::Comp
     );
     let chantier = g.mailler(&t);
     let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
-    let modeles = AreneModeles::depuis(&chantier, &|s| {
+    let modeles = AreneModeles::sans_biome(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
@@ -608,7 +608,7 @@ fn mille_dalles_ne_stockent_qu_un_seul_modele() {
     // Une couche pleine de dalles : 256 blocs, un seul état.
     g.poser(0, 0, section(0, |_, y, _| if y == 8 { 2 } else { AIR }));
     let chantier = g.mailler(&t);
-    let a = AreneModeles::depuis(&chantier, &|s| {
+    let a = AreneModeles::sans_biome(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
@@ -728,7 +728,7 @@ fn les_deux_arenes_designent_la_meme_section() {
     );
     let chantier = g.mailler(&t);
     let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
-    let modeles = AreneModeles::depuis(&chantier, &|s| {
+    let modeles = AreneModeles::sans_biome(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
@@ -823,4 +823,148 @@ fn deux_biomes_donnent_deux_teintes_dans_l_arene() {
         2,
         "et deux teintes distinctes doivent en sortir, pas une"
     );
+}
+
+/// **Un bloc-MODÈLE aussi prend la couleur de son biome.**
+///
+/// Les feuilles et les vignes ne sont pas des cubes : elles ne passent pas par
+/// la gloutonne, donc la teinte branchée sur le quad ne les atteignait pas —
+/// un chêne sortait GRIS au milieu d'un terrain vert, parce que
+/// `oak_leaves.png` vaut (97, 97, 97) et que c'est le jeu qui le colore.
+///
+/// La table de géométrie est mémoïsée : la teinte y voyage donc en mémoïsant
+/// sur `(état, biome)` au lieu de l'état seul. Ce test exige les deux copies
+/// ET leurs deux couleurs — sans la seconde exigence, une implémentation qui
+/// duplique la table sans changer la teinte passerait.
+#[test]
+fn un_bloc_modele_prend_la_couleur_de_son_biome() {
+    use tf_render::{faces_de, AreneModeles, FaceModele, HabillageFaces};
+
+    const FEUILLE: StateId = 1;
+    const PLAINES: StateId = 10;
+    const DESERT: StateId = 11;
+
+    // Un bloc-modèle : un cuboïde qui ne remplit PAS la case, donc non opaque.
+    let mut t = TableFormes::new();
+    t.pousser(true, false, Vec::new());
+    let f = t.pousser(
+        false,
+        false,
+        vec![Cuboide {
+            min: [0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0],
+            faces: 0x3F,
+            cull: 0x3F,
+        }],
+    );
+    assert_eq!(f, FEUILLE);
+    t.marquer_teinte(f);
+
+    // Une couche de feuilles en bas, coupée en deux biomes sur X.
+    let mut g = Grille::new();
+    g.poser(
+        0,
+        0,
+        section(0, |_, y, _| if y == 0 { FEUILLE } else { AIR }),
+    );
+    let mut cells = vec![PLAINES; 64];
+    for y in 0..4 {
+        for z in 0..4 {
+            for x in 2..4 {
+                cells[(y << 4) | (z << 2) | x] = DESERT;
+            }
+        }
+    }
+    assert!(g.poser_biomes(0, 0, 0, cells));
+    let chantier = g.mailler(&t);
+
+    let vus = std::cell::RefCell::new(std::collections::BTreeSet::<StateId>::new());
+    let arene = AreneModeles::depuis(&chantier, &|id, biome| {
+        vus.borrow_mut().insert(biome);
+        let teinte = match biome {
+            PLAINES => [0.1, 0.9, 0.2],
+            DESERT => [0.9, 0.8, 0.1],
+            _ => [1.0, 0.0, 1.0],
+        };
+        let c = t.cuboides(id);
+        let hab: Vec<HabillageFaces> = (0..c.len())
+            .map(|_| std::array::from_fn(|_| (0u32, teinte, [0.0, 0.0, 16.0, 16.0])))
+            .collect();
+        faces_de(c, &hab)
+    });
+
+    assert_eq!(
+        vus.into_inner().into_iter().collect::<Vec<_>>(),
+        vec![PLAINES, DESERT],
+        "la table doit être demandée pour les DEUX biomes, et aucun autre"
+    );
+    let teintes: std::collections::BTreeSet<u32> =
+        arene.faces.iter().map(|f: &FaceModele| f.teinte).collect();
+    assert_eq!(
+        teintes.len(),
+        2,
+        "deux couleurs distinctes doivent atteindre le GPU, pas une"
+    );
+
+    // Et les poses ne pointent pas toutes sur la même table.
+    let debuts: std::collections::BTreeSet<u32> =
+        arene.poses.iter().map(|p| p.debut_modele).collect();
+    assert_eq!(debuts.len(), 2, "une table par biome, désignée par la pose");
+}
+
+/// **Ce qui ne se teinte pas ne se duplique pas** — et c'est ce qui rend la
+/// solution tenable.
+///
+/// Mémoïser sur `(état, biome)` ferait autant de copies de la géométrie d'un
+/// escalier qu'il y a de biomes dans la scène si le mailleur écrivait le biome
+/// partout. Il écrit ZÉRO pour un état non teinté, exactement comme la clé de
+/// fusion gloutonne — donc la quasi-totalité du catalogue garde UNE table,
+/// comme avant que les biomes existent. C'est la règle « aucune évolution
+/// future ne doit dégrader le cœur », et rien d'autre ne la vérifie.
+#[test]
+fn un_etat_non_teinte_ne_paie_pas_les_biomes() {
+    use tf_render::{faces_de, AreneModeles, HabillageFaces};
+
+    const DALLE: StateId = 1;
+
+    let mut t = TableFormes::new();
+    t.pousser(true, false, Vec::new());
+    let d = t.pousser(
+        false,
+        false,
+        vec![Cuboide {
+            min: [0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0],
+            faces: 0x3F,
+            cull: 0x3F,
+        }],
+    );
+    assert_eq!(d, DALLE);
+    // PAS de `marquer_teinte` : c'est tout le propos.
+
+    let mut g = Grille::new();
+    g.poser(0, 0, section(0, |_, y, _| if y == 0 { DALLE } else { AIR }));
+    let mut cells = vec![10 as StateId; 64];
+    for (i, c) in cells.iter_mut().enumerate() {
+        *c = 10 + (i as StateId % 7); // sept biomes, bien visibles
+    }
+    assert!(g.poser_biomes(0, 0, 0, cells));
+    let chantier = g.mailler(&t);
+
+    let appels = std::cell::Cell::new(0usize);
+    let arene = AreneModeles::depuis(&chantier, &|id, biome| {
+        appels.set(appels.get() + 1);
+        assert_eq!(biome, 0, "un état non teinté doit recevoir le biome ZÉRO");
+        let c = t.cuboides(id);
+        let hab: Vec<HabillageFaces> = (0..c.len())
+            .map(|_| std::array::from_fn(|_| (0u32, [1.0; 3], [0.0, 0.0, 16.0, 16.0])))
+            .collect();
+        faces_de(c, &hab)
+    });
+
+    assert!(!arene.poses.is_empty(), "le test ne prouve rien sans pose");
+    assert_eq!(appels.get(), 1, "UNE seule table, malgré les sept biomes");
+    let debuts: std::collections::BTreeSet<u32> =
+        arene.poses.iter().map(|p| p.debut_modele).collect();
+    assert_eq!(debuts.len(), 1, "et toutes les poses la partagent");
 }

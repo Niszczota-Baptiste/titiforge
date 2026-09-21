@@ -166,8 +166,30 @@ pub enum Genre {
         /// Nom court de l'opération (`replace`, `set`…). Opaque au journal :
         /// c'est ce qui permet à un greffon d'en inventer.
         op: String,
+        /// **De quoi la REJOUER**, et non seulement la défaire.
+        ///
+        /// Opaque au journal, exactement comme `op` : le cœur ne les
+        /// interprète pas, celui qui a écrit l'opération sait les relire. Un
+        /// greffon y met ce qu'il veut.
+        ///
+        /// C'est la couture de SketchUp, et elle se pose MAINTENANT. Un
+        /// composant posé quarante fois doit se mettre à jour partout quand
+        /// on modifie sa définition : ça demande de rejouer l'opération
+        /// depuis ses PARAMÈTRES, pas de la défaire depuis ses octets — les
+        /// octets d'après une modification de la définition n'existent pas
+        /// encore. La retrofiter coûterait une refonte de toute la pile
+        /// d'annulation, et le dépôt a déjà failli payer ça une fois.
+        ///
+        /// Vide est l'état normal aujourd'hui : rien n'oblige une opération à
+        /// se déclarer rejouable, et une entrée sans paramètres s'annule
+        /// comme avant.
+        params: Vec<u8>,
         /// Ce que l'opération a VRAIMENT écrit. Sert au remaillage incrémental
         /// et à recadrer la vue sur une annulation.
+        ///
+        /// Et à l'INVALIDATION : modifier l'élément 12 d'un document oblige à
+        /// rejouer 12..N sur leur seule portée. C'est l'invariant n° 8, et
+        /// c'est pour ça qu'il existe.
         bounds: Option<BBox>,
         corrections: Vec<Correction>,
     },
@@ -188,6 +210,23 @@ pub struct Entree {
 impl Entree {
     pub fn est_reprise(&self) -> bool {
         matches!(self.genre, Genre::Reprise)
+    }
+
+    /// Les paramètres de rejeu, s'il y en a. Vide pour une reprise.
+    pub fn params(&self) -> &[u8] {
+        match &self.genre {
+            Genre::Operation { params, .. } => params,
+            Genre::Reprise => &[],
+        }
+    }
+
+    /// Cette entrée sait-elle se REJOUER depuis ses paramètres ?
+    ///
+    /// Séparé de `params()` non vide pour que la question se pose en toutes
+    /// lettres : une entrée rejouable et une entrée seulement annulable
+    /// n'offrent pas les mêmes possibilités à la couche qui les lit.
+    pub fn est_rejouable(&self) -> bool {
+        !self.params().is_empty()
     }
 
     pub fn poids(&self) -> usize {
@@ -225,7 +264,19 @@ impl Entree {
         self.corrections().iter().rev()
     }
 
-    fn corrections(&self) -> &[Correction] {
+    /// Ce que l'opération a VRAIMENT écrit, si elle l'a dit.
+    ///
+    /// Lisible d'office : c'est par ces bornes que le remaillage incrémental
+    /// sait quoi refaire, et que l'invalidation d'un document saura quelles
+    /// entrées rejouer. Un champ qui ne se lit pas n'est pas une couture.
+    pub fn bounds(&self) -> Option<BBox> {
+        match &self.genre {
+            Genre::Operation { bounds, .. } => *bounds,
+            Genre::Reprise => None,
+        }
+    }
+
+    pub fn corrections(&self) -> &[Correction] {
         match &self.genre {
             Genre::Operation { corrections, .. } => corrections,
             Genre::Reprise => &[],
@@ -804,7 +855,7 @@ fn lire_correction(r: &mut R) -> Result<Correction, JournalError> {
 }
 
 /// Sérialise le CORPS d'un enregistrement.
-fn corps(r: &Record) -> Vec<u8> {
+pub fn corps(r: &Record) -> Vec<u8> {
     let mut w = W(Vec::with_capacity(64));
     match r {
         Record::Curseur(c) => {
@@ -821,6 +872,7 @@ fn corps(r: &Record) -> Vec<u8> {
                 }
                 Genre::Operation {
                     op,
+                    params,
                     bounds,
                     corrections,
                 } => {
@@ -830,6 +882,13 @@ fn corps(r: &Record) -> Vec<u8> {
                     for c in corrections {
                         ecrire_correction(&mut w, c);
                     }
+                    // **En DERNIER, et c'est délibéré.** Un journal écrit
+                    // avant que ce champ existe s'arrête ici ; le lecteur le
+                    // relit donc sans rien perdre et rend des paramètres
+                    // vides. Glissé entre `op` et `bounds`, il aurait décalé
+                    // tout ce qui suit et rendu illisible ce qui est déjà sur
+                    // le disque de quelqu'un.
+                    w.blob(params);
                 }
             }
         }
@@ -837,7 +896,13 @@ fn corps(r: &Record) -> Vec<u8> {
     w.0
 }
 
-fn lire_corps(b: &[u8]) -> Result<Record, JournalError> {
+/// Décode le CORPS d'un enregistrement — ce qu'`encoder` emballe.
+///
+/// Publique avec `corps` pour que le format se teste au niveau où il se casse :
+/// une entrée tronquée, un champ ajouté en fin de corps, un genre inconnu. Le
+/// vérifier seulement à travers `encoder`/`decoder` passerait par la
+/// compression et l'empreinte, qui masquent où ça a cédé.
+pub fn lire_corps(b: &[u8]) -> Result<Record, JournalError> {
     let mut r = R::new(b);
     Ok(match r.u8()? {
         G_CURSEUR => Record::Curseur(r.u64()? as usize),
@@ -859,8 +924,17 @@ fn lire_corps(b: &[u8]) -> Result<Record, JournalError> {
                     for _ in 0..n {
                         corrections.push(lire_correction(&mut r)?);
                     }
+                    // Plus un octet : c'est une entrée écrite avant que les
+                    // paramètres existent. Elle s'annule comme avant, elle ne
+                    // se rejoue pas, et c'est tout ce que ça veut dire.
+                    let params = if r.p < r.b.len() {
+                        r.blob()?
+                    } else {
+                        Vec::new()
+                    };
                     Genre::Operation {
                         op,
+                        params,
                         bounds,
                         corrections,
                     }

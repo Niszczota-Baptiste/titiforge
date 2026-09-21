@@ -115,6 +115,19 @@ fn main() {
     let de = interner.intern(&cible);
     let pierre = interner.intern("minecraft:stone");
     let terre = interner.intern("minecraft:dirt");
+    // **Remplacer un bloc par lui-même n'écrit rien, et c'est JUSTE.** Sans
+    // cette garde, l'essai de palette ne touchait aucun chunk et le bilan
+    // annonçait une FAUTE du moteur pour un argument dégénéré. Un outil de
+    // contrôle qui accuse à tort est pire qu'un outil qui se tait : on part
+    // chercher un bug qui n'existe pas.
+    if de == pierre {
+        eprintln!(
+            "cible dégénérée : « {cible} » est aussi le bloc de remplacement, \
+             donc l'essai de palette n'écrirait rien. Choisir un autre bloc \
+             (p. ex. minecraft:deepslate)."
+        );
+        std::process::exit(2);
+    }
 
     let (x0, x1) = (
         ov.regions.iter().map(|r| r.pos.x).min().unwrap() * 512,

@@ -76,7 +76,7 @@ impl Maillage {
 /// dalles de chêne posées côte à côte n'ont pas deux modèles, elles ont deux
 /// positions.
 ///
-/// On n'émet donc plus la géométrie mais la POSE : huit octets par bloc au
+/// On n'émet donc plus la géométrie mais la POSE : douze octets par bloc au
 /// lieu d'un quad par face de chaque cuboïde. Le modèle vit une fois, dans un
 /// tampon indexé par l'état, et le GPU le répète.
 ///
@@ -91,6 +91,17 @@ pub struct Instance {
     /// Un bit par face (ordre de `Face`) : le voisin de ce côté est opaque.
     pub voisins_opaques: u8,
     pub id: StateId,
+    /// Le biome de la case — **zéro pour un état qui n'en prend pas la
+    /// couleur**, exactement comme dans la clé de fusion de la passe
+    /// gloutonne.
+    ///
+    /// C'est ce zéro qui fait tout le travail en aval : la table de géométrie
+    /// du rendu est mémoïsée sur `(état, biome)`, donc un catalogue non teinté
+    /// — la quasi-totalité — garde UNE table par état, comme avant que les
+    /// biomes existent. Le mettre partout ferait autant de copies de la
+    /// géométrie d'un escalier qu'il y a de biomes dans la scène, pour une
+    /// couleur que l'escalier ne prend pas.
+    pub biome: StateId,
 }
 
 /// Ce que produit la passe de modèles en mode instances.

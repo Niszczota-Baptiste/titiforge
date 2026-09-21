@@ -21,7 +21,7 @@ use tf_ops::plan::Plan;
 use tf_ops::Presse;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
-use tf_world::journal::{Genre, Journal};
+use tf_world::journal::Journal;
 use tf_world::source::{Dimension, Folder, MemorySource, RegionSource};
 use tf_world::Staging;
 
@@ -190,25 +190,17 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     let apres = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
 
     // Le journal, comme l'application le tiendra : UNE entrée pour l'opération
-    // entière, quel que soit le nombre de chunks touchés.
+    // entière, quel que soit le nombre de chunks touchés. Par la JONCTION —
+    // c'est elle qui remplit `bounds` depuis ce que l'opération a vraiment
+    // écrit, et c'est d'elle que le remaillage incrémental dépendra.
     let mut journal = Journal::new();
-    let corrections = rap
-        .patches
-        .iter()
-        .cloned()
-        .map(tf_world::journal::Correction::Chunk)
-        .collect();
-    journal.pousser(
+    assert!(rap.journaliser(
+        &mut journal,
         "Remplacer pierre → terre",
-        0,
-        Genre::Operation {
-            op: "replace".into(),
-            // Le champ que `Rapport.bornes` remplit : le remaillage
-            // incrémental et le recadrage de la vue s'y fient.
-            bounds: rap.bornes,
-            corrections,
-        },
-    );
+        "replace",
+        Vec::new(),
+        0
+    ));
     assert!(journal.peut_annuler());
 
     // ── annuler
@@ -486,21 +478,7 @@ fn une_operation_sur_plusieurs_regions_fait_une_seule_entree_de_journal() {
     );
 
     let mut journal = Journal::new();
-    let corrections = rap
-        .patches
-        .iter()
-        .cloned()
-        .map(tf_world::journal::Correction::Chunk)
-        .collect();
-    journal.pousser(
-        "Remplacer",
-        0,
-        Genre::Operation {
-            op: "replace".into(),
-            bounds: rap.bornes,
-            corrections,
-        },
-    );
+    assert!(rap.journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0));
     assert_eq!(journal.entrees().len(), 1, "UNE entrée, pas une par région");
     assert_eq!(
         journal.entrees()[0].regions().len(),
@@ -1044,4 +1022,98 @@ fn coller_hors_des_chunks_generes_n_ecrit_rien_et_le_dit() {
         st.source().read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
         brut
     );
+}
+
+// ── la jonction rapport → journal ────────────────────────────────────────────
+
+/// **La jonction existe, et elle est la SEULE.**
+///
+/// Recomposer une entrée à la main donne trois occasions de se tromper — les
+/// correctifs, le nom de l'opération, les bornes — et l'une des trois est un
+/// piège que ce dépôt a déjà payé. Le test qui manquait ne porte pas sur le
+/// journal ni sur l'opération : il porte sur ce qui les relie, et c'est
+/// toujours là que ça casse.
+#[test]
+fn la_jonction_rend_une_entree_fidele_au_rapport() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let de = i.intern("minecraft:stone");
+    let vers = i.intern("minecraft:dirt");
+    let sel = boite(0, -64, 0, 31, -33, 31);
+    let rap = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &sel,
+        &Plan::nouveau(Masque::Etat(de), Motif::Bloc(vers)),
+        &i,
+    )
+    .unwrap();
+    assert!(!rap.est_vide(), "le test ne prouve rien sans correctif");
+
+    let mut journal = Journal::new();
+    assert!(rap.journaliser(&mut journal, "Remplacer", "replace", vec![1, 2, 3], 7));
+    assert_eq!(journal.entrees().len(), 1);
+    let e = &journal.entrees()[0];
+
+    assert_eq!(e.label, "Remplacer");
+    assert_eq!(e.horodatage, 7);
+    assert_eq!(e.params(), &[1, 2, 3], "les paramètres de rejeu traversent");
+    assert!(e.est_rejouable());
+    assert_eq!(
+        e.bounds(),
+        rap.bornes,
+        "les bornes sont CELLES DU RAPPORT — ce que l'opération a écrit, pas \
+         la sélection"
+    );
+    assert_eq!(
+        e.corrections().len(),
+        rap.patches.len(),
+        "un correctif par chunk touché, ni plus ni moins"
+    );
+    // Et dans l'ORDRE du rapport : c'est lui qui rend `a_annuler` juste.
+    let cibles_entree: Vec<_> = e
+        .a_refaire()
+        .map(|c| match c {
+            tf_world::journal::Correction::Chunk(p) => p.cible.clone(),
+            autre => panic!("correctif inattendu : {autre:?}"),
+        })
+        .collect();
+    let cibles_rapport: Vec<_> = rap.patches.iter().map(|p| p.cible.clone()).collect();
+    assert_eq!(cibles_entree, cibles_rapport);
+}
+
+/// **Un rapport vide ne pousse RIEN.**
+///
+/// Une entrée sans correctif serait une case de plus dans la pile
+/// d'annulation qui ne défait rien : l'utilisateur appuierait deux fois sur
+/// Ctrl+Z sans voir quoi que ce soit bouger. C'est le pendant, un étage plus
+/// haut, du « une opération qui n'écrit rien rend `Etage::Rien` ».
+#[test]
+fn un_rapport_vide_ne_remplit_pas_le_journal() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    // Un état qui n'existe nulle part dans la fixture : rien à remplacer.
+    let absent = i.intern("minecraft:barrier");
+    let vers = i.intern("minecraft:dirt");
+    let rap = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(0, -64, 0, 31, -33, 31),
+        &Plan::nouveau(Masque::Etat(absent), Motif::Bloc(vers)),
+        &i,
+    )
+    .unwrap();
+    assert!(rap.est_vide());
+
+    let mut journal = Journal::new();
+    assert!(
+        !rap.journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0),
+        "la jonction doit DIRE qu'elle n'a rien poussé"
+    );
+    assert!(journal.entrees().is_empty());
+    assert!(!journal.peut_annuler());
 }

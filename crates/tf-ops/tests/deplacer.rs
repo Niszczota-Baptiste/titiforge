@@ -14,7 +14,7 @@ use tf_ops::edition::{appliquer, copier, deplacer, empiler};
 use tf_ops::plan::Plan;
 use tf_ops::{Masque, Motif, Pas};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
-use tf_world::journal::{Correction, Genre, Journal};
+use tf_world::journal::{Correction, Journal};
 use tf_world::source::{Dimension, Folder, MemorySource, RegionSource};
 use tf_world::Staging;
 
@@ -271,16 +271,11 @@ fn annuler_un_deplacement_qui_repasse_sur_le_meme_chunk() {
         "le test ne prouve rien si aucun chunk n'est touché deux fois"
     );
 
+    // Par la JONCTION, pas à la main : c'est elle qui décide de l'ordre des
+    // correctifs, et c'est cet ordre-là que le test doit éprouver. Recomposer
+    // l'entrée ici testerait la recomposition du test.
     let mut journal = Journal::new();
-    journal.pousser(
-        "Déplacer",
-        0,
-        Genre::Operation {
-            op: "move".into(),
-            bounds: r.bornes,
-            corrections: r.patches.into_iter().map(Correction::Chunk).collect(),
-        },
-    );
+    assert!(r.journaliser(&mut journal, "Déplacer", "move", Vec::new(), 0));
 
     let (entree, _) = journal.annuler().unwrap();
     let mut defait = apres.clone();

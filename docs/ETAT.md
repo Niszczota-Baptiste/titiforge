@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-561 tests, répartis par ce qu'ils PROUVENT :
+568 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -47,9 +47,9 @@ cargo test --workspace
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
-| `tf-world` journal/staging/residency/coords/source/lecture | 112 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée |
+| `tf-world` journal/staging/residency/coords/source/lecture | 115 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
-| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 57 | les trois étages, la jonction, le presse-papiers, le hachage par plan |
+| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 59 | les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
@@ -61,7 +61,7 @@ cargo test --workspace
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
-| `tf-render` rendu | 17 | **au pixel** : ombrage, teinte, dalle, alignement WGSL |
+| `tf-render` rendu | 20 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; et que la teinte de biome atteint AUSSI les blocs-modèles, sans les dupliquer quand ils ne se teintent pas |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :
