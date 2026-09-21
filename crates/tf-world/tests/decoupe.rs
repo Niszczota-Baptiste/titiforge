@@ -298,3 +298,61 @@ fn une_selection_alignee_couvre_des_sections_entieres() {
     );
     assert!(decalee.sections().any(|s| !decalee.covers_section(s)));
 }
+
+// ── ce qui décide vraiment l'étage ──────────────────────────────────────────
+
+/// **`//chunk` ne suffit PAS, et c'est la mesure qui l'a dit.**
+///
+/// Une sélection alignée sur les chunks en x et z, mais qui va de y = −40 à
+/// −20, ne couvre AUCUNE section entière : les sections vont de −48 à −33
+/// puis de −32 à −17. Mesuré sur un vrai monde, douze sections passaient
+/// encore par l'étage bloc pendant que l'outil annonçait « alignée ».
+///
+/// Les deux moitiés sont nécessaires, et ce sont deux gestes distincts.
+#[test]
+fn aligner_les_chunks_ne_suffit_pas_pour_l_etage_palette() {
+    let sel = boite((3, -40, 5), (20, -20, 40)).aligner(Niveau::Chunk);
+    assert!(sel.est_alignee(Niveau::Chunk), "elle EST alignée en x et z");
+    let (entieres, total) = sel.sections_entieres();
+    assert!(total > 0);
+    assert_eq!(entieres, 0, "et pourtant aucune section entière : {sel:?}");
+
+    // Avec la hauteur, les deux.
+    let les_deux = sel.aligner_sections();
+    let (entieres, total) = les_deux.sections_entieres();
+    assert_eq!(entieres, total, "toutes, cette fois : {les_deux:?}");
+    assert!(
+        les_deux.est_alignee(Niveau::Chunk),
+        "et toujours alignée en x/z"
+    );
+}
+
+/// La hauteur s'étend aux tranches de seize, et pas d'un bloc de plus.
+#[test]
+fn aligner_les_sections_etend_la_hauteur_aux_tranches_de_seize() {
+    let a = boite((0, -40, 0), (15, -20, 15)).aligner_sections();
+    assert_eq!((a.min.y, a.max.y), (-48, -17), "les deux tranches touchées");
+    // x et z ne bougent PAS.
+    assert_eq!((a.min.x, a.max.x, a.min.z, a.max.z), (0, 15, 0, 15));
+    // Du côté positif aussi, et sur une hauteur déjà alignée : idempotent.
+    let b = boite((0, 0, 0), (15, 31, 15)).aligner_sections();
+    assert_eq!((b.min.y, b.max.y), (0, 31));
+    assert_eq!(b.aligner_sections(), b, "idempotent");
+}
+
+/// Elle ÉTEND, comme `aligner` — jamais elle ne rétrécit.
+#[test]
+fn aligner_les_sections_etend_et_ne_retrecit_jamais() {
+    for sel in [
+        boite((0, -40, 0), (15, -20, 15)),
+        boite((0, 1, 0), (15, 2, 15)),
+        boite((0, -1, 0), (15, 0, 15)),
+    ] {
+        let a = sel.aligner_sections();
+        assert!(
+            a.contains(sel.min) && a.contains(sel.max),
+            "{sel:?} → {a:?}"
+        );
+        assert!(a.volume() >= sel.volume());
+    }
+}

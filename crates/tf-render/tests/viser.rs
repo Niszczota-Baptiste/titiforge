@@ -324,3 +324,100 @@ fn la_chaine_camera_vers_bloc_tient_de_bout_en_bout() {
     // Et on va bien vers l'Est : la case touchée est devant, pas derrière.
     assert!(t.case[0] > 0, "vers l'Est : {:?}", t.case);
 }
+
+// ── les deux tables de directions ───────────────────────────────────────────
+
+/// **`tf_mesh::forme::Face` et `tf_world::Direction` disent la même chose, et
+/// on le MESURE.**
+///
+/// Les deux décrivent les six directions du repère Minecraft. Elles ne
+/// peuvent pas partager un type : ni `tf-world` ni `tf-mesh` ne dépend de
+/// l'autre, et les faire dépendre mettrait le mailleur sous l'éditeur ou
+/// l'inverse. Ce dépôt a payé quatre fois le piège des deux tables qui
+/// divergent — la rotation des variantes, les touches de `we-engine`, la
+/// table de `tf-bench`, les deux miroirs. La parade n'est pas d'espérer
+/// qu'elles restent d'accord.
+///
+/// Le croisement porte sur ce qu'elles VEULENT DIRE — le pas vers le voisin —
+/// et pas sur leur rang, qui serait une coïncidence d'écriture.
+/// `viser` rend une `Face`, `Selection::agrandir` prend une `Direction` : un
+/// désaccord ferait tirer la paroi opposée à celle qu'on a visée.
+#[test]
+fn les_deux_tables_de_directions_disent_la_meme_chose() {
+    use tf_mesh::forme::FACES;
+    use tf_world::selection::DIRECTIONS;
+
+    assert_eq!(FACES.len(), DIRECTIONS.len());
+    for (f, d) in FACES.iter().zip(DIRECTIONS.iter()) {
+        assert_eq!(f.pas(), d.pas(), "{f:?} et {d:?} ne pointent pas pareil");
+        assert_eq!(f.axe(), d.axe(), "{f:?} et {d:?} : axes différents");
+        assert_eq!(
+            f.positif(),
+            d.positif(),
+            "{f:?} et {d:?} : signes différents"
+        );
+        assert_eq!(
+            f.opposee().pas(),
+            d.opposee().pas(),
+            "{f:?} et {d:?} : opposées différentes"
+        );
+    }
+    // Et les six sont bien distinctes des deux côtés — une table qui
+    // dupliquerait une direction passerait la boucle ci-dessus.
+    let pas: std::collections::BTreeSet<[i32; 3]> = DIRECTIONS.iter().map(|d| d.pas()).collect();
+    assert_eq!(pas.len(), 6);
+}
+
+/// La chaîne que le croisement protège : ce que `viser` rend doit pouvoir
+/// tirer la BONNE paroi d'une sélection.
+#[test]
+fn la_face_visee_dans_le_monde_tire_la_bonne_paroi() {
+    use tf_mesh::forme::FACES;
+    use tf_world::coords::BlockPos;
+    use tf_world::selection::{Selection, DIRECTIONS};
+
+    // Un bloc solide isolé, visé depuis six côtés.
+    let cible = [5, 0, 0];
+    let depuis: [([f32; 3], [f32; 3]); 6] = [
+        ([0.5, 0.5, 0.5], [1.0, 0.0, 0.0]),
+        ([10.5, 0.5, 0.5], [-1.0, 0.0, 0.0]),
+        ([5.5, -6.5, 0.5], [0.0, 1.0, 0.0]),
+        ([5.5, 6.5, 0.5], [0.0, -1.0, 0.0]),
+        ([5.5, 0.5, -6.5], [0.0, 0.0, 1.0]),
+        ([5.5, 0.5, 6.5], [0.0, 0.0, -1.0]),
+    ];
+    for (o, d) in depuis {
+        let t = viser(o, d, 64.0, &bloc(cible)).expect("touche");
+        let face = t.face.expect("une face");
+        // Le rang de la face dans FACES désigne la direction de même rang.
+        let rang = FACES.iter().position(|f| *f == face).unwrap();
+        let dir = DIRECTIONS[rang];
+
+        let mut s = Selection::nouvelle();
+        s.poser_coin1(BlockPos::new(cible[0], cible[1], cible[2]));
+        s.poser_coin2(BlockPos::new(cible[0], cible[1], cible[2]));
+        let avant = s.boite().unwrap();
+        s.agrandir(dir, 2);
+        let apres = s.boite().unwrap();
+
+        // La face qui a bougé doit être celle du côté d'où l'on vient.
+        let pas = dir.pas();
+        let k = dir.axe();
+        let (a0, a1) = (
+            [avant.min.x, avant.min.y, avant.min.z][k],
+            [avant.max.x, avant.max.y, avant.max.z][k],
+        );
+        let (b0, b1) = (
+            [apres.min.x, apres.min.y, apres.min.z][k],
+            [apres.max.x, apres.max.y, apres.max.z][k],
+        );
+        if pas[k] > 0 {
+            assert_eq!((b0, b1), (a0, a1 + 2), "depuis {o:?} vers {d:?}");
+        } else {
+            assert_eq!((b0, b1), (a0 - 2, a1), "depuis {o:?} vers {d:?}");
+        }
+        // Et la sélection s'est étendue VERS l'observateur, jamais au travers.
+        let vers_nous = (o[k] - cible[k] as f32).signum() as i32;
+        assert_eq!(pas[k].signum(), vers_nous, "depuis {o:?} : mauvais côté");
+    }
+}

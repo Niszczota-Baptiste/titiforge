@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (620 tests aujourd'hui)
+cargo test            # tous les crates (642 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -280,6 +280,11 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-60,0,
 # C'est la seule opération qui matérialise toute la sélection — elle l'annonce.
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,20,-20,20" --creuser
 cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "0,-40,0,20,-20,20" --creuser --epaisseur 3
+# Les GESTES de sélection, dans l'ordre tapé, avant l'opération.
+# //expand pousse UNE face ; //chunk et --sections sont les DEUX moitiés de ce
+# qui donne l'étage palette — l'outil COMPTE les sections entièrement couvertes
+# plutôt que d'annoncer « alignée », qui est vrai et ne prouve rien.
+cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "3,-40,5,20,-20,40" --pousser est 5 --chunk --sections --poser minecraft:stone
 
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
@@ -324,7 +329,8 @@ crates/
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
-               (cellules de chunk et de .mca, et l'alignement `//chunk`)
+               (cellules de chunk et de .mca, `//chunk` et les sections)
+               sélection ✅ : deux coins, `//expand`, et la FACE qu'on attrape
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
@@ -1189,3 +1195,38 @@ propres à ce dépôt.
   une autre, sans erreur nulle part. Corollaire utile : teinter les chunks
   par la parité de LEUR région fait voir la frontière de fichier sans
   dessiner un second quadrillage par-dessus le premier.
+
+- **« Alignée sur les chunks » est vrai et ne prouve rien.** `//chunk`
+  n'aligne que x et z — c'est la convention de WorldEdit, et étendre la
+  hauteur sans le dire remplirait de la pierre du sol au ciel. Mais une
+  sélection de y = −40 à −20 ne couvre AUCUNE section entière : les sections
+  vont de −48 à −33 puis de −32 à −17. Mesuré sur un vrai monde, douze
+  sections passaient encore par l'étage bloc pendant que l'outil annonçait
+  « alignée ». Les deux moitiés sont nécessaires et ce sont deux gestes
+  distincts (`--chunk` et `--sections`). Corollaire, et c'est la vraie leçon :
+  **ce qui décide l'étage se COMPTE** (`sections_entieres`), il ne se déduit
+  pas d'une propriété qui a l'air suffisante. L'outil annonce « 12 / 12 »,
+  pas « alignée ».
+- **Deux `enum` de directions dans deux crates qui ne peuvent pas se voir.**
+  `tf_mesh::forme::Face` sert au mailleur, `tf_world::Direction` à la
+  sélection ; ni l'un ni l'autre crate ne dépend de son voisin, et les faire
+  dépendre mettrait le mailleur sous l'éditeur ou l'inverse. Ce dépôt a payé
+  QUATRE fois le piège des tables qui divergent. La parade n'est pas
+  d'espérer : un test de `tf-render` — le seul crate qui voie les deux — les
+  croise par ce qu'elles VEULENT DIRE (`pas()`, `axe()`, `opposee()`), jamais
+  par leur rang, qui serait une coïncidence d'écriture. `viser` rend une
+  `Face` et `agrandir` prend une `Direction` : un désaccord ferait tirer la
+  paroi opposée à celle qu'on a visée.
+- **Les bornes d'une `BBox` sont INCLUSES, le solide qu'elle décrit ne l'est
+  pas.** Un bloc occupe une case d'une unité : le solide va de `min` à
+  `max + 1`. Confondre les deux rend la dernière rangée de blocs impossible à
+  attraper — le rayon passe juste derrière la paroi — ce qui se lit « le bord
+  de la sélection ne répond pas » et ne désigne pas la cause. La conversion se
+  fait une fois, dans `BBox::coins` ; recopiée sur place, elle est oubliée une
+  fois sur deux.
+- **Une face de sélection ne traverse jamais la face opposée.** `//contract`
+  au-delà laisserait une boîte retournée que `BBox::new` normaliserait SANS
+  RIEN DIRE : la sélection couvrirait brusquement l'autre côté, et
+  l'opération suivante écrirait là-bas. On s'arrête à un bloc d'épaisseur,
+  comme WorldEdit. Même famille : un `//expand` près de `i32::MAX` ramène la
+  face à l'autre bout du monde si l'addition n'est pas faite en `i64`.

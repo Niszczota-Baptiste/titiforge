@@ -35,6 +35,8 @@ use tf_ops::{
     creuser, extrait_creuse, Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome,
 };
 use tf_world::coords::{BBox, BlockPos};
+use tf_world::decoupe::Niveau;
+use tf_world::selection::{Direction, Selection};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
 use tf_world::Staging;
@@ -67,8 +69,26 @@ struct Args {
     profondeur: u32,
     /// Passes de lissage. Zéro vaut une — l'option est facultative.
     passes: u32,
+    /// Gestes de SÉLECTION, appliqués dans l'ordre AVANT l'opération.
+    ///
+    /// Une liste et pas trois champs : `--pousser est 3 --chunk` doit
+    /// s'enchaîner dans l'ordre tapé, sinon l'utilisateur ne peut pas prévoir
+    /// ce qu'il obtient.
+    gestes: Vec<Geste>,
     /// Couches de paroi que `--creuser` GARDE. Zéro vaut une.
     epaisseur: u32,
+}
+
+/// Ce qui bouge la SÉLECTION avant que l'opération ne parte.
+#[derive(Debug, Clone, Copy)]
+enum Geste {
+    /// `//expand` / `//contract` : pousse une face. Négatif la ramène.
+    Pousser(Direction, i32),
+    /// `//chunk` : étend aux cellules entières du découpage.
+    Aligner(Niveau),
+    /// Étend la HAUTEUR aux sections entières — l'autre moitié de ce qui
+    /// donne l'étage palette.
+    AlignerSections,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,6 +183,19 @@ fn usage() -> ! {
                              sphère pleine se vide. Ne se confond pas avec
                              --creux : celui-ci dessine, celui-là INSPECTE
   --epaisseur <n>            les couches de paroi que --creuser garde (défaut 1)
+
+ Gestes de SÉLECTION, appliqués dans l'ordre tapé, AVANT l'opération :
+  --pousser <dir> <n>        //expand : pousse UNE face de n blocs. n négatif la
+                             ramène (//contract), sans jamais traverser la face
+                             opposée. est|ouest|nord|sud|haut|bas
+  --chunk                    //chunk : étend la sélection aux CHUNKS entiers.
+                             Ce n'est pas cosmétique — une sélection alignée
+                             couvre des sections entières, donc l'étage palette ;
+                             décalée d'un bloc, c'est × 21
+  --mca                      la même chose, mais aux fichiers r.X.Z.mca
+  --sections                 étend la HAUTEUR aux tranches de 16. --chunk ne le
+                             fait pas — c'est la convention de WorldEdit — et
+                             les DEUX sont nécessaires pour l'étage palette
   --murs <épaisseur>         //walls : les 4 parois VERTICALES de la sélection
   --faces <épaisseur>        //faces : ses 6 faces, plancher et plafond compris
   Les formes sont CENTRÉES sur la sélection, et l'opération ne paie que la
@@ -221,6 +254,7 @@ fn lire_args() -> Args {
         profondeur: 3,
         passes: 0,
         epaisseur: 0,
+        gestes: Vec::new(),
     };
     // Rotation et miroir se donnent séparément de la destination : on les
     // recolle à la fin, parce que `--tourner` peut précéder `--copier-vers`
@@ -334,6 +368,23 @@ fn lire_args() -> Args {
                 })
             }
             "--passes" => args.passes = nombre(a.next()) as u32,
+            // Le repère Minecraft en toutes lettres, comme `--empiler` :
+            // +X = Est, +Z = Sud, +Y = Haut.
+            "--pousser" => {
+                let d = match a.next().unwrap_or_else(|| usage()).as_str() {
+                    "est" | "e" => Direction::PlusX,
+                    "ouest" | "o" => Direction::MoinsX,
+                    "sud" | "s" => Direction::PlusZ,
+                    "nord" | "n" => Direction::MoinsZ,
+                    "haut" | "h" => Direction::PlusY,
+                    "bas" | "b" => Direction::MoinsY,
+                    _ => usage(),
+                };
+                args.gestes.push(Geste::Pousser(d, nombre(a.next()) as i32));
+            }
+            "--chunk" => args.gestes.push(Geste::Aligner(Niveau::Chunk)),
+            "--mca" => args.gestes.push(Geste::Aligner(Niveau::Region)),
+            "--sections" => args.gestes.push(Geste::AlignerSections),
             "--creuser" => args.op = Some(Op::Creuser),
             "--epaisseur" => args.epaisseur = nombre(a.next()) as u32,
             "--couches" => {
@@ -577,12 +628,69 @@ fn main() {
         plan
     };
 
+    // ── les gestes de sélection, DANS L'ORDRE TAPÉ
+    //
+    // Avant tout le reste : c'est la sélection finale qui décide de la portée,
+    // des formes, et de ce que le rapport annoncera. Les appliquer après
+    // rendrait un chiffre qui ne correspond à rien.
+    let sel = if args.gestes.is_empty() {
+        sel
+    } else {
+        let mut s = Selection::nouvelle();
+        s.poser_coin1(sel.min);
+        s.poser_coin2(sel.max);
+        for g in &args.gestes {
+            let fait = match *g {
+                Geste::Pousser(d, n) => s.agrandir(d, n),
+                Geste::Aligner(niveau) => s.aligner(niveau),
+                Geste::AlignerSections => s.aligner_sections(),
+            };
+            // Le DIRE quand ça ne change rien : un geste silencieux qui n'a
+            // rien fait est un geste qu'on croit avoir fait.
+            if !fait {
+                println!("geste sans effet : {g:?}");
+            }
+        }
+        let apres = s.boite().expect("la sélection avait deux coins");
+        let (ax, ay, az) = apres.size();
+        println!(
+            "gestes : {} × {} × {} → {ax} × {ay} × {az} · {},{},{} → {},{},{}",
+            sel.size().0,
+            sel.size().1,
+            sel.size().2,
+            apres.min.x,
+            apres.min.y,
+            apres.min.z,
+            apres.max.x,
+            apres.max.y,
+            apres.max.z
+        );
+        apres
+    };
+
     let (sx, sy, sz) = sel.size();
     println!(
         "\nsélection : {sx} × {sy} × {sz} = {} blocs · {} régions",
         sel.volume(),
         sel.regions().count()
     );
+    // **Ce qui décide l'étage se COMPTE, il ne se déduit pas.** « Alignée sur
+    // les chunks » est vrai et ne prouve rien : une sélection de y = −40 à
+    // −20 est alignée en x et z et ne couvre AUCUNE section entière, parce que
+    // les sections vont de −48 à −33 puis de −32 à −17. Mesuré en écrivant ce
+    // message : douze sections à l'étage bloc pendant que l'outil annonçait
+    // « alignée ».
+    let (entieres, total) = sel.sections_entieres();
+    if total > 0 {
+        println!(
+            "sections entièrement couvertes : {entieres} / {total}{}",
+            if entieres == total {
+                " — l'étage palette est atteignable"
+            } else {
+                " — le reste passera par l'étage BLOC (--chunk aligne x et z, --sections la hauteur)"
+            }
+        );
+    }
 
     // Les formes sont centrées sur la SÉLECTION. Le milieu se prend en
     // division PLANCHER : `(-9 + -1) / 2` vaut −5 en Rust comme en euclidien,

@@ -13,6 +13,7 @@ pub mod fs_source;
 pub mod journal;
 pub mod lecture;
 pub mod residency;
+pub mod selection;
 pub mod source;
 pub mod staging;
 
@@ -26,6 +27,7 @@ pub use journal::{
 };
 pub use lecture::{sections_de, Bilan, SectionLue};
 pub use residency::{Editing, Evicted, Residency, State, Weighed};
+pub use selection::{Direction, Selection, DIRECTIONS};
 pub use source::{
     Dimension, Folder, LockProbe, MemorySource, Overview, RegionInfo, RegionSink, RegionSource,
     SourceError,

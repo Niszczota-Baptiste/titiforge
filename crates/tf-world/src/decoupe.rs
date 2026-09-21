@@ -191,6 +191,47 @@ impl BBox {
         }
     }
 
+    /// Étend la HAUTEUR aux sections entières — les tranches de 16 blocs.
+    ///
+    /// **`aligner` ne suffit pas à gagner l'étage palette, et c'est ce que je
+    /// viens de découvrir en le mesurant.** Une sélection alignée sur les
+    /// chunks en x et z, mais qui va de y = −40 à −20, ne couvre AUCUNE
+    /// section entière : les sections vont de −48 à −33 et de −32 à −17. Douze
+    /// sections passaient encore par l'étage bloc, et le message de l'outil
+    /// annonçait pourtant « alignée ».
+    ///
+    /// Les deux sont donc nécessaires, et ce sont deux gestes distincts :
+    /// `//chunk` ne touche pas à la hauteur parce que c'est la convention de
+    /// WorldEdit, et parce qu'étendre verticalement sans le dire ferait
+    /// remplir de la pierre du sol au ciel.
+    pub fn aligner_sections(&self) -> BBox {
+        let bas = floor_div(self.min.y, 16) as i64 * 16;
+        let haut = (floor_div(self.max.y, 16) as i64 + 1) * 16 - 1;
+        BBox {
+            min: BlockPos::new(self.min.x, bas.max(i32::MIN as i64) as i32, self.min.z),
+            max: BlockPos::new(self.max.x, haut.min(i32::MAX as i64) as i32, self.max.z),
+        }
+    }
+
+    /// Combien de sections la boîte couvre ENTIÈREMENT, sur combien elle en
+    /// touche.
+    ///
+    /// **C'est la seule mesure qui dise ce que l'opération va coûter**, et
+    /// elle se compte plutôt qu'elle ne se déduit : « alignée sur les chunks »
+    /// est vrai et ne prouve rien tant que la hauteur ne tombe pas sur des
+    /// tranches de seize.
+    pub fn sections_entieres(&self) -> (usize, usize) {
+        let mut entieres = 0;
+        let mut total = 0;
+        for s in self.sections() {
+            total += 1;
+            if self.covers_section(s) {
+                entieres += 1;
+            }
+        }
+        (entieres, total)
+    }
+
     /// Vrai si la boîte est DÉJÀ alignée sur ce niveau.
     ///
     /// Sert à le DIRE : une interface qui propose « aligner » sur une
