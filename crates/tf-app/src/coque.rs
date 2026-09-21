@@ -42,11 +42,13 @@ pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32) {
     // **Le fil moteur démarre AVANT la fenêtre.** S'il ne démarre pas, autant
     // le savoir tout de suite : une coque qui ouvre une fenêtre et découvre
     // ensuite qu'elle ne peut rien éditer aurait menti par omission.
+    let chemin = std::path::PathBuf::from(&ouvert.nom);
     let moteur = ouvert.staging.clone().map(|st| {
         Moteur::lancer(
             st,
             tf_world::Dimension::Overworld,
             tf_world::journal::Journal::new(),
+            Some(chemin),
         )
     });
     let mut app = Coque {

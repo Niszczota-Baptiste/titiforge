@@ -312,3 +312,51 @@ fn descendre(
     }
     Ok(())
 }
+
+/// **Copie une save à côté d'elle, horodatée.**
+///
+/// L'étape 2 de l'invariant n° 6, et elle vit ici plutôt que chez chaque
+/// hôte : la ligne de commande l'avait déjà écrite, la coque l'aurait
+/// réécrite, et une sauvegarde qui diverge d'un hôte à l'autre est une
+/// sauvegarde qu'on découvre incomplète le jour où on en a besoin.
+///
+/// **À côté, pas dedans.** Copier une save à l'intérieur d'elle-même
+/// récurserait jusqu'à remplir le disque — et le nom porte l'instant, parce
+/// qu'écraser la sauvegarde précédente ne sauvegarde plus rien.
+pub fn sauvegarder(monde: &std::path::Path) -> std::result::Result<std::path::PathBuf, String> {
+    let quand = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let nom = format!(
+        "{}.sauvegarde-{quand}",
+        monde
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("monde")
+    );
+    let vers = monde.with_file_name(nom);
+    if vers.exists() {
+        return Err(format!(
+            "la sauvegarde {} existe déjà — une seconde par seconde suffit, \
+             mais deux dans la même seconde s'écraseraient",
+            vers.display()
+        ));
+    }
+    copier_dossier(monde, &vers).map_err(|e| format!("sauvegarde : {e}"))?;
+    Ok(vers)
+}
+
+fn copier_dossier(de: &std::path::Path, vers: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(vers)?;
+    for e in fs::read_dir(de)? {
+        let e = e?;
+        let cible = vers.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copier_dossier(&e.path(), &cible)?;
+        } else {
+            fs::copy(e.path(), &cible)?;
+        }
+    }
+    Ok(())
+}

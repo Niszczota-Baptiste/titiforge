@@ -491,41 +491,10 @@ fn regles(pack: Option<&Path>) -> Option<tf_blocks::Table> {
     }
 }
 
-/// Une copie de sauvegarde du monde, à côté de lui.
-///
-/// **Invariant n° 6 : aucune écriture sans sauvegarde préalable**, et dans cet
-/// ordre. Une sauvegarde prise après la première écriture ne sauvegarde plus
-/// rien.
-fn sauvegarder(monde: &Path) -> Result<PathBuf, String> {
-    let quand = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let nom = format!(
-        "{}.sauvegarde-{quand}",
-        monde
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("monde")
-    );
-    let vers = monde.with_file_name(nom);
-    copier_dossier(monde, &vers).map_err(|e| e.to_string())?;
-    Ok(vers)
-}
-
-fn copier_dossier(de: &Path, vers: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(vers)?;
-    for e in std::fs::read_dir(de)? {
-        let e = e?;
-        let cible = vers.join(e.file_name());
-        if e.file_type()?.is_dir() {
-            copier_dossier(&e.path(), &cible)?;
-        } else {
-            std::fs::copy(e.path(), &cible)?;
-        }
-    }
-    Ok(())
-}
+// La sauvegarde horodatée vit dans `tf_world::sauvegarder` — invariant n° 6,
+// et elle est écrite UNE fois : la coque la faisait déjà, et deux
+// sauvegardes qui divergent d'un hôte à l'autre sont deux sauvegardes qu'on
+// découvre incomplètes le jour où on en a besoin.
 
 fn main() {
     let args = lire_args();
@@ -878,7 +847,7 @@ fn main() {
     let mut copie = None;
     let sink = FsSource::open(&args.monde).expect("le monde est ouvrable");
     match staging.commit(&sink, verrou, true, &mut || {
-        let vers = sauvegarder(&monde)?;
+        let vers = tf_world::sauvegarder(&monde)?;
         println!("sauvegarde : {}", vers.display());
         copie = Some(vers);
         Ok(())

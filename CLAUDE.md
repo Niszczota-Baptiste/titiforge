@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (742 tests aujourd'hui)
+cargo test            # tous les crates (744 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -368,6 +368,7 @@ crates/
                · POUSSER-TIRER ✅ en mode Conception, qui S'ACCROCHE
                  à ce qui est bâti et DIT à quoi il tient
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
+               · ÉCRIRE DANS LA SAVE ✅ (refus, sauvegarde, écriture)
                · remaillage encore global, mode Conception à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -1345,6 +1346,13 @@ propres à ce dépôt.
   garde, et l'écran montre le monde d'avant. La coque relit donc le `Staging`,
   jamais ce qu'il recouvre. Vérifié par mutation — remplacer la copie de
   travail par sa source fait rougir le test de jonction, et rien d'autre.
+- **Deux mondes ouverts partageaient la même copie de travail.** Le dossier
+  temporaire portait le seul identifiant de PROCESSUS : deux `Ouvert` dans le
+  même programme écrivaient donc dans la même couche, et le second passait par
+  -dessus les régions du premier. Trouvé par deux tests qui tournaient en
+  parallèle ; un utilisateur qui ouvre deux fenêtres l'aurait trouvé autrement,
+  et beaucoup plus tard. Un nom « unique » qui ne l'est qu'à l'échelle du
+  processus n'est pas unique.
 - **Un fil qui écrit et un fil qui lit n'ont pas besoin d'un verrou** quand un
   seul écrit. `Staging` prend `&self` partout : un `Arc` suffit, et donner la
   possession exclusive au moteur aurait obligé à faire revenir les octets par

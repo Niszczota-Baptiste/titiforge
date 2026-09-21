@@ -49,6 +49,20 @@ pub enum Commande {
     },
     Annuler,
     Refaire,
+    /// **Écrit la copie de travail dans la save.**
+    ///
+    /// L'ordre est celui que le projet s'impose et que `Staging::commit` fait
+    /// respecter : refuser si Minecraft tient le monde, sauvegarder en copie
+    /// horodatée, PUIS écrire. Une sauvegarde prise après la première écriture
+    /// ne sauvegarde plus rien.
+    ///
+    /// `confirme_sans_verrou` : hors Windows le verrou est consultatif et une
+    /// ouverture réussie ne prouve rien. On ne réduit PAS ça à un booléen dans
+    /// le moteur — c'est l'utilisateur qui confirme que le jeu est fermé, et
+    /// l'interface qui le lui demande.
+    Ecrire {
+        confirme_sans_verrou: bool,
+    },
     /// Range le chantier et termine le fil.
     Arreter,
 }
@@ -75,6 +89,13 @@ pub enum Reponse {
     /// Elle s'est exécutée et n'a rien changé. Ce n'est pas un échec, et le
     /// taire ferait croire à un bouton qui ne marche pas.
     Rien(String),
+    /// La save a été écrite. `sauvegarde` est le dossier horodaté qu'on a
+    /// posé avant — le DIRE compte autant que le faire, parce que c'est là
+    /// qu'on va chercher quand on regrette.
+    Ecrit {
+        regions: usize,
+        sauvegarde: String,
+    },
     Echec(String),
 }
 
@@ -96,6 +117,10 @@ impl Reponse {
             Reponse::Defait { label, .. } => format!("annulé : {label}"),
             Reponse::Refait { label, .. } => format!("refait : {label}"),
             Reponse::Rien(s) => format!("{s} — rien n'a changé"),
+            Reponse::Ecrit {
+                regions,
+                sauvegarde,
+            } => format!("écrit : {regions} région(s) · sauvegarde dans {sauvegarde}"),
             Reponse::Echec(s) => s.clone(),
         }
     }
@@ -129,6 +154,7 @@ impl Moteur {
         staging: std::sync::Arc<Staging<S, O>>,
         dim: Dimension,
         journal: Journal,
+        monde: Option<std::path::PathBuf>,
     ) -> Moteur
     where
         S: RegionSource + Send + Sync + 'static,
@@ -144,6 +170,7 @@ impl Moteur {
                     dim,
                     journal,
                     interner: Interner::new(),
+                    monde,
                 };
                 while let Ok(cmd) = commandes.recv() {
                     if matches!(cmd, Commande::Arreter) {
@@ -246,6 +273,8 @@ struct Chantier<S: RegionSource, O: RegionStore> {
     dim: Dimension,
     journal: Journal,
     interner: Interner,
+    /// Le dossier de la save, quand il y en a une. `None` = rien à écrire.
+    monde: Option<std::path::PathBuf>,
 }
 
 impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
@@ -261,6 +290,9 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             } => self.appliquer(op, &params, sel, forme, compter, seed),
             Commande::Annuler => self.defaire(Sens::Annuler),
             Commande::Refaire => self.defaire(Sens::Refaire),
+            Commande::Ecrire {
+                confirme_sans_verrou,
+            } => self.ecrire(confirme_sans_verrou),
             Commande::Arreter => Reponse::Rien("arrêt".into()),
         }
     }
@@ -319,6 +351,46 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             op: label,
             resume: blocs,
             bornes: cr.rapport.bornes,
+        }
+    }
+
+    /// Écrit la copie de travail dans la save. Voir `Commande::Ecrire`.
+    fn ecrire(&mut self, confirme_sans_verrou: bool) -> Reponse {
+        let Some(monde) = self.monde.clone() else {
+            return Reponse::Echec("aucune save derrière ce monde".into());
+        };
+        let sink = match tf_world::FsSource::open(&monde) {
+            Ok(s) => s,
+            Err(e) => return Reponse::Echec(format!("save illisible : {e:?}")),
+        };
+        let verrou = sink.probe_lock();
+        let mut ou = String::new();
+        // La sauvegarde est faite PAR `commit`, entre le refus et l'écriture.
+        // La faire ici, avant, écrirait une copie même quand le verrou refuse.
+        let r = self
+            .staging
+            .commit(&sink, verrou, confirme_sans_verrou, &mut || {
+                let vers = tf_world::sauvegarder(&monde)?;
+                ou = vers.display().to_string();
+                Ok(())
+            });
+        match r {
+            Ok(rap) => Reponse::Ecrit {
+                regions: rap.regions_ecrites,
+                sauvegarde: ou,
+            },
+            Err(e) => Reponse::Echec(match e {
+                tf_world::staging::CommitError::WorldLocked => {
+                    "Minecraft tient ce monde — le fermer d'abord. Rien n'a été écrit.".into()
+                }
+                tf_world::staging::CommitError::LockUnknown => {
+                    "impossible de savoir si Minecraft tient ce monde (le verrou \
+                     n'est consultable que sous Windows). Confirmer que le jeu est \
+                     fermé, puis recommencer."
+                        .into()
+                }
+                autre => format!("écriture refusée : {autre:?}"),
+            }),
         }
     }
 

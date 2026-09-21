@@ -265,6 +265,14 @@ pub struct Etat {
     /// Le monde ouvert est-il éditable ? La fixture ne l'est pas, et il faut
     /// le DIRE plutôt que de griser sans raison.
     pub editable: bool,
+    /// L'utilisateur confirme-t-il que Minecraft est fermé ?
+    ///
+    /// **Ce n'est pas un réglage de confort.** Hors Windows, le verrou
+    /// `session.lock` est consultatif et une ouverture réussie ne prouve rien :
+    /// `probe_lock` rend `{ locked, reliable }`, et réduire ça à un booléen
+    /// serait affirmer qu'un monde est libre sans le savoir. C'est donc
+    /// l'utilisateur qui tranche, et il doit le faire EXPRÈS.
+    pub jeu_ferme: bool,
     /// Ce que l'interface a à dire, en une ligne. Vide = rien à signaler.
     pub message: String,
 }
@@ -299,6 +307,7 @@ impl Etat {
             demande: None,
             occupe: false,
             editable: false,
+            jeu_ferme: false,
             message: String::new(),
         }
     }

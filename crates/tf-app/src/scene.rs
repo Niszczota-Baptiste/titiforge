@@ -271,7 +271,15 @@ impl Ouvert {
         let source = tf_world::FsSource::open(dir).map_err(|e| format!("monde : {e:?}"))?;
         // **La copie de travail vit à côté.** La save n'est pas ouverte en
         // écriture tant qu'on ne l'a pas demandé — invariant n° 1.
-        let couche = std::env::temp_dir().join(format!("titiforge-{}", std::process::id()));
+        //
+        // Le nom porte un compteur en plus du processus : deux mondes ouverts
+        // en même temps partageraient sinon la même couche, et le second
+        // écrirait par-dessus les régions du premier. Trouvé par deux tests
+        // qui tournaient en parallèle — un utilisateur qui ouvre deux fenêtres
+        // l'aurait trouvé autrement.
+        static SUIVANT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SUIVANT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let couche = std::env::temp_dir().join(format!("titiforge-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&couche).map_err(|e| format!("copie de travail : {e}"))?;
         let overlay =
             tf_world::FsSource::open(&couche).map_err(|e| format!("copie de travail : {e:?}"))?;

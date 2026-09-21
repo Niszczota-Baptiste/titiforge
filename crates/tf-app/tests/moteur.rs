@@ -31,7 +31,7 @@ fn moteur() -> (Moteur, MemorySource) {
         src.read_region(&SURFACE, Folder::Region, ZERO).unwrap(),
     );
     let st = std::sync::Arc::new(Staging::new(src, MemorySource::new()));
-    (Moteur::lancer(st, SURFACE, Journal::new()), miroir)
+    (Moteur::lancer(st, SURFACE, Journal::new(), None), miroir)
 }
 
 fn sel() -> BBox {
@@ -249,4 +249,22 @@ fn la_forme_traverse_le_fil() {
         (bx as u64 * by as u64 * bz as u64) < (sx as u64 * sy as u64 * sz as u64),
         "la sphère doit écrire moins que la sélection : {bx}×{by}×{bz}"
     );
+}
+
+/// **Un monde sans save derrière lui ne s'écrit pas**, et il le DIT. Un
+/// bouton qui ne répond rien se lit « ça n'a pas marché » sans qu'on sache
+/// pourquoi.
+#[test]
+fn ecrire_sans_save_est_un_echec_nomme() {
+    let (mut m, _) = moteur();
+    assert!(m.envoyer(Commande::Ecrire {
+        confirme_sans_verrou: true
+    }));
+    let r = attendre(&mut m);
+    assert!(r.echoue(), "{r:?}");
+    assert!(r.texte().contains("save"), "{}", r.texte());
+    // Et le fil survit : on peut continuer à éditer.
+    assert!(m.vivant());
+    assert!(m.envoyer(poser("minecraft:dirt")));
+    assert!(!attendre(&mut m).echoue());
 }

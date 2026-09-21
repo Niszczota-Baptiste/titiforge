@@ -396,6 +396,36 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
             }
         });
     });
+    // ── écrire dans la save
+    if e.editable {
+        ui.add_space(8.0);
+        ui.separator();
+        ui.label(RichText::new("SAVE").strong().color(GRIS));
+        ui.checkbox(&mut e.jeu_ferme, "Minecraft est fermé");
+        ui.label(
+            RichText::new(
+                "Hors Windows, le verrou de la save est consultatif : une \
+                 ouverture réussie ne prouve rien. C'est donc à vous de le dire.",
+            )
+            .small()
+            .color(GRIS),
+        );
+        ui.add_enabled_ui(e.jeu_ferme && !e.occupe, |ui| {
+            if ui
+                .button(RichText::new("Écrire dans la save").strong())
+                .on_hover_text(
+                    "Refuse si le jeu tient le monde, SAUVEGARDE en copie \
+                     horodatée, puis écrit. Dans cet ordre.",
+                )
+                .clicked()
+            {
+                e.demande = Some(crate::moteur::Commande::Ecrire {
+                    confirme_sans_verrou: e.jeu_ferme,
+                });
+            }
+        });
+    }
+
     if e.occupe {
         ui.label(RichText::new("le moteur travaille…").small().color(ORANGE));
     } else if !e.editable {
