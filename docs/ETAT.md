@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-601 tests, répartis par ce qu'ils PROUVENT :
+620 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -61,9 +61,10 @@ cargo test --workspace
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
-| `tf-render` rendu | 20 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; et que la teinte de biome atteint AUSSI les blocs-modèles, sans les dupliquer quand ils ne se teintent pas |
+| `tf-render` rendu | 25 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; que la teinte de biome atteint AUSSI les blocs-modèles ; et que le quadrillage est dans la MÊME unité que la géométrie |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 16 | quel bloc et quelle FACE sous le curseur — et que poser et casser ne visent pas la même case |
+| `tf-world` decoupe | 14 | les cellules de chunk et de `.mca`, et que `//chunk` ÉTEND sans jamais rétrécir |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :

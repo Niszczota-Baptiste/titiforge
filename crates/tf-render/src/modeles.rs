@@ -212,7 +212,15 @@ pub fn origines(chantier: &Chantier) -> Vec<Origine> {
         .map(|lot| {
             let [x, y, z] = lot.origine();
             Origine {
-                position: [x as f32 * 16.0, y as f32 * 16.0, z as f32 * 16.0, 0.0],
+                // Le MÊME facteur que le quadrillage, nommé une fois : deux
+                // constantes indépendantes finissent par diverger, et celle-ci
+                // déciderait où se dessine tout un calque.
+                position: [
+                    x as f32 * crate::lignes::SEIZIEMES_PAR_BLOC,
+                    y as f32 * crate::lignes::SEIZIEMES_PAR_BLOC,
+                    z as f32 * crate::lignes::SEIZIEMES_PAR_BLOC,
+                    0.0,
+                ],
             }
         })
         .collect()

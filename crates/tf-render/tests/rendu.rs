@@ -968,3 +968,226 @@ fn un_etat_non_teinte_ne_paie_pas_les_biomes() {
         arene.poses.iter().map(|p| p.debut_modele).collect();
     assert_eq!(debuts.len(), 1, "et toutes les poses la partagent");
 }
+
+// ── le quadrillage ──────────────────────────────────────────────────────────
+
+/// Combien de pixels portent cette couleur, à la tolérance près.
+fn pixels_de(image: &[u8], couleur: [u8; 3], tol: i32) -> u32 {
+    image
+        .chunks_exact(4)
+        .filter(|p| (0..3).all(|k| (p[k] as i32 - couleur[k] as i32).abs() <= tol))
+        .count() as u32
+}
+
+/// Une scène d'un seul cube (la section 0..16 BLOCS), avec un quadrillage.
+///
+/// Le cadrage se fait en unités de RENDU — des seizièmes — parce que c'est
+/// ce que `Camera::cadrer` attend, comme tout le reste du rendu.
+fn rendre_avec_lignes(app: &Appareil, lignes: &tf_render::Lignes) -> (Vec<u8>, u32) {
+    rendre_lignes_et_decor(app, lignes, true)
+}
+
+/// La même, en choisissant s'il y a un décor pour occulter.
+fn rendre_lignes_et_decor(
+    app: &Appareil,
+    lignes: &tf_render::Lignes,
+    decor: bool,
+) -> (Vec<u8>, u32) {
+    let t = table();
+    let mut g = Grille::new();
+    g.poser(0, 0, section(0, |_, _, _| if decor { CUBE } else { AIR }));
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let atlas = atlas_blanc(app);
+    let mut scene = Scene::nouvelle(app, &arene, &atlas);
+    scene.poser_lignes(lignes);
+
+    let cote = 128;
+    let cible = Cible::nouvelle(app, cote, cote);
+    // En BLOCS : c'est l'unité de la caméra.
+    let camera = Camera::cadrer([-2.0; 3], [18.0, 18.0, 18.0], 1.0);
+    let (pixels, _) = scene.rendre(&cible, &camera);
+    (pixels, cote)
+}
+
+/// La boîte, en pixels, des pixels qui satisfont un prédicat.
+fn emprise(
+    image: &[u8],
+    cote: u32,
+    garde: impl Fn([u8; 3]) -> bool,
+) -> Option<(u32, u32, u32, u32)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for (i, p) in image.chunks_exact(4).enumerate() {
+        if garde([p[0], p[1], p[2]]) {
+            let (x, y) = (i as u32 % cote, i as u32 / cote);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    (x0 != u32::MAX).then_some((x0, y0, x1, y1))
+}
+
+/// **Le quadrillage et la géométrie sont dans la MÊME unité — vérifié en
+/// TRAVERSANT.**
+///
+/// Tout l'espace de rendu est en seizièmes de bloc ; le découpage, lui, vient
+/// du domaine, où un chunk fait 16 BLOCS. Sans conversion, la grille d'une
+/// section se dessinait à un seizième de sa taille, tapie dans le coin du
+/// premier bloc — et l'image restait parfaitement plausible. Trouvé par une
+/// mutation qui visait autre chose : le test de profondeur que je cassais
+/// ne changeait rien, parce que le contour n'était pas là où je croyais.
+///
+/// Chaque moitié était juste. C'est leur JONCTION qui ne l'était pas, et
+/// c'est le piège de `toHeights` / `applyHeightmap` sous une autre forme :
+/// une unité qui traverse une frontière se vérifie EN TRAVERSANT.
+#[test]
+fn le_quadrillage_encadre_exactement_la_geometrie() {
+    let Some(app) = app() else { return };
+    const ROUGE: [u8; 3] = [255, 0, 0];
+    let rouge = |p: [u8; 3]| (0..3).all(|k| (p[k] as i32 - ROUGE[k] as i32).abs() <= 12);
+    // Le cube seul : son emprise à l'écran.
+    let (sans, cote) = rendre_avec_lignes(&app, &tf_render::Lignes::new());
+    // **Le fond se MESURE, il ne se recopie pas.** La couleur d'effacement est
+    // donnée en LINÉAIRE et la cible est en sRGB : les octets relus ne sont
+    // pas ceux de la constante, ils sont son encodage. Un fond recopié à la
+    // main rend un prédicat qui accepte tout, donc une emprise qui couvre
+    // l'image — et un test qui échoue en accusant la mauvaise moitié.
+    let fond = [sans[0], sans[1], sans[2]];
+    let decor =
+        move |p: [u8; 3]| !rouge(p) && (0..3).any(|k| (p[k] as i32 - fond[k] as i32).abs() > 8);
+    let cube = emprise(&sans, cote, decor).expect("le cube doit se dessiner");
+
+    // Le contour de la SECTION, en blocs : 0..16.
+    let mut l = tf_render::Lignes::new();
+    l.contour([0.0; 3], [16.0; 3], tf_render::rgba(255, 0, 0, 255));
+    let (avec, _) = rendre_avec_lignes(&app, &l);
+    let grille = emprise(&avec, cote, rouge).expect("le contour doit se dessiner");
+
+    // Les deux emprises doivent coïncider à quelques pixels près. À un
+    // seizième de l'échelle, la grille tiendrait dans un coin — l'écart se
+    // compterait en dizaines de pixels sur une image de 128.
+    for (a, b, quoi) in [
+        (cube.0, grille.0, "gauche"),
+        (cube.1, grille.1, "haut"),
+        (cube.2, grille.2, "droite"),
+        (cube.3, grille.3, "bas"),
+    ] {
+        assert!(
+            (a as i32 - b as i32).abs() <= 3,
+            "bord {quoi} : le cube est à {a}, la grille à {b} — \
+             elles ne sont pas à la même échelle. cube {cube:?} grille {grille:?}"
+        );
+    }
+}
+
+/// **Le quadrillage se DESSINE.**
+///
+/// C'est le pendant de « une absence ne se voit pas » : les blocs-modèles ont
+/// été maillés, comptés, affichés dans le rapport — et jamais dessinés, sur
+/// une vraie save, sans que rien ne le dise. Une grille demandée et absente
+/// donne une image parfaitement plausible.
+#[test]
+fn un_quadrillage_demande_apparait_a_l_ecran() {
+    let Some(app) = app() else { return };
+    const ROUGE: [u8; 3] = [255, 0, 0];
+
+    let vide = tf_render::Lignes::new();
+    let (sans, _) = rendre_avec_lignes(&app, &vide);
+    assert_eq!(pixels_de(&sans, ROUGE, 12), 0, "rien de rouge sans grille");
+
+    let mut l = tf_render::Lignes::new();
+    l.contour([0.0; 3], [16.0; 3], tf_render::rgba(255, 0, 0, 255));
+    assert_eq!(l.len(), 12, "une boîte a douze arêtes");
+    let (avec, _) = rendre_avec_lignes(&app, &l);
+    assert!(
+        pixels_de(&avec, ROUGE, 12) > 50,
+        "le contour doit se voir : {} pixels rouges",
+        pixels_de(&avec, ROUGE, 12)
+    );
+}
+
+/// **Le quadrillage est un CALQUE : il ne se cache pas derrière le décor.**
+///
+/// Un repère qui disparaît derrière le mur qu'on est en train d'aligner n'est
+/// pas un repère. Le contour tracé ICI est à l'intérieur de la section pleine
+/// de cubes : avec un test de profondeur, il serait entièrement masqué.
+#[test]
+fn le_quadrillage_passe_devant_le_decor() {
+    let Some(app) = app() else { return };
+    const VERT: [u8; 3] = [0, 255, 0];
+    let mut l = tf_render::Lignes::new();
+    // Au cœur de la section, donc enfoui sous des blocs opaques.
+    l.contour(
+        [6.0, 6.0, 6.0],
+        [10.0, 10.0, 10.0],
+        tf_render::rgba(0, 255, 0, 255),
+    );
+
+    // **Le témoin est le MÊME contour SANS rien devant.** Un seuil choisi à la
+    // main ne prouve rien ici : mesuré, un test de profondeur actif laisse
+    // quand même passer 49 pixels sur 111 — les arêtes que la silhouette du
+    // cube ne couvre pas. Un « plus de vingt pixels » aurait donc été vert
+    // dans les deux cas, et c'est ce qu'il était. La propriété juste est
+    // l'ÉGALITÉ : le décor ne doit rien retirer du tout.
+    let (libre, _) = rendre_lignes_et_decor(&app, &l, false);
+    let (enfoui, _) = rendre_lignes_et_decor(&app, &l, true);
+    let (a, b) = (pixels_de(&libre, VERT, 12), pixels_de(&enfoui, VERT, 12));
+    assert!(
+        a > 50,
+        "le témoin doit dessiner un vrai contour : {a} pixels"
+    );
+    assert_eq!(
+        b, a,
+        "un contour enfoui doit rester ENTIER : {b} pixels sous le décor \
+         contre {a} à l'air libre"
+    );
+}
+
+/// Une scène sans quadrillage ne paie pas un appel de dessin de plus. Une
+/// passe qui ne dessine rien reste un changement de pipeline.
+#[test]
+fn un_quadrillage_vide_ne_coute_pas_un_appel() {
+    let Some(app) = app() else { return };
+    let t = table();
+    let mut g = Grille::new();
+    g.poser(0, 0, section(0, |_, _, _| CUBE));
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let atlas = atlas_blanc(&app);
+    let mut scene = Scene::nouvelle(&app, &arene, &atlas);
+    let cible = Cible::nouvelle(&app, 64, 64);
+    let camera = Camera::cadrer([0.0; 3], [16.0; 3], 1.0);
+
+    let (_, sans) = scene.rendre(&cible, &camera);
+    assert_eq!(sans.appels_de_dessin, 1);
+
+    scene.poser_lignes(&tf_render::Lignes::new());
+    let (_, toujours) = scene.rendre(&cible, &camera);
+    assert_eq!(toujours.appels_de_dessin, 1, "vide ne coûte rien");
+
+    let mut l = tf_render::Lignes::new();
+    l.contour([0.0; 3], [16.0; 3], tf_render::rgba(255, 255, 255, 255));
+    scene.poser_lignes(&l);
+    let (_, avec) = scene.rendre(&cible, &camera);
+    assert_eq!(avec.appels_de_dessin, 2, "un appel pour le calque");
+}
+
+/// **Les octets de la couleur traversent dans le bon sens.**
+///
+/// Deux conventions inverses entre `rgba()` et le shader donneraient un
+/// quadrillage bleu là où on a demandé du rouge, sans la moindre erreur — et
+/// « le bleu et le rouge sont inversés » est le défaut qu'on attribue au
+/// thème avant de l'attribuer au code.
+#[test]
+fn la_couleur_demandee_est_la_couleur_dessinee() {
+    let Some(app) = app() else { return };
+    for (r, v, b) in [(255u8, 0u8, 0u8), (0, 255, 0), (0, 0, 255)] {
+        let mut l = tf_render::Lignes::new();
+        l.contour([0.0; 3], [16.0; 3], tf_render::rgba(r, v, b, 255));
+        let (image, _) = rendre_avec_lignes(&app, &l);
+        let n = pixels_de(&image, [r, v, b], 12);
+        assert!(n > 50, "couleur ({r}, {v}, {b}) : {n} pixels seulement");
+    }
+}

@@ -34,6 +34,17 @@ pub struct Scene {
     /// La passe de MODÈLES. Absente quand la scène n'a aucun bloc-modèle —
     /// une passe qui ne dessine rien reste un changement de pipeline.
     modeles: Option<PasseModeles>,
+    /// Le QUADRILLAGE — chunks, `.mca`, sélection. Absent par défaut : une
+    /// scène qui n'en demande pas n'en paie pas.
+    lignes: Option<PasseLignes>,
+}
+
+/// Ce que le quadrillage tient au GPU.
+struct PasseLignes {
+    pipeline: wgpu::RenderPipeline,
+    liaison: wgpu::BindGroup,
+    sommets: wgpu::Buffer,
+    nombre: u32,
 }
 
 /// Ce que la passe de modèles tient au GPU.
@@ -225,7 +236,21 @@ impl Scene {
             instances,
             nombre: arene.len() as u32,
             modeles: passe_modeles,
+            lignes: None,
         }
+    }
+
+    /// Pose (ou remplace) le quadrillage.
+    ///
+    /// Séparé du constructeur exprès : le quadrillage CHANGE à chaque
+    /// déplacement de la caméra — il suit le joueur — alors que l'arène et
+    /// l'atlas ne bougent pas. Les faire naître ensemble obligerait à
+    /// reconstruire la scène entière pour déplacer une grille.
+    ///
+    /// Vide le retire.
+    pub fn poser_lignes(&mut self, lignes: &crate::Lignes) {
+        self.lignes = (!lignes.is_empty())
+            .then(|| PasseLignes::nouvelle(&self.appareil, &self.camera, lignes, FORMAT));
     }
 
     /// Dessine dans une cible hors écran et rend l'image en RGBA8.
@@ -281,6 +306,19 @@ impl Scene {
                 passe.set_bind_group(1, &m.liaison, &[]);
                 passe.draw(0..6, 0..m.faces);
             }
+
+            // **Le quadrillage passe en DERNIER, et sans test de
+            // profondeur.** Un repère qui disparaît derrière le mur qu'on est
+            // en train d'aligner n'est pas un repère : c'est un calque, il se
+            // dessine par-dessus. La contrepartie — une ligne lointaine peut
+            // recouvrir ce qui est devant — est tenue par le rayon borné du
+            // découpage, qui ne montre que le voisinage.
+            if let Some(l) = &self.lignes {
+                passe.set_pipeline(&l.pipeline);
+                passe.set_bind_group(0, &l.liaison, &[]);
+                passe.set_vertex_buffer(0, l.sommets.slice(..));
+                passe.draw(0..l.nombre, 0..1);
+            }
         }
         cible.copier(&mut enc);
         self.queue.submit([enc.finish()]);
@@ -288,7 +326,9 @@ impl Scene {
         (
             cible.relire(&self.appareil),
             Compte {
-                appels_de_dessin: 1 + u32::from(self.modeles.is_some()),
+                appels_de_dessin: 1
+                    + u32::from(self.modeles.is_some())
+                    + u32::from(self.lignes.is_some()),
                 instances: self.nombre + self.modeles.as_ref().map_or(0, |m| m.faces),
             },
         )
@@ -613,5 +653,109 @@ impl Cible {
         drop(vue);
         self.lecture.unmap();
         out
+    }
+}
+
+impl PasseLignes {
+    fn nouvelle(
+        device: &wgpu::Device,
+        camera: &wgpu::Buffer,
+        lignes: &crate::Lignes,
+        format: wgpu::TextureFormat,
+    ) -> PasseLignes {
+        // Une disposition à ELLE : le quadrillage n'a besoin que de la
+        // caméra. Réutiliser celle de la scène l'obligerait à déclarer
+        // l'atlas et les origines de section, c'est-à-dire à dépendre de
+        // choses qu'il n'emploie pas — et à casser le jour où l'une d'elles
+        // change.
+        let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("quadrillage"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let liaison = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("quadrillage"),
+            layout: &disposition,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera.as_entire_binding(),
+            }],
+        });
+
+        let sommets = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("quadrillage"),
+            contents: bytemuck::cast_slice(&lignes.sommets),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lignes"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("lignes.wgsl").into()),
+        });
+        let agencement = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("quadrillage"),
+            bind_group_layouts: &[&disposition],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("quadrillage"),
+            layout: Some(&agencement),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: "vs",
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<crate::lignes::Sommet>() as u64,
+                    // Par SOMMET, pas par instance : chaque paire est un
+                    // segment distinct, il n'y a rien à répéter.
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: "fs",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // **Ni test ni écriture de profondeur.** L'attachement est quand
+            // même déclaré : la passe de rendu en a un, et un pipeline qui ne
+            // le déclarerait pas serait incompatible avec elle. `Always` et
+            // `false` disent exactement « je suis un calque ».
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: PROFONDEUR,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        PasseLignes {
+            pipeline,
+            liaison,
+            sommets,
+            nombre: lignes.sommets.len() as u32,
+        }
     }
 }

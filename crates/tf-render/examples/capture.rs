@@ -30,9 +30,17 @@ fn main() {
     let mut cote: u32 = 1000;
     let mut monde: Option<String> = None;
     let mut zone: Option<[i32; 4]> = None;
+    // Le découpage, en RAYON de cellules autour du centre de la scène.
+    // `None` = pas de quadrillage.
+    let mut chunks: Option<u32> = None;
+    let mut regions: Option<u32> = None;
     while let Some(o) = args.next() {
         match o.as_str() {
             "--monde" => monde = args.next(),
+            // « Comme F3+G dans le jeu », plus ce que le jeu ne montre pas :
+            // le découpage en fichiers.
+            "--chunks" => chunks = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(4)),
+            "--mca" => regions = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(1)),
             "--zone" => {
                 let v: Vec<i32> = args
                     .next()
@@ -247,7 +255,75 @@ fn main() {
     println!("adaptateur : {}", app.decrire());
     let atlas_gpu = AtlasGpu::avec_mips(&app, atlas.cote, atlas.len() as u32, &atlas.pyramide());
     let cible = Cible::nouvelle(&app, cote, (cote * 5) / 8);
-    let scene = Scene::avec_modeles(&app, &arene, &modeles, &atlas_gpu);
+    let mut scene = Scene::avec_modeles(&app, &arene, &modeles, &atlas_gpu);
+
+    // ── le quadrillage : les chunks, et surtout les `.mca`
+    //
+    // Ce que Minecraft montre (F3+G) et ce qu'il ne montre PAS. Le second
+    // décide ce qu'on exporte, ce qu'on envoie à quelqu'un, et ce qu'une
+    // opération va réécrire — donc il vaut d'être vu.
+    if chunks.is_some() || regions.is_some() {
+        use tf_world::decoupe::{cellules_autour, Niveau};
+        let (bmin, bmax) = arene.bornes().unwrap_or(([0.0; 3], [16.0; 3]));
+        let centre = tf_world::coords::BlockPos::new(
+            ((bmin[0] + bmax[0]) * 0.5) as i32,
+            bmin[1] as i32,
+            ((bmin[2] + bmax[2]) * 0.5) as i32,
+        );
+        let y = (bmin[1] as i32, bmax[1] as i32);
+        let mut l = tf_render::Lignes::new();
+        let mut posees = 0usize;
+        // Les chunks D'ABORD : les régions passent par-dessus, donc restent
+        // lisibles là où les deux se superposent. L'inverse noierait la
+        // frontière de fichier dans le quadrillage fin.
+        if let Some(r) = chunks {
+            for c in cellules_autour(centre, r, Niveau::Chunk, y) {
+                let a = [
+                    c.boite.min.x as f32,
+                    c.boite.min.y as f32,
+                    c.boite.min.z as f32,
+                ];
+                let b = [
+                    c.boite.max.x as f32 + 1.0,
+                    c.boite.max.y as f32 + 1.0,
+                    c.boite.max.z as f32 + 1.0,
+                ];
+                // La parité du .MCA, pas celle du chunk : c'est elle qui fait
+                // voir à quel fichier appartient ce qu'on regarde.
+                let t = if (c.region.x.rem_euclid(2) ^ c.region.z.rem_euclid(2)) == 0 {
+                    tf_render::rgba(90, 170, 255, 110)
+                } else {
+                    tf_render::rgba(255, 190, 90, 110)
+                };
+                l.contour(a, b, t);
+                posees += 1;
+            }
+        }
+        if let Some(r) = regions {
+            for c in cellules_autour(centre, r, Niveau::Region, y) {
+                let a = [
+                    c.boite.min.x as f32,
+                    c.boite.min.y as f32,
+                    c.boite.min.z as f32,
+                ];
+                let b = [
+                    c.boite.max.x as f32 + 1.0,
+                    c.boite.max.y as f32 + 1.0,
+                    c.boite.max.z as f32 + 1.0,
+                ];
+                l.contour(a, b, tf_render::rgba(255, 90, 90, 230));
+                println!(
+                    "  {} · coin {},{}",
+                    c.fichier(),
+                    c.boite.min.x,
+                    c.boite.min.z
+                );
+                posees += 1;
+            }
+        }
+        println!("quadrillage : {posees} cellule(s), {} segment(s)", l.len());
+        scene.poser_lignes(&l);
+    }
 
     let (min, max) = arene.bornes().expect("l'arène doit avoir du contenu");
     let aspect = cible.largeur as f32 / cible.hauteur as f32;

@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (601 tests aujourd'hui)
+cargo test            # tous les crates (620 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -291,6 +291,11 @@ cargo run --release -p tf-render --example capture -- ../titisite/public/codex v
 # le même, sur une VRAIE save — --zone borne au chunk près, parce qu'il
 # n'existe aucun état « le monde est chargé »
 cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 1400 --monde D:\monde --zone "4,7,10,12" 
+# LE DÉCOUPAGE, vu : les chunks comme F3+G, et les .mca que le jeu ne montre
+# PAS. Les chunks se teintent par la parité de LEUR .mca : la couleur change à
+# la frontière de fichier, donc on voit à quel .mca appartient ce qu'on regarde.
+# Le rayon est en CELLULES — 0 = la sienne seulement.
+cargo run --release -p tf-render --example capture -- ../titisite/public/codex vue.png 900 --chunks 3 --mca 1
 TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/public/codex pres.png
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
@@ -318,7 +323,8 @@ crates/
                block entities ✅ · biomes 1.18+ ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
-               (typé, ajout seul, avec paramètres de REJEU)
+               (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
+               (cellules de chunk et de .mca, et l'alignement `//chunk`)
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
@@ -332,6 +338,7 @@ crates/
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
                pilotage ✅ : le JOUEUR est le point fixe (pur, sans écran)
                viser ✅ : quel bloc, quelle FACE sous le curseur
+               quadrillage ✅ : un calque de lignes, chunks et .mca
   tf-app/      coque winit + egui, outils, commandes
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
 ```
@@ -1149,3 +1156,36 @@ propres à ce dépôt.
   infinitésimaux : la portée seule n'arrête la boucle qu'après des millions
   d'itérations. Et une boucle qui ne finit pas fige la fenêtre sans message —
   personne ne sait dire pourquoi, et il n'y a rien à lire dans un journal.
+
+- **L'espace de la CAMÉRA est en blocs, les tables de géométrie en
+  seizièmes.** Les deux shaders divisent par seize juste avant la matrice de
+  vue. En branchant le quadrillage j'ai converti par symétrie avec les tables
+  — il sortait SEIZE FOIS trop grand, et l'image restait parfaitement
+  plausible : un quadrillage large est exactement ce à quoi ressemble un
+  quadrillage. Chaque moitié était juste, c'est leur jonction qui ne l'était
+  pas — le piège `toHeights` / `applyHeightmap`, sous une autre forme. Le
+  test qui tranche TRAVERSE : le contour d'une section doit encadrer les
+  pixels de cette section, aux mêmes pixels près.
+- **Trouvé par une mutation qui visait autre chose.** Je cassais le test de
+  profondeur du calque ; il ne changeait rien, parce que le calque n'était pas
+  là où je croyais. Une mutation qui survit sans raison est un indice sur le
+  CODE, pas seulement sur le test.
+- **Un seuil choisi à la main ne prouve pas une occultation.** « Plus de vingt
+  pixels verts » était vert dans les deux sens : mesuré, un test de profondeur
+  actif laisse quand même passer 49 pixels sur 111 — les arêtes que la
+  silhouette ne couvre pas. La propriété juste est une ÉGALITÉ contre un
+  TÉMOIN : le même calque sans rien devant. Un nombre seuil est une opinion ;
+  un témoin est une mesure.
+- **Le fond d'une image se MESURE, il ne se recopie pas.** La couleur
+  d'effacement est donnée en linéaire et la cible est en sRGB : les octets
+  relus ne sont pas ceux de la constante, ils sont son encodage. Recopiée à la
+  main, elle donne un prédicat « pas le fond » qui accepte tout, donc une
+  emprise qui couvre l'image — et un test qui échoue en accusant la mauvaise
+  moitié.
+- **L'épaisseur d'un trait n'est pas réglable, la couleur si.** wgpu ne
+  garantit pas de ligne plus large qu'un pixel, sur aucune plateforme. Ce qui
+  sépare le quadrillage de chunk de celui des `.mca` est donc la couleur —
+  s'appuyer sur l'épaisseur donnerait un rendu juste sur une carte et plat sur
+  une autre, sans erreur nulle part. Corollaire utile : teinter les chunks
+  par la parité de LEUR région fait voir la frontière de fichier sans
+  dessiner un second quadrillage par-dessus le premier.
