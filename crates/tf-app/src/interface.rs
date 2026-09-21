@@ -263,6 +263,22 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
                 .small()
                 .color(GRIS),
             );
+            // **Une inférence qui accroche en SILENCE est une inférence qu'on
+            // combat.** Ce qui rend celle de SketchUp utilisable n'est pas sa
+            // précision, c'est qu'elle DIT ce qu'elle a attrapé.
+            if let Some(r) = t.raison {
+                ui.label(
+                    RichText::new(format!(
+                        "accroché : {} ({}, {}, {})",
+                        r.genre.nom(),
+                        r.reference.x,
+                        r.reference.y,
+                        r.reference.z
+                    ))
+                    .small()
+                    .color(VERT),
+                );
+            }
         }
     }
     ui.horizontal(|ui| {

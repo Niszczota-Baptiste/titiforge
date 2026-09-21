@@ -339,6 +339,10 @@ fn un_clic_dans_le_vide_ne_touche_pas_la_selection() {
 /// Une sélection de dix blocs de côté, et l'œil à l'est qui la regarde.
 fn devant_un_cube() -> (Etat, Camera) {
     let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    // **L'accrochage est ÉTEINT ici.** Ces tests mesurent le geste nu ; le
+    // mélanger à l'inférence ferait passer une faute de l'un pour un réglage
+    // de l'autre. Les tests d'accrochage l'allument explicitement.
+    e.tolerance = 0;
     e.selection.poser_coin1(BlockPos::new(0, 0, 0));
     e.selection.poser_coin2(BlockPos::new(9, 9, 9));
     let cam = Camera {
@@ -535,4 +539,188 @@ fn un_tirage_nul_n_ecrit_rien() {
     let (mut e, cam) = devant_un_cube();
     assert!(e.attraper(&cam, 1.0));
     assert!(e.lacher().is_none());
+}
+
+/// **Le mot qui manquait au geste : « en accrochant ».**
+///
+/// Sans inférence, on tire au jugé et on recommence trois fois pour faire un
+/// cube. Avec, la face se colle à ce qui est déjà bâti — ici le milieu de la
+/// boîte de départ — et l'outil DIT à quoi elle tient.
+#[test]
+fn un_tirage_s_accroche_a_ce_qui_est_bati_et_le_dit() {
+    let (mut e, cam) = devant_un_cube();
+    e.tolerance = 2;
+    assert!(e.attraper(&cam, 1.0));
+
+    // La boîte va de 0 à 9, sa face solide est à x = 10, son milieu à x = 5.
+    // Viser x = 7 pousse de trois : la face arrive à 6, donc à UN bloc du
+    // milieu — dans la tolérance.
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [7.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert_eq!(
+        e.selection.boite().unwrap().max.x,
+        5,
+        "la face devait s'accrocher au milieu"
+    );
+    let r = e
+        .tirage
+        .as_ref()
+        .unwrap()
+        .raison
+        .expect("l'accroche se DIT");
+    assert_eq!(r.reference.x, 5);
+    assert_eq!(r.ecart, -1);
+}
+
+/// **L'accrochage ne déplace QUE l'axe de la face.** Les deux autres sont
+/// verrouillés : laisser une face glisser de côté pendant qu'on la tire
+/// déformerait la sélection sans que rien ne le dise.
+#[test]
+fn un_tirage_ne_deplace_que_son_axe() {
+    let (mut e, cam) = devant_un_cube();
+    e.tolerance = 2;
+    let avant = e.selection.boite().unwrap();
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [14.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    let apres = e.selection.boite().unwrap();
+    assert_eq!((apres.min.y, apres.max.y), (avant.min.y, avant.max.y));
+    assert_eq!((apres.min.z, apres.max.z), (avant.min.z, avant.max.z));
+    assert_eq!(apres.min.x, avant.min.x, "la face opposée n'a pas bougé");
+}
+
+/// **La position de DÉPART de la face n'est pas une accroche.**
+///
+/// Elle est toujours dans la tolérance au premier bloc tiré : sans filtre, la
+/// face reviendrait se coller là d'où elle part, et un petit déplacement
+/// deviendrait impossible. Ce n'est pas un alignement, c'est un non-mouvement
+/// — l'accroche est juste, le geste est juste, c'est leur COMPOSITION qui ne
+/// l'est pas.
+#[test]
+fn une_face_ne_s_accroche_pas_a_son_propre_point_de_depart() {
+    let (mut e, cam) = devant_un_cube();
+    e.tolerance = 2;
+    assert!(e.attraper(&cam, 1.0));
+    // Un seul bloc tiré : le départ (x = 9) est à un bloc, donc dans la
+    // tolérance.
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [11.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert_eq!(
+        e.tirage.as_ref().unwrap().blocs,
+        1,
+        "la face est revenue à son point de départ"
+    );
+    assert_eq!(e.selection.boite().unwrap().max.x, 10);
+}
+
+/// Tolérance nulle : le geste est nu, et aucune raison n'est annoncée.
+#[test]
+fn une_tolerance_nulle_eteint_l_accrochage_du_tirage() {
+    let (mut e, cam) = devant_un_cube();
+    e.tolerance = 0;
+    assert!(e.attraper(&cam, 1.0));
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [7.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    // Sans accrochage la face reste où le geste l'a mise — à 6, pas au
+    // milieu de la boîte.
+    assert_eq!(e.selection.boite().unwrap().max.x, 6);
+    assert!(e.tirage.as_ref().unwrap().raison.is_none());
+}
+
+/// **Tolérance nulle veut dire AUCUNE inférence, pas même une coïncidence.**
+///
+/// Sans la garde, un tirage qui tombe pile sur une référence serait annoncé
+/// comme une accroche — l'outil dirait avoir décidé là où il n'a rien décidé,
+/// et l'utilisateur chercherait un réglage qui n'existe pas. Mesuré par
+/// mutation : retirer la garde ne rougissait nulle part tant que le test ne
+/// visait pas une coïncidence exacte.
+#[test]
+fn une_tolerance_nulle_ne_rapporte_meme_pas_une_coincidence() {
+    let (mut e, cam) = devant_un_cube();
+    e.tolerance = 0;
+    assert!(e.attraper(&cam, 1.0));
+    // Viser x = 6 pousse de quatre : la face arrive PILE sur le milieu (5).
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [6.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    assert_eq!(e.selection.boite().unwrap().max.x, 5, "le geste va bien là");
+    assert!(
+        e.tirage.as_ref().unwrap().raison.is_none(),
+        "une coïncidence n'est pas une accroche"
+    );
+}
+
+/// **La face NÉGATIVE tire dans l'autre sens.** Tirer la face ouest vers
+/// l'ouest fait DIMINUER la coordonnée : convertir l'accroche en blocs sans
+/// retourner le signe enverrait la face du mauvais côté. Mesuré par mutation —
+/// tous mes tests tiraient la face est, et le défaut passait.
+#[test]
+fn tirer_une_face_negative_va_dans_le_bon_sens() {
+    let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    e.tolerance = 2;
+    e.selection.poser_coin1(BlockPos::new(0, 0, 0));
+    e.selection.poser_coin2(BlockPos::new(9, 9, 9));
+    // L'œil à l'ouest, regardant vers +X : on attrape la face OUEST.
+    let cam = Camera {
+        oeil: [-30.0, 5.0, 5.0],
+        cible: [-29.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.attraper(&cam, 1.0));
+    assert_eq!(e.tirage.as_ref().unwrap().face, Direction::MoinsX);
+
+    // Viser x = −4 tire la face vers l'ouest : la boîte s'AGRANDIT.
+    let vue = Camera {
+        oeil: [5.0, 5.0, -40.0],
+        cible: [-4.0, 5.0, 5.0],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    assert!(e.tirer(&vue, 1.0, [0.0, 0.0]));
+    let b = e.selection.boite().unwrap();
+    assert_eq!(b.min.x, -4, "la face ouest est partie du mauvais côté");
+    assert_eq!(b.max.x, 9, "la face opposée n'a pas bougé");
+    assert!(e.tirage.as_ref().unwrap().blocs > 0, "c'est un TIRAGE");
+
+    // Et la tranche est bien celle qui s'ajoute à l'ouest.
+    let cmd = e.lacher().unwrap();
+    let tf_app::moteur::Commande::Appliquer { sel, .. } = cmd else {
+        panic!()
+    };
+    assert_eq!(
+        sel,
+        BBox::new(BlockPos::new(-4, 0, 0), BlockPos::new(-1, 9, 9))
+    );
 }

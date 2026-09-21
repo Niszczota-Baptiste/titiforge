@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **736**, zéro échec |
+| Tests | **742**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-736 tests, répartis par ce qu'ils PROUVENT :
+742 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -68,7 +68,7 @@ cargo test --workspace
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 22 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` etat | 28 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` chantier | 1 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source (demande `TF_PACK`) |
 | `tf-app` moteur | 8 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
@@ -99,6 +99,16 @@ Trois propriétés valent d'être nommées :
   d'abord chez personne : c'est la fixture qui était trop clémente, ses `y`
   croissant dans l'ordre du fichier. Un test vert ne dit rien tant qu'on n'a
   pas vu ce qui le fait rougir.
+- **L'accrochage du pousser-tirer aussi, et c'est lui qui a le plus appris.**
+  Quatre mutations, TROIS survivantes au premier tour. La première disait que
+  j'avais écrit du code mort : les deux axes verrouillés « parce qu'une face ne
+  bouge que le long de sa normale » n'avaient aucun effet, puisqu'on ne relit
+  que l'axe de la face. Ils sont partis. Les deux autres disaient que la
+  FIXTURE ne séparait pas les cas — tous mes tirages visaient la face EST, donc
+  le signe d'une face négative pouvait être faux sans que rien ne rougisse ; et
+  la tolérance nulle n'était vérifiée que sur un tirage qui ne tombait sur
+  aucune référence, donc la garde pouvait disparaître. Deux tests de plus, et
+  les trois tombent.
 - **Le pousser-tirer aussi.** Huit mutations : la garde de colinéarité ramenée
   à zéro pile, le tirage tronqué au lieu d'arrondi, un signe faux dans la
   projection, la tranche décalée d'un bloc dans les deux sens, une tranche

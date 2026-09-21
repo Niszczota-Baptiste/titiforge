@@ -357,6 +357,12 @@ grille.
 > **Sortie.** Ouvrir une save, voler dedans, tirer un mur de vingt blocs à la
 > souris en accrochant au nu du bâtiment d'en face, annuler. Sans écrire une
 > seule commande.
+>
+> ✅ **Atteinte**, à une réserve près qui est écrite dans les trous : les
+> références d'accrochage sont celles de la sélection de DÉPART — ses coins,
+> ses arêtes, son milieu — et pas encore celles du bâtiment d'en face, parce
+> qu'il n'existe aucune notion d'objet voisin. Le mécanisme est le même ; il
+> lui manque des points à mordre.
 
 ## Phase 5 — Le streaming piloté par la caméra
 

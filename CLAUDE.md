@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (736 tests aujourd'hui)
+cargo test            # tous les crates (742 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -365,7 +365,8 @@ crates/
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
                · SÉLECTION À LA SOURIS ✅ (gauche = coin 1, droit = coin 2)
-               · POUSSER-TIRER ✅ en mode Conception
+               · POUSSER-TIRER ✅ en mode Conception, qui S'ACCROCHE
+                 à ce qui est bâti et DIT à quoi il tient
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
                · remaillage encore global, mode Conception à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
@@ -1302,6 +1303,19 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Une face ne s'accroche pas à son PROPRE point de départ.** La position de
+  départ est toujours dans la tolérance au premier bloc tiré : sans filtre, la
+  face revient se coller là d'où elle part, et un petit déplacement devient
+  impossible. Ce n'est pas un alignement, c'est un non-mouvement. Troisième
+  forme du même piège après le verrou d'axe de la pose : l'accroche est juste,
+  le geste est juste, c'est leur COMPOSITION qui décide.
+- **Du code défensif qui ne peut pas se tromper ne dit rien.** J'avais
+  verrouillé les deux axes perpendiculaires à la face tirée, « parce qu'une
+  face ne bouge que le long de sa normale ». Vrai, et sans effet : on ne relit
+  que l'axe de la face, et `accrocher` choisit sa référence axe par axe. La
+  mutation qui retirait les verrous n'a fait rougir aucun test — et elle avait
+  raison. Quand une mutation survit, la première question est « qu'est-ce que
+  cette ligne achète ? », pas « quel test manque ? ».
 - **Un pousser-tirer ne se mesure pas en pixels.** Multiplier un glissement
   d'écran par une sensibilité donne un geste qui dérive selon la distance et
   l'angle — personne ne sait corriger ça à l'œil. On projette le rayon de

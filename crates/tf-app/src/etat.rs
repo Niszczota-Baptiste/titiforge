@@ -13,7 +13,7 @@ use tf_ops::catalogue::{self, Descripteur, Params, Saisie, Valeur};
 use tf_render::controles::{Mode, Vue};
 use tf_world::coords::BlockPos;
 use tf_world::decoupe::Niveau;
-use tf_world::inference::{accrocher, Accroche, TOLERANCE};
+use tf_world::inference::{accrocher, Accroche, Raison, TOLERANCE};
 use tf_world::selection::{glissement, tranche, Direction, Selection};
 
 /// Ce que le quadrillage montre.
@@ -228,6 +228,10 @@ pub struct Tirage {
     pub depart: Selection,
     /// Ce qui est tiré, en blocs. Négatif = poussé.
     pub blocs: i32,
+    /// À quoi le tirage s'est accroché, s'il l'a fait. C'est le trait
+    /// pointillé de SketchUp : sans lui, la face saute et on ne sait pas si
+    /// l'on a mal visé ou si l'outil a décidé.
+    pub raison: Option<Raison>,
 }
 
 /// L'état complet de la coque.
@@ -407,6 +411,7 @@ impl Etat {
             ancre,
             depart: self.selection,
             blocs: 0,
+            raison: None,
         });
         self.message = format!("face {} attrapée", face.nom());
         true
@@ -433,6 +438,7 @@ impl Etat {
             return false;
         };
         let (face, depart) = (t.face, t.depart);
+        let (n, raison) = self.accrocher_le_tirage(depart, face, n);
         let mut s = depart;
         if !s.agrandir(face, n) {
             return false;
@@ -440,6 +446,7 @@ impl Etat {
         self.selection = s;
         if let Some(t) = &mut self.tirage {
             t.blocs = n;
+            t.raison = raison;
         }
         self.message = format!(
             "{} {} de {} bloc(s)",
@@ -448,6 +455,66 @@ impl Etat {
             n.abs()
         );
         true
+    }
+
+    /// **Accroche la face tirée à ce qui est déjà bâti.**
+    ///
+    /// C'est le mot qui manquait au geste : sans lui, on tire au jugé et on
+    /// recommence trois fois pour faire un cube. L'inférence est la même que
+    /// pour la pose — axe par axe — et seul l'axe de la FACE est relu : une
+    /// face ne se déplace que le long de sa normale.
+    ///
+    /// **Une référence à la position de DÉPART de la face est écartée.** Elle
+    /// est toujours dans la tolérance au premier bloc tiré, et la face
+    /// reviendrait donc se coller à son point de départ : on ne pourrait plus
+    /// jamais faire un petit déplacement. Ce n'est pas un alignement, c'est un
+    /// non-mouvement — l'accroche est juste, le geste est juste, c'est leur
+    /// COMPOSITION qui ne l'est pas, exactement comme pour l'axe de pose.
+    fn accrocher_le_tirage(
+        &self,
+        depart: Selection,
+        face: Direction,
+        n: i32,
+    ) -> (i32, Option<Raison>) {
+        if self.tolerance <= 0 || n == 0 {
+            return (n, None);
+        }
+        let Some(b) = depart.boite() else {
+            return (n, None);
+        };
+        let k = face.axe();
+        let coins = [[b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]];
+        // Là où la face EST au départ, et là où le geste l'emmène.
+        let depart_k = if face.positif() {
+            coins[1][k]
+        } else {
+            coins[0][k]
+        };
+        let vise_k = depart_k + if face.positif() { n } else { -n };
+
+        let refs: Vec<_> = b
+            .references()
+            .into_iter()
+            .filter(|r| [r.point.x, r.point.y, r.point.z][k] != depart_k)
+            .collect();
+        if refs.is_empty() {
+            return (n, None);
+        }
+        let mut p = [coins[0][0], coins[0][1], coins[0][2]];
+        p[k] = vise_k;
+        let brut = BlockPos::new(p[0], p[1], p[2]);
+        // **Aucun verrou, et c'est mesuré.** J'avais verrouillé les deux
+        // autres axes « parce qu'une face ne bouge que le long de sa
+        // normale » — vrai, et sans effet : on ne relit que l'axe `k`, et
+        // `accrocher` choisit sa référence axe par axe. La mutation qui
+        // retirait ces verrous n'a fait rougir aucun test, et elle avait
+        // raison. Du code défensif qui ne peut pas se tromper est du code qui
+        // ne dit rien.
+        let acc = accrocher(brut, &refs, self.tolerance, [None; 3]);
+        let obtenu = [acc.position.x, acc.position.y, acc.position.z][k];
+        let delta = obtenu - depart_k;
+        let neuf = if face.positif() { delta } else { -delta };
+        (neuf, acc.raisons[k])
     }
 
     /// Lâche le geste, et rend l'opération à envoyer.
