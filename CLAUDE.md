@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (642 tests aujourd'hui)
+cargo test            # tous les crates (660 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -331,6 +331,7 @@ crates/
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
                (cellules de chunk et de .mca, `//chunk` et les sections)
                sélection ✅ : deux coins, `//expand`, et la FACE qu'on attrape
+               inférence ✅ : accrocher à ce qui est BÂTI, et DIRE à quoi
   tf-ops/      3 étages ✅ · masques ✅ · motifs ✅ · staging+journal ✅
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
@@ -1230,3 +1231,42 @@ propres à ce dépôt.
   l'opération suivante écrirait là-bas. On s'arrête à un bloc d'épaisseur,
   comme WorldEdit. Même famille : un `//expand` près de `i32::MAX` ramène la
   face à l'autre bout du monde si l'addition n'est pas faite en `i64`.
+
+- **Sur une grille de blocs, accrocher à la GRILLE ne vaut rien.** C'est la
+  moitié du travail en CAO ; ici tout y est déjà. Ce qui manque est
+  d'accrocher à ce qui est BÂTI — le nu d'un mur, le coin d'une tour, la
+  hauteur de la fenêtre d'à côté. Et les trois accroches de SketchUp sortent
+  d'un seul mécanisme si l'on accroche AXE PAR AXE : un axe donne un plan,
+  deux une droite, trois le point. Trois implémentations séparées auraient
+  divergé, et la « ligne droite depuis le dernier point » n'est qu'un cas de
+  la règle générale.
+- **Une inférence qui accroche en SILENCE est une inférence qu'on combat.**
+  Ce qui rend celle de SketchUp utilisable n'est pas sa précision, c'est
+  qu'elle DIT ce qu'elle a attrapé. Sans ça la position saute et on ne sait
+  pas si l'on a mal visé ou si l'outil a décidé. `Accroche` rend une raison
+  PAR AXE, avec sa référence entière — c'est le trait pointillé, et sans lui
+  on ne voit pas à quoi on tient.
+- **Un départage à deux critères fait CLIGNOTER l'accrochage.** Deux coins
+  symétriques d'une même boîte sont à égale distance et de même genre : sans
+  troisième critère, celui qui gagne dépend de l'ordre de la liste, donc
+  change d'une image à l'autre. Un clignotement se lit « l'outil est
+  instable » et ne désigne rien. L'ordre est (écart, genre, coordonnée), et
+  le dernier est TOTAL.
+- **L'axe de la face contre laquelle on POSE ne doit pas accrocher.** On vise
+  la face Est d'une paroi, on pose donc à `x + 1` — mais la paroi est à un
+  bloc, donc dans la tolérance, et l'accrochage ramène le bloc neuf DANS le
+  mur qu'on visait. L'accroche était juste, la pose aussi : c'est leur
+  COMPOSITION qui ne l'était pas, et seule la jonction pouvait le montrer.
+  `Direction::verrou` dit la règle une fois — l'axe de pose est décidé par la
+  pose, les deux autres restent libres, et ce sont eux qui portent tout
+  l'intérêt puisque c'est dans le PLAN de la face qu'on s'aligne.
+- **Le milieu d'une arête porte sur le SOLIDE, pas sur les indices.** Une
+  section va de 0 à 15 inclus, donc de 0 à 16 en géométrie : son milieu est
+  8, pas 7. Et le milieu d'une arête PAIRE n'existe pas — on prend toujours
+  le plus bas, par division plancher. Alterner selon la parité ferait sauter
+  l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
+  bouge tout seul ».
+- **Une assertion toujours vraie par le TYPE ne prouve rien**, et clippy le
+  dit. `r.point.x >= i32::MIN` ne peut pas échouer ; ce qui pouvait déborder
+  était le MILIEU du domaine entier, où `MIN + MAX + 1` s'enroule en `i32`.
+  Un test qui borne ce que le type borne déjà donne un vert gratuit.

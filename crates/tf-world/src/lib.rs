@@ -10,6 +10,7 @@
 pub mod coords;
 pub mod decoupe;
 pub mod fs_source;
+pub mod inference;
 pub mod journal;
 pub mod lecture;
 pub mod residency;
@@ -22,6 +23,7 @@ pub use coords::{
 };
 pub use decoupe::{cellules_autour, Cellule, Niveau, RAYON_MAX};
 pub use fs_source::FsSource;
+pub use inference::{accrocher, Accroche, Ancre, Raison, Reference, TOLERANCE};
 pub use journal::{
     Chemin, ChunkPatch, Cible, Correction, Entree, Genre, Journal, JournalError, Record,
 };

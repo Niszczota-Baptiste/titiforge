@@ -82,6 +82,25 @@ impl Direction {
     pub const fn depuis(axe: usize, positif: bool) -> Direction {
         DIRECTIONS[(axe % 3) * 2 + positif as usize]
     }
+
+    /// Le VERROU d'axe qu'impose une pose contre cette face.
+    ///
+    /// **Sans lui, l'inférence ramène le bloc DANS le mur.** On vise la face
+    /// Est d'une paroi, on pose donc à `x + 1` ; mais la paroi est à un bloc,
+    /// donc dans la tolérance, et l'accrochage aligne `x` dessus — le bloc
+    /// neuf atterrit à l'intérieur de ce qu'on visait. Mesuré en écrivant la
+    /// jonction : l'accroche était juste, la pose aussi, et leur composition
+    /// fausse.
+    ///
+    /// La règle : **l'axe de la face contre laquelle on pose est décidé par la
+    /// pose, pas par l'inférence.** Les deux autres restent libres — et ce
+    /// sont eux qui portent tout l'intérêt, puisque c'est dans le plan de la
+    /// face qu'on veut s'aligner sur ce qui est bâti.
+    pub fn verrou(self, pose: BlockPos) -> [Option<i32>; 3] {
+        let mut v = [None; 3];
+        v[self.axe()] = Some([pose.x, pose.y, pose.z][self.axe()]);
+        v
+    }
 }
 
 impl BBox {

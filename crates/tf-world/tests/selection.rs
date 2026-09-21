@@ -315,3 +315,47 @@ fn pousser_tirer_une_paroi_visee() {
     );
     assert_eq!(neuve.volume(), 16 * 16 * 3);
 }
+
+// ── le verrou de pose ───────────────────────────────────────────────────────
+
+/// **L'axe de la face contre laquelle on pose est décidé par la POSE, pas par
+/// l'inférence.**
+///
+/// Sans ce verrou, poser contre une paroi ramène le bloc DEDANS : la paroi
+/// est à un bloc, donc dans la tolérance de l'accrochage, et l'axe s'aligne
+/// dessus. L'accroche est juste, la pose aussi ; c'est leur composition qui
+/// ne l'est pas — et seule une jonction pouvait le montrer.
+#[test]
+fn le_verrou_de_pose_ne_bloque_que_l_axe_de_la_face() {
+    let pose = p(1, 78, 10);
+    for d in DIRECTIONS {
+        let v = d.verrou(pose);
+        let k = d.axe();
+        assert_eq!(
+            v[k],
+            Some([pose.x, pose.y, pose.z][k]),
+            "{d:?} doit verrouiller l'axe {k}"
+        );
+        for (j, verrou) in v.iter().enumerate() {
+            if j != k {
+                assert!(verrou.is_none(), "{d:?} ne doit PAS verrouiller l'axe {j}");
+            }
+        }
+    }
+}
+
+/// Les deux axes LIBRES sont ceux qui portent tout l'intérêt : c'est dans le
+/// plan de la face qu'on veut s'aligner sur ce qui est bâti.
+#[test]
+fn le_verrou_laisse_libre_le_plan_de_la_face() {
+    use tf_world::inference::{accrocher, Reference, TOLERANCE};
+    let pose = p(1, 78, 10);
+    let refs = [Reference::new(
+        p(0, 79, 12),
+        tf_world::inference::Ancre::Coin,
+    )];
+    let a = accrocher(pose, &refs, TOLERANCE, Direction::PlusX.verrou(pose));
+    assert_eq!(a.position.x, 1, "verrouillé");
+    assert_eq!(a.position.y, 79, "libre, et accroché");
+    assert_eq!(a.position.z, 12, "libre, et accroché");
+}

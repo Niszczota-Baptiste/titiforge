@@ -421,3 +421,84 @@ fn la_face_visee_dans_le_monde_tire_la_bonne_paroi() {
         assert_eq!(pas[k].signum(), vers_nous, "depuis {o:?} : mauvais côté");
     }
 }
+
+/// **Le geste SketchUp complet, de bout en bout.**
+///
+/// Viser → accrocher à ce qui est bâti → attraper une face → la tirer. Quatre
+/// morceaux dans trois crates, chacun testé de son côté ; c'est leur
+/// RACCORD que personne d'autre ne peut vérifier, et c'est là que ça casse.
+///
+/// La scène : un mur existant, et un bâtiment neuf qu'on veut aligner dessus.
+#[test]
+fn viser_accrocher_attraper_tirer() {
+    use tf_mesh::forme::FACES;
+    use tf_world::coords::{BBox, BlockPos};
+    use tf_world::inference::{accrocher, Ancre, TOLERANCE};
+    use tf_world::selection::{Selection, DIRECTIONS};
+
+    // Un mur bâti : de x = 0, y = 64..79, z = 0..31.
+    let mur = BBox::new(BlockPos::new(0, 64, 0), BlockPos::new(0, 79, 31));
+    let solide = move |c: [i32; 3]| mur.contains(BlockPos::new(c[0], c[1], c[2]));
+
+    // 1. On vise le mur depuis l'Est, un peu au-dessus du milieu.
+    let t =
+        viser([40.0, 78.5, 10.5], [-1.0, 0.0, 0.0], 128.0, &solide).expect("le mur doit être visé");
+    assert_eq!(t.case[0], 0, "on touche le mur");
+    assert_eq!(t.face, Some(Face::PlusX), "par sa face Est");
+    let pose = t.avant.expect("il y a une case devant");
+    assert_eq!(pose, [1, 78, 10], "et on poserait juste devant");
+
+    // 2. La position brute est à un bloc du HAUT du mur. On accroche : la
+    //    hauteur doit sauter sur l'arête, comme dans SketchUp.
+    //
+    //    **L'axe de la face est VERROUILLÉ.** Sans ce verrou, la paroi est à
+    //    un bloc — donc dans la tolérance — et l'accrochage aligne x dessus :
+    //    le bloc neuf atterrit DANS le mur qu'on visait. L'accroche était
+    //    juste, la pose aussi ; c'est leur composition qui ne l'était pas, et
+    //    seule cette jonction pouvait le montrer.
+    let brut = BlockPos::new(pose[0], pose[1], pose[2]);
+    let face_dir = DIRECTIONS[FACES.iter().position(|f| *f == t.face.unwrap()).unwrap()];
+    let a = accrocher(brut, &mur.references(), TOLERANCE, face_dir.verrou(brut));
+    assert_eq!(a.position.y, 79, "aligné sur le haut du mur");
+    assert_eq!(
+        a.raisons[1].unwrap().genre,
+        Ancre::Coin,
+        "et c'est un coin qui l'a attrapé — de quoi le dire à l'écran"
+    );
+    assert_eq!(
+        a.position.x, 1,
+        "x est verrouillé par la pose : devant le mur"
+    );
+
+    // Et sans le verrou, on voit la faute que le verrou évite.
+    let sans = accrocher(brut, &mur.references(), TOLERANCE, [None; 3]);
+    assert_eq!(
+        sans.position.x, 0,
+        "l'inférence ramènerait le bloc DANS le mur"
+    );
+
+    // 3. On pose une sélection d'un bloc là, et on attrape sa face Est.
+    let mut s = Selection::nouvelle();
+    s.poser_coin1(a.position);
+    s.poser_coin2(a.position);
+    let (dir, _) = s
+        .face_visee([40.0, 79.5, 10.5], [-1.0, 0.0, 0.0])
+        .expect("la sélection doit être visée");
+
+    // La direction rendue par la sélection et la face rendue par le monde
+    // décrivent le même côté — c'est le croisement des deux tables, vu ici
+    // en situation.
+    assert_eq!(
+        dir,
+        DIRECTIONS[FACES.iter().position(|f| *f == Face::PlusX).unwrap()]
+    );
+
+    // 4. On tire de dix blocs vers l'Est.
+    assert!(s.agrandir(dir, 10));
+    let b = s.boite().unwrap();
+    assert_eq!(b.min.x, 1, "la face Ouest n'a pas bougé");
+    assert_eq!(b.max.x, 11, "la face Est a avancé de dix");
+    assert_eq!((b.min.y, b.max.y), (79, 79), "la hauteur accrochée tient");
+    // Et ce qu'un //set doit remplir est exactement le volume neuf.
+    assert_eq!(b.volume(), 11);
+}

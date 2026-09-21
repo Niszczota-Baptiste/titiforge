@@ -38,7 +38,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-642 tests, répartis par ce qu'ils PROUVENT :
+660 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -63,9 +63,10 @@ cargo test --workspace
 | `tf-mesh` mailler/chantier | 27 | glouton contre naïf, case par case |
 | `tf-render` rendu | 25 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; que la teinte de biome atteint AUSSI les blocs-modèles ; et que le quadrillage est dans la MÊME unité que la géométrie |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
-| `tf-render` viser | 18 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; et que les DEUX tables de directions disent la même chose |
+| `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
-| `tf-world` selection | 17 | deux coins, `//expand` qui ne se retourne pas, et la face qu'on attrape pour pousser-tirer |
+| `tf-world` selection | 19 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, et le VERROU que la pose impose |
+| `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :
