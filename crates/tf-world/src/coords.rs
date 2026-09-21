@@ -300,9 +300,17 @@ impl BBox {
     }
 
     pub fn regions(&self) -> impl Iterator<Item = RegionPos> + '_ {
-        let a = self.min.chunk().region();
-        let b = self.max.chunk().region();
+        let (a, b) = self.region_bounds();
         (a.z..=b.z).flat_map(move |z| (a.x..=b.x).map(move |x| RegionPos::new(x, z)))
+    }
+
+    /// Les coins de la BOÎTE de régions, sans l'énumérer.
+    ///
+    /// Une sélection démesurée en couvre des milliards : qui veut savoir
+    /// COMBIEN doit pouvoir le demander sans les parcourir, sinon la question
+    /// coûte déjà la réponse qu'on voulait éviter.
+    pub fn region_bounds(&self) -> (RegionPos, RegionPos) {
+        (self.min.chunk().region(), self.max.chunk().region())
     }
 
     /// Part de `section` réellement couverte, en coordonnées LOCALES incluses.

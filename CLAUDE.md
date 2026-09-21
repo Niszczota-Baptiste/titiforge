@@ -184,7 +184,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (568 tests aujourd'hui)
+cargo test            # tous les crates (573 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1046,3 +1046,26 @@ propres à ce dépôt.
   qui borne le coût est le ZÉRO que le mailleur écrit pour un état non teinté,
   la même règle que la clé de fusion gloutonne — sans lui, la géométrie d'un
   escalier se copierait autant de fois qu'il y a de biomes dans la scène.
+
+- **`vec![]` n'échoue pas gentiment : une allocation refusée ABANDONNE le
+  processus.** Presque tout le moteur travaille sur des sections packées et ne
+  paie que sa portée ; trois opérations font exception et demandent une case
+  par bloc en mémoire — `//copy`, `//paste`, `//hollow`. `copier` n'avait
+  aucun plafond : « tout sélectionner » sur un monde Minefield demandait des
+  dizaines de gigaoctets et faisait disparaître l'éditeur avec le travail en
+  cours, sans un mot. C'est le piège des longueurs NBT (« on vérifie la place
+  AVANT de réserver ») avec un nombre qui vient de la SOURIS au lieu d'un
+  fichier — la conséquence est identique. Le plafond est en OCTETS et non en
+  cases, comme la fenêtre de résidence : `//copy` coûte 4 octets par case,
+  `//hollow` en coûte 12, et un plafond en cases mentirait à l'un des deux.
+- **Une sélection est une BOÎTE, un monde est un SEMIS.** `appliquer`
+  parcourait `sel.regions()`, c'est-à-dire la boîte englobante : sur une
+  sélection de tout le monde, 13,7 MILLIARDS de régions pour la poignée qui
+  existe. Ça ne plante pas, ça ne dit rien, ça ne finit pas — le pire des
+  trois, et attrapé par un test que j'écrivais pour autre chose. Au-delà de
+  1 024 régions dans la boîte, on demande à la source lesquelles existent.
+  L'équivalence est EXACTE — une région absente rend `RapportRegion::default()`,
+  et `absorber` d'un rapport par défaut n'ajoute rien — et elle est croisée
+  contre le chemin lent sur les OCTETS produits, pas sur un compte. Corollaire :
+  la couche de staging compte autant que la source, sinon une opération
+  sauterait la région qu'une opération précédente vient de créer.

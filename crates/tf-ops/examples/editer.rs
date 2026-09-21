@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use tf_anvil::Interner;
 use tf_blocks::Transfo;
-use tf_ops::edition::{appliquer, copier, deplacer, empiler};
+use tf_ops::edition::{appliquer, copier, deplacer, empiler, OCTETS_CREUSAGE};
 use tf_ops::plan::{Operation, Plan};
 use tf_ops::relief::{relever, Lissage};
 use tf_ops::{
@@ -715,10 +715,18 @@ fn main() {
     // d'utilisateur, « ça a l'air bloqué » serait la seule chose qu'on verrait.
     if let Op::Creuser = &op {
         let epaisseur = args.epaisseur.max(1);
+        // Le creusage a son PROPRE appétit : la copie, les quatre tampons de
+        // diffusion, et l'extrait creusé. Vérifier avec celui de `//copy`
+        // laisserait passer trois fois trop — et une allocation refusée
+        // abandonne le processus au lieu de rendre une erreur.
+        if let Err(e) = tf_ops::edition::verifier_materialisable(&sel, OCTETS_CREUSAGE) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
         println!(
             "creusage : {} cases à matérialiser (~{:.1} Mo) · paroi de {epaisseur} bloc(s)",
             sel.volume(),
-            sel.volume() as f64 * 4.0 / 1_048_576.0
+            sel.volume() as f64 * OCTETS_CREUSAGE as f64 / 1_048_576.0
         );
         let t0 = std::time::Instant::now();
         let p = match copier(&staging, &args.dim, Folder::Region, &sel, &mut interner) {

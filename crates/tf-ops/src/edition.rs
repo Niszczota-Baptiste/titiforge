@@ -176,6 +176,23 @@ pub enum Erreur {
     Nbt(tf_nbt::Trunc),
     Encode(EncodeError),
     Splice(tf_anvil::chunk::SpliceError),
+    /// La sélection est trop grosse pour être MATÉRIALISÉE.
+    ///
+    /// Presque tout le moteur travaille sur des sections packées et ne paie
+    /// que sa portée ; trois opérations font exception et demandent une case
+    /// par bloc en mémoire — `//copy`, `//paste` et `//hollow`. Sur une
+    /// sélection d'utilisateur, « tout le build » se compte vite en centaines
+    /// de millions de cases, et `vec![]` n'échoue pas gentiment : une
+    /// allocation refusée **abandonne le processus**, sans message, sur la
+    /// sauvegarde de quelqu'un.
+    ///
+    /// C'est la même règle qu'au chargement d'un `.mca` — « on vérifie la
+    /// place AVANT de réserver » — appliquée à un nombre qui vient de la
+    /// souris au lieu d'un fichier. La conséquence est identique.
+    TropGros {
+        octets: u64,
+        plafond: u64,
+    },
 }
 
 macro_rules! de {
@@ -207,8 +224,74 @@ impl std::fmt::Display for Erreur {
             Erreur::Nbt(e) => write!(f, "balayage de chunk : {e:?}"),
             Erreur::Encode(e) => write!(f, "encodage de section : {e:?}"),
             Erreur::Splice(e) => write!(f, "recollement : {e:?}"),
+            Erreur::TropGros { octets, plafond } => write!(
+                f,
+                "sélection trop grande à matérialiser : {:.1} Go demandés pour \
+                 un plafond de {:.1}. //copy, //paste et //hollow demandent une \
+                 case par bloc en mémoire — réduire la sélection, ou passer par \
+                 une opération qui ne paie que sa portée (//set, //replace, \
+                 //naturalize…)",
+                *octets as f64 / 1e9,
+                *plafond as f64 / 1e9
+            ),
         }
     }
+}
+
+/// Ce qu'une opération a le droit de MATÉRIALISER, en **octets**.
+///
+/// En octets et pas en cases, pour la même raison que la fenêtre de résidence
+/// (invariant n° 7) : les opérations qui matérialisent n'ont pas le même
+/// appétit par case, et un plafond en cases mentirait à l'une des deux.
+/// `//copy` demande quatre octets par case ; `//hollow` en demande douze — la
+/// grille copiée, ses quatre tampons de diffusion, et l'extrait creusé.
+///
+/// Deux gigaoctets : assez pour cinq régions pleine hauteur en copie, une et
+/// demie en creusage. Le plafond ne protège pas d'un excès de zèle mais d'un
+/// geste accidentel — sur un monde Minefield, « sélectionner tout » se compte
+/// en milliards de cases, et `vec![]` n'échoue pas gentiment : une allocation
+/// refusée **abandonne le processus**, sans message, sur la sauvegarde de
+/// quelqu'un. Mieux vaut une erreur qui nomme le chiffre.
+///
+/// C'est un plafond de MÉMOIRE, pas une politique : `//set` sur la même
+/// sélection ne paie que sa portée et n'est pas bridé.
+pub const MAX_OCTETS_MATERIALISES: u64 = 2_000_000_000;
+
+/// Octets par case que coûte `//copy` — la grille d'états de l'extrait.
+pub const OCTETS_COPIE: u64 = 4;
+
+/// Octets par case que coûte `//hollow` : la copie, les quatre tampons de la
+/// diffusion (`dehors`, `garde`, sa copie de travail, `interieur`), et
+/// l'extrait creusé.
+///
+/// Compté ici et non deviné sur place : c'est un chiffre qui change quand
+/// l'algorithme change, et un plafond calé sur l'ancien laisserait passer
+/// exactement ce qu'il existe pour refuser.
+pub const OCTETS_CREUSAGE: u64 = 12;
+
+/// Refuse une sélection qu'on ne pourrait pas matérialiser.
+///
+/// `octets_par_case` est ce que l'APPELANT sait et que la garde ne peut pas
+/// deviner. Rend le nombre de cases quand ça passe.
+///
+/// Tout en `u64` et jamais en `usize` : sur une cible 32 bits le produit
+/// déborderait AVANT d'être comparé, et la garde laisserait passer exactement
+/// le cas qu'elle existe pour attraper. `saturating_mul` pour la même raison
+/// un cran plus haut — une sélection de tout le monde dépasse `u64` en
+/// octets.
+pub fn verifier_materialisable(sel: &BBox, octets_par_case: u64) -> Result<u64, Erreur> {
+    let (sx, sy, sz) = sel.size();
+    let cases = (sx as u64)
+        .saturating_mul(sy as u64)
+        .saturating_mul(sz as u64);
+    let octets = cases.saturating_mul(octets_par_case);
+    if octets > MAX_OCTETS_MATERIALISES {
+        return Err(Erreur::TropGros {
+            octets,
+            plafond: MAX_OCTETS_MATERIALISES,
+        });
+    }
+    Ok(cases)
 }
 
 /// Le niveau de compression des écritures de STAGING.
@@ -643,6 +726,7 @@ pub fn copier<S: RegionSource, O: RegionStore>(
     interner: &mut Interner,
 ) -> Result<Presse, Erreur> {
     let (sx, sy, sz) = sel.size();
+    verifier_materialisable(sel, OCTETS_COPIE)?;
     let air = interner.intern("minecraft:air");
     let mut presse = Presse::uniforme([sx, sy, sz], air);
 
@@ -886,12 +970,70 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         blocs: op.compte().then_some(0),
         ..Default::default()
     };
-    for pos in sel.regions() {
+    for pos in regions_a_visiter(staging, dim, folder, sel)? {
         total.absorber(appliquer_region(
             staging, dim, folder, pos, sel, op, interner,
         )?);
     }
     Ok(total)
+}
+
+/// Au-delà de combien de régions dans la BOÎTE on demande à la source
+/// lesquelles existent vraiment.
+///
+/// 1 024, soit un carré de 32 × 32 régions — 16 384 blocs de côté. Aucune
+/// sélection dessinée à la main n'en approche, et tout monde réel en a moins
+/// en tout.
+const REGIONS_AVANT_DE_DEMANDER: u64 = 1024;
+
+/// Les régions qu'une opération doit visiter.
+///
+/// **Une sélection est une BOÎTE, un monde est un semis.** Parcourir la boîte
+/// marche tant qu'elle est petite ; sur une sélection démesurée — « tout
+/// sélectionner » sur un monde dont on ne connaît pas l'emprise — elle compte
+/// des milliards de cases pour une poignée de régions qui existent, et
+/// l'éditeur ne rend jamais la main. Ça ne plante pas, ça ne dit rien, ça ne
+/// finit pas : le pire des trois.
+///
+/// L'équivalence est EXACTE et c'est ce qui rend le raccourci sûr : une région
+/// absente fait rendre `RapportRegion::default()` à `appliquer_region`, et
+/// `absorber` d'un rapport par défaut n'ajoute rien. Sauter ces régions-là ne
+/// change donc aucun résultat — seulement le temps.
+///
+/// On ne demande la carte qu'au-delà d'un seuil, parce que la dresser coûte un
+/// parcours de dossier : la payer sur chaque `//set` d'un mur de dix blocs
+/// serait échanger un problème contre un autre.
+///
+/// La couche de staging compte autant que la source : une région n'existant
+/// que là — un build vierge matérialisé, une région déjà écrite par une
+/// opération précédente — serait invisible à la carte de la source seule, et
+/// l'opération sauterait précisément ce qu'on vient de créer.
+fn regions_a_visiter<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+) -> Result<Vec<RegionPos>, Erreur> {
+    let (a, b) = sel.region_bounds();
+    let largeur = (b.x as i64 - a.x as i64 + 1).max(0) as u64;
+    let profondeur = (b.z as i64 - a.z as i64 + 1).max(0) as u64;
+    if largeur.saturating_mul(profondeur) <= REGIONS_AVANT_DE_DEMANDER {
+        return Ok(sel.regions().collect());
+    }
+    let mut vues: std::collections::BTreeSet<RegionPos> = staging
+        .source()
+        .overview(dim, folder)
+        .map(|o| o.regions.into_iter().map(|r| r.pos).collect())
+        .unwrap_or_default();
+    for (d, f, pos) in staging.touched() {
+        if &d == dim && f == folder {
+            vues.insert(pos);
+        }
+    }
+    Ok(vues
+        .into_iter()
+        .filter(|p| p.x >= a.x && p.x <= b.x && p.z >= a.z && p.z <= b.z)
+        .collect())
 }
 
 /// Le pas et le remplissage d'un déplacement ou d'un empilement.

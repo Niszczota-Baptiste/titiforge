@@ -1117,3 +1117,183 @@ fn un_rapport_vide_ne_remplit_pas_le_journal() {
     assert!(journal.entrees().is_empty());
     assert!(!journal.peut_annuler());
 }
+
+// ── le plafond de matérialisation ───────────────────────────────────────────
+
+/// **Une allocation refusée n'échoue pas : elle ABANDONNE le processus.**
+///
+/// Presque tout le moteur travaille sur des sections packées et ne paie que sa
+/// portée. Trois opérations font exception et demandent une case par bloc en
+/// mémoire — `//copy`, `//paste`, `//hollow`. Le nombre vient de la SOURIS, pas
+/// d'un fichier, mais la conséquence est celle du piège déjà payé sur les
+/// longueurs NBT : on vérifie la place AVANT de réserver. Sans la garde, un
+/// « sélectionner tout » sur un monde Minefield fait disparaître l'éditeur
+/// avec le travail en cours, et sans un mot.
+#[test]
+fn une_selection_demesuree_est_refusee_et_non_tentee() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    // Le monde entier. Aucune allocation ne doit être tentée.
+    let sel = boite(-30_000_000, -64, -30_000_000, 30_000_000, 319, 30_000_000);
+    match copier(&st, &SURFACE, DOSSIER, &sel, &mut i) {
+        Err(tf_ops::edition::Erreur::TropGros { octets, plafond }) => {
+            assert!(octets > plafond, "{octets} devrait dépasser {plafond}");
+        }
+        Err(autre) => panic!("mauvaise erreur : {autre}"),
+        Ok(_) => panic!("une sélection de tout le monde ne doit PAS passer"),
+    }
+}
+
+/// **Le plafond est de la MÉMOIRE, pas une politique.**
+///
+/// La même sélection passe par `//set`, qui ne matérialise rien et ne paie que
+/// sa portée. Confondre les deux briderait l'opération la plus courante du
+/// moteur pour protéger d'un risque qu'elle ne court pas.
+#[test]
+fn le_plafond_ne_bride_que_ce_qui_materialise() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let pierre = i.intern("minecraft:stone");
+    let sel = boite(-30_000_000, -64, -30_000_000, 30_000_000, 319, 30_000_000);
+    let r = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &sel,
+        &Plan::nouveau(Masque::Tout, Motif::Bloc(pierre)),
+        &i,
+    );
+    assert!(r.is_ok(), "//set sur la même sélection doit passer");
+}
+
+/// **Le produit se calcule en `u64`, et il SATURE.**
+///
+/// Une sélection de tout le monde dépasse `u64` une fois multipliée par les
+/// octets par case. Un débordement silencieux rendrait un petit nombre, la
+/// garde laisserait passer, et on retomberait exactement sur le cas qu'elle
+/// existe pour attraper — la forme même du piège des longueurs NBT.
+#[test]
+fn le_calcul_du_plafond_ne_deborde_pas() {
+    use tf_ops::edition::{verifier_materialisable, OCTETS_CREUSAGE};
+    let tout = boite(
+        i32::MIN / 2,
+        i32::MIN / 2,
+        i32::MIN / 2,
+        i32::MAX / 2,
+        i32::MAX / 2,
+        i32::MAX / 2,
+    );
+    assert!(
+        verifier_materialisable(&tout, OCTETS_CREUSAGE).is_err(),
+        "le plus grand volume représentable doit être refusé, pas enroulé"
+    );
+    // Et ce qui tient passe, avec le compte exact.
+    let petite = boite(0, 0, 0, 15, 15, 15);
+    assert_eq!(
+        verifier_materialisable(&petite, OCTETS_CREUSAGE).unwrap(),
+        4096
+    );
+}
+
+/// **Le chemin rapide se compare au chemin lent, sur le même monde.**
+///
+/// Une sélection est une BOÎTE, un monde est un SEMIS. Parcourir la boîte de
+/// régions marche tant qu'elle est petite ; démesurée, elle compte des
+/// milliards de cases pour une poignée de régions qui existent, et l'éditeur
+/// ne rend jamais la main — ça ne plante pas, ça ne dit rien, ça ne finit pas.
+/// Au-delà d'un seuil, on demande donc à la source quelles régions existent.
+///
+/// Un raccourci non vérifié est une corruption silencieuse : la sélection
+/// large doit rendre EXACTEMENT ce que rend la sélection serrée — mêmes
+/// correctifs, mêmes étages, mêmes bornes, même compte.
+#[test]
+fn demander_les_regions_existantes_rend_le_meme_resultat_que_la_boite() {
+    let plan = |i: &mut Interner| {
+        Plan::nouveau(
+            Masque::Etat(i.intern("minecraft:stone")),
+            Motif::Bloc(i.intern("minecraft:dirt")),
+        )
+        .en_comptant()
+    };
+
+    // Chemin LENT : la boîte de régions fait 1 × 1, donc elle est parcourue.
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let p = plan(&mut i);
+    let serre = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(0, -64, 0, 511, 319, 511),
+        &p,
+        &i,
+    )
+    .unwrap();
+
+    // Chemin RAPIDE : la même région, dans une boîte de 117 187² régions.
+    let (src2, _) = monde();
+    let st2 = staging(src2);
+    let mut i2 = Interner::new();
+    let p2 = plan(&mut i2);
+    let large = appliquer(
+        &st2,
+        &SURFACE,
+        DOSSIER,
+        &boite(-30_000_000, -64, -30_000_000, 30_000_000, 319, 30_000_000),
+        &p2,
+        &i2,
+    )
+    .unwrap();
+
+    assert!(!serre.est_vide(), "le test ne prouve rien sans correctif");
+    assert_eq!(serre.patches.len(), large.patches.len(), "mêmes correctifs");
+    assert_eq!(serre.etages, large.etages, "mêmes étages");
+    assert_eq!(serre.blocs, large.blocs, "même compte de blocs");
+    assert_eq!(serre.bornes, large.bornes, "mêmes bornes");
+    // Et au BIT près : c'est le seul contrôle qui ne relit pas le
+    // raisonnement qui a produit le raccourci.
+    assert_eq!(
+        st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        st2.read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        "les deux chemins doivent écrire les MÊMES octets"
+    );
+}
+
+/// **Une région qui n'existe que dans la COUCHE de staging compte aussi.**
+///
+/// La carte de la source ne la connaît pas — elle a été créée par une
+/// opération précédente, ou matérialisée pour un build vierge. La sauter
+/// ferait qu'une seconde opération sur une grande sélection ignorerait
+/// précisément ce qu'on vient d'écrire, sans rien signaler.
+#[test]
+fn une_region_ecrite_dans_la_couche_reste_visible_a_une_grande_selection() {
+    let vide = MemorySource::new(); // une SOURCE sans aucune région
+    let st = Staging::new(vide, MemorySource::new());
+    // La région part dans la COUCHE, pas dans la source.
+    st.write_region(&SURFACE, DOSSIER, ZERO, &region(&Terrain::petite()))
+        .unwrap();
+
+    let mut i = Interner::new();
+    let p = Plan::nouveau(
+        Masque::Etat(i.intern("minecraft:stone")),
+        Motif::Bloc(i.intern("minecraft:dirt")),
+    )
+    .en_comptant();
+    let r = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(-30_000_000, -64, -30_000_000, 30_000_000, 319, 30_000_000),
+        &p,
+        &i,
+    )
+    .unwrap();
+    assert!(
+        !r.est_vide(),
+        "la région de la couche doit être visitée, pas seulement celles de la source"
+    );
+    assert!(r.blocs.unwrap_or(0) > 0);
+}
