@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **713**, zéro échec |
+| Tests | **714**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -39,7 +39,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-713 tests, répartis par ce qu'ils PROUVENT :
+714 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -71,7 +71,7 @@ cargo test --workspace
 | `tf-app` etat | 13 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
-| `tf-ops` catalogue | 17 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
+| `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :
@@ -496,7 +496,6 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **La coque ne fait encore RIEN au monde** | la palette des dix opérations est là, les formulaires sont ENGENDRÉS depuis les descripteurs, le coût est annoncé avant de cliquer — mais « Appliquer » ne fait rien : le moteur doit tourner dans un FIL à part, sinon une opération de trois secondes fige la fenêtre. L'interface le dit à l'écran plutôt que de faire croire l'inverse |
-| **La ligne de commande a encore SON aiguillage** | `tf-ops/examples/editer.rs` garde son `enum Op`, son `usage()` et sa chaîne d'appels écrits à la main, alors que `catalogue.rs` et `executer.rs` les portent désormais. Deux chaînes d'appels, donc une divergence en attente — c'est le prochain nettoyage, pas une option |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 

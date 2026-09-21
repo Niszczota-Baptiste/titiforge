@@ -147,6 +147,31 @@ impl Valeur {
     }
 }
 
+/// **Une valeur, dite comme un humain l'écrirait.**
+///
+/// Une seule table : l'aide de la ligne de commande et le champ de la coque y
+/// lisent la même chose. Sans elle, l'aide affichait `Texte("minecraft:stone")`
+/// et `Direction(PlusX)` — des noms de types Rust dans un texte destiné à
+/// quelqu'un qui tape une commande.
+impl std::fmt::Display for Valeur {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Valeur::Texte(s) if s.is_empty() => write!(f, "—"),
+            Valeur::Texte(s) => write!(f, "{s}"),
+            Valeur::Entier(n) => write!(f, "{n}"),
+            Valeur::Vecteur([x, y, z]) => write!(f, "{x},{y},{z}"),
+            Valeur::Melange(v) if v.is_empty() => write!(f, "aucun"),
+            Valeur::Melange(v) => {
+                let parts: Vec<String> = v.iter().map(|(n, b)| format!("{n}:{b}")).collect();
+                write!(f, "{}", parts.join(","))
+            }
+            Valeur::Direction(d) => write!(f, "{}", d.nom()),
+            Valeur::Transformation(None) => write!(f, "aucune"),
+            Valeur::Transformation(Some(t)) => write!(f, "{}", t.nom()),
+        }
+    }
+}
+
 /// Un paramètre d'opération.
 #[derive(Debug, Clone, Copy)]
 pub struct Param {

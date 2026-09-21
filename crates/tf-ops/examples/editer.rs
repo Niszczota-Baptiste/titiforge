@@ -28,15 +28,12 @@ use std::path::{Path, PathBuf};
 
 use tf_anvil::Interner;
 use tf_blocks::Transfo;
-use tf_ops::edition::{appliquer, copier, deplacer, empiler, OCTETS_CREUSAGE};
-use tf_ops::plan::{Operation, Plan};
-use tf_ops::relief::{relever, Lissage};
-use tf_ops::{
-    creuser, extrait_creuse, Collage, Forme, Masque, Motif, Naturaliser, Pas, PoserBiome,
-};
+use tf_ops::catalogue::{construire, Params, Valeur, OPS};
+use tf_ops::executer::{executer, Options};
+use tf_ops::Forme;
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::decoupe::Niveau;
-use tf_world::selection::{Direction, Selection};
+use tf_world::selection::{Direction, Selection, DIRECTIONS};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::FsSource;
 use tf_world::Staging;
@@ -44,7 +41,14 @@ use tf_world::Staging;
 struct Args {
     monde: PathBuf,
     dim: Dimension,
-    op: Option<Op>,
+    /// L'identifiant CATALOGUE de l'opération demandée, et ses paramètres.
+    ///
+    /// **La ligne de commande ne connaît plus les opérations.** Elle traduit
+    /// ses propres options en paramètres nommés et laisse `construire` puis
+    /// `executer` faire le reste : une seule chaîne d'appels pour tous les
+    /// hôtes, au lieu de deux qui finiraient par ne plus dire la même chose.
+    op: Option<&'static str>,
+    params: Params,
     sel: Option<BBox>,
     ecrire: bool,
     compter: bool,
@@ -55,8 +59,6 @@ struct Args {
     /// de le laisser découvrir en jeu.
     pack: Option<PathBuf>,
     avec_air: bool,
-    /// Ce qui reste à la place de la source d'un `--deplacer`.
-    remplir: String,
     /// Le VOLUME visé dans la sélection. Gardé en paramètres plutôt qu'en
     /// `Forme` construite : le centre vient de `--sel`, qui peut arriver
     /// APRÈS sur la ligne de commande, et l'ordre des options n'a jamais de
@@ -64,19 +66,12 @@ struct Args {
     volume: Volume,
     creux: Option<f64>,
     renversee: bool,
-    /// Surface, sous-sol, roche d'une naturalisation.
-    couches: [String; 3],
-    profondeur: u32,
-    /// Passes de lissage. Zéro vaut une — l'option est facultative.
-    passes: u32,
     /// Gestes de SÉLECTION, appliqués dans l'ordre AVANT l'opération.
     ///
     /// Une liste et pas trois champs : `--pousser est 3 --chunk` doit
     /// s'enchaîner dans l'ordre tapé, sinon l'utilisateur ne peut pas prévoir
     /// ce qu'il obtient.
     gestes: Vec<Geste>,
-    /// Couches de paroi que `--creuser` GARDE. Zéro vaut une.
-    epaisseur: u32,
 }
 
 /// Ce qui bouge la SÉLECTION avant que l'opération ne parte.
@@ -103,87 +98,18 @@ enum Volume {
     Faces(f64),
 }
 
-enum Op {
-    Poser(String),
-    Remplacer(String, String),
-    Melanger(Vec<(u32, String)>),
-    /// `//copy` + `//rotate` + `//paste` en un geste. Une ligne de commande ne
-    /// garde pas de presse-papiers entre deux appels : ce qui serait trois
-    /// commandes dans le jeu en fait une ici.
-    CopierVers {
-        d: [i32; 3],
-        transfo: Option<Transfo>,
-    },
-    /// `//move` : la source est effacée, le contenu part ailleurs.
-    Deplacer {
-        d: [i32; 3],
-    },
-    /// `//stack` : la sélection se répète, d'un PAS égal à sa propre taille
-    /// le long d'une direction. C'est ce que fait WorldEdit, et c'est ce
-    /// qu'on veut neuf fois sur dix — un mur qu'on prolonge.
-    Empiler {
-        fois: u32,
-        dir: [i32; 3],
-    },
-    /// `//naturalize` : refaire la stratigraphie, colonne par colonne.
-    Naturaliser,
-    /// `//setbiome` : poser un biome. Grille de 4 × 4 × 4, pas de bloc.
-    Biome(String),
-    /// `//smooth` : moyenner la hauteur du terrain avec celle de ses voisines.
-    Lisser {
-        rayon: u32,
-    },
-    /// `//hollow` : vider ce qu'aucun chemin de vide ne relie au DEHORS.
-    ///
-    /// L'épaisseur vit dans `Args` et non ici : `--epaisseur` peut précéder
-    /// `--creuser` sur la ligne de commande, et l'ordre des options n'a
-    /// jamais de sens.
-    Creuser,
-}
-
 fn usage() -> ! {
     eprintln!(
         "usage : editer <monde> [options]
 
   --sel \"x1,y1,z1,x2,y2,z2\"  la sélection, en coordonnées MONDE. Les guillemets
                              sous PowerShell : sans eux le shell mange la virgule
-  --poser <bloc>             //set
-  --remplacer <de> <vers>    //replace
-  --melanger p:bloc,p:bloc   un mélange pondéré, ex. 3:minecraft:stone,1:minecraft:dirt
-  --copier-vers \"dx,dy,dz\"   //copy puis //paste décalé de (dx, dy, dz)
-  --tourner 90|180|270       tourne l'extrait avant de le poser
-  --miroir x|z               le reflète
-  --deplacer \"dx,dy,dz\"     //move : déplace le contenu, la source est remplie
-  --empiler <n> <direction>  //stack : répète la sélection n fois, d'un pas égal
-                             à sa taille. est|ouest|nord|sud|haut|bas
-                             (+X = Est, +Z = Sud, +Y = Haut)
-  --remplir <bloc>           ce qui reste à la place d'un --deplacer
-                             (défaut : minecraft:air)
-  --naturaliser              //naturalize : la 1re couche solide de chaque
-                             colonne devient de l'herbe, les 3 suivantes de la
-                             terre, le reste de la pierre
-  --couches <s> <ss> <r>     les trois blocs (défaut grass_block, dirt, stone)
-  --profondeur <n>           l'épaisseur du sous-sol (défaut 3)
-  --biome <nom>              //setbiome. ATTENTION : un biome se pose par
-                             CELLULE de 4 × 4 × 4 blocs — une sélection qui ne
-                             tombe pas sur un multiple de 4 déborde d'autant
-  --lisser <rayon>           //smooth : moyenne la hauteur du terrain avec
-                             celle de ses voisines. La lecture DÉBORDE de la
-                             sélection du rayon, sinon son bord se lisserait
-                             contre le vide
-  --passes <n>               répétitions du lissage (défaut 1)
-  --sphere <rayon>           //sphere : restreint l'opération à une sphère
-  --cylindre <rayon> <haut>  //cyl, axe vertical
-  --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
-  --creux <épaisseur>        creuse la FORME (//hsphere, //hcyl…) — géométrique :
-                             il retire le centre du volume qu'on vient de poser
-  --creuser                  //hollow : vide ce qu'aucun chemin de VIDE ne relie
-                             au dehors. Topologique, pas géométrique — une salle
-                             déjà ouverte par une porte ne se remplit pas, et une
-                             sphère pleine se vide. Ne se confond pas avec
-                             --creux : celui-ci dessine, celui-là INSPECTE
-  --epaisseur <n>            les couches de paroi que --creuser garde (défaut 1)
 
+ OPÉRATIONS — une seule par commande :
+{}
+ Paramètres des opérations, dans l'ordre où le descripteur les déclare. Les
+ valeurs par défaut viennent du catalogue, pas d'ici :
+{}
  Gestes de SÉLECTION, appliqués dans l'ordre tapé, AVANT l'opération :
   --pousser <dir> <n>        //expand : pousse UNE face de n blocs. n négatif la
                              ramène (//contract), sans jamais traverser la face
@@ -196,11 +122,21 @@ fn usage() -> ! {
   --sections                 étend la HAUTEUR aux tranches de 16. --chunk ne le
                              fait pas — c'est la convention de WorldEdit — et
                              les DEUX sont nécessaires pour l'étage palette
+
+ FORMES — le volume visé DANS la sélection :
+  --sphere <rayon>           //sphere
+  --cylindre <rayon> <haut>  //cyl, axe vertical
+  --pyramide <demi-base> <h> //pyramid ; --renversee pour la pointe en bas
   --murs <épaisseur>         //walls : les 4 parois VERTICALES de la sélection
   --faces <épaisseur>        //faces : ses 6 faces, plancher et plafond compris
+  --creux <épaisseur>        creuse la FORME (//hsphere, //hcyl…) — géométrique :
+                             il retire le centre du volume qu'on vient de poser.
+                             Ne pas confondre avec --creuser, qui INSPECTE
   Les formes sont CENTRÉES sur la sélection, et l'opération ne paie que la
   forme : une sphère de rayon 10 dans une sélection d'un million de blocs
   coûte une sphère de rayon 10.
+
+ RÉGLAGES :
   --avec-air                 l'air de l'extrait écrase ce qu'il recouvre
   --pack <chemin>            le pack, l'installation ou le codex d'où DÉRIVER
                              les règles de rotation. Sans lui, les cases
@@ -212,9 +148,65 @@ fn usage() -> ! {
 
 Une commande par LIGNE : PowerShell ne connaît pas la continuation \\ d'un shell Unix.
 
-Sans opération, se contente de décrire le monde."
+Sans opération, se contente de décrire le monde.",
+        lignes_operations(),
+        lignes_parametres()
     );
     std::process::exit(2)
+}
+
+/// **La liste des opérations vient du CATALOGUE.**
+///
+/// Écrite à la main, elle a déjà vieilli une fois dans ce fichier — et rien ne
+/// l'aurait dit : un texte d'aide faux se lit exactement comme un texte d'aide
+/// juste. Le descripteur porte déjà le nom, les noms WorldEdit et le résumé ;
+/// les recopier ici serait la cinquième table qui diverge.
+fn lignes_operations() -> String {
+    let mut out = String::new();
+    for d in OPS {
+        let resume = d.resume.split(". ").next().unwrap_or(d.resume);
+        out.push_str(&format!(
+            "  --{:<22} {}\n{:26} {}\n",
+            d.id,
+            d.we.join(" "),
+            "",
+            resume.trim()
+        ));
+    }
+    out
+}
+
+/// Et leurs paramètres, avec leurs bornes et leurs défauts — les vrais, ceux
+/// que `normaliser` appliquera.
+fn lignes_parametres() -> String {
+    use tf_ops::catalogue::Saisie;
+    let mut out = String::new();
+    for d in OPS {
+        if d.params.is_empty() {
+            continue;
+        }
+        let champs: Vec<String> = d
+            .params
+            .iter()
+            .map(|p| {
+                let genre = match p.saisie {
+                    Saisie::Bloc => "bloc".to_string(),
+                    Saisie::Biome => "biome".to_string(),
+                    Saisie::Melange => "p:bloc,p:bloc".to_string(),
+                    Saisie::Entier { min, max } => format!("{min}..{max}"),
+                    Saisie::Vecteur => "dx,dy,dz".to_string(),
+                    Saisie::Direction => "est|ouest|nord|sud|haut|bas".to_string(),
+                    Saisie::Transformation => "90|180|270|x|z".to_string(),
+                };
+                match p.defaut {
+                    Some(v) => format!("{} <{genre}> [{}]", p.nom, v.valeur()),
+                    None => format!("{} <{genre}> REQUIS", p.nom),
+                }
+            })
+            .collect();
+        out.push_str(&format!("  --{:<22} {}\n", d.id, champs.join(" · ")));
+    }
+    out
 }
 
 /// Le séparateur d'une liste passée en argument : la virgule ET l'espace.
@@ -232,28 +224,25 @@ fn sep(c: char) -> bool {
 fn lire_args() -> Args {
     let mut a = std::env::args().skip(1);
     let monde = PathBuf::from(a.next().unwrap_or_else(|| usage()));
+    // **Aucun défaut n'est posé ici.** Les défauts vivent dans le descripteur
+    // de chaque opération, et `normaliser` les applique. En poser un second
+    // jeu ferait deux sources pour la même valeur — et la ligne de commande
+    // enverrait `remplir` à un `//set` qui n'en veut pas, donc une erreur
+    // franche là où il n'y avait qu'une option de trop.
     let mut args = Args {
         monde,
         dim: Dimension::Overworld,
         op: None,
+        params: Params::new(),
         sel: None,
         ecrire: false,
         compter: false,
         seed: 0,
         pack: None,
         avec_air: false,
-        remplir: "minecraft:air".to_string(),
         volume: Volume::Aucun,
         creux: None,
         renversee: false,
-        couches: [
-            "minecraft:grass_block".to_string(),
-            "minecraft:dirt".to_string(),
-            "minecraft:stone".to_string(),
-        ],
-        profondeur: 3,
-        passes: 0,
-        epaisseur: 0,
         gestes: Vec::new(),
     };
     // Rotation et miroir se donnent séparément de la destination : on les
@@ -286,11 +275,14 @@ fn lire_args() -> Args {
                     },
                 ));
             }
-            "--poser" => args.op = Some(Op::Poser(a.next().unwrap_or_else(|| usage()))),
+            "--poser" => {
+                args.op = Some("poser");
+                args.params.poser("bloc", texte(a.next()));
+            }
             "--remplacer" => {
-                let de = a.next().unwrap_or_else(|| usage());
-                let vers = a.next().unwrap_or_else(|| usage());
-                args.op = Some(Op::Remplacer(de, vers));
+                args.op = Some("remplacer");
+                args.params.poser("de", texte(a.next()));
+                args.params.poser("vers", texte(a.next()));
             }
             "--melanger" => {
                 let v = a.next().unwrap_or_else(|| usage());
@@ -302,7 +294,8 @@ fn lire_args() -> Args {
                         (p.trim().parse().unwrap_or_else(|_| usage()), b.to_string())
                     })
                     .collect();
-                args.op = Some(Op::Melanger(entrees));
+                args.op = Some("melanger");
+                args.params.poser("melange", Valeur::Melange(entrees));
             }
             "--copier-vers" => {
                 let v: Vec<i32> = a
@@ -315,10 +308,9 @@ fn lire_args() -> Args {
                 if v.len() != 3 {
                     usage();
                 }
-                args.op = Some(Op::CopierVers {
-                    d: [v[0], v[1], v[2]],
-                    transfo: None,
-                });
+                args.op = Some("copier-vers");
+                args.params
+                    .poser("decalage", Valeur::Vecteur([v[0], v[1], v[2]]));
             }
             "--deplacer" => {
                 let v: Vec<i32> = a
@@ -331,9 +323,9 @@ fn lire_args() -> Args {
                 if v.len() != 3 {
                     usage();
                 }
-                args.op = Some(Op::Deplacer {
-                    d: [v[0], v[1], v[2]],
-                });
+                args.op = Some("deplacer");
+                args.params
+                    .poser("decalage", Valeur::Vecteur([v[0], v[1], v[2]]));
             }
             "--empiler" => {
                 let fois = a
@@ -341,60 +333,55 @@ fn lire_args() -> Args {
                     .unwrap_or_else(|| usage())
                     .parse()
                     .unwrap_or_else(|_| usage());
-                // Le repère Minecraft, en toutes lettres : +X = Est,
-                // +Z = Sud, +Y = Haut. Un « nord » qui irait vers +Z ferait
-                // empiler du mauvais côté sans qu'aucune erreur le dise.
-                let dir = match a.next().unwrap_or_else(|| usage()).as_str() {
-                    "est" | "e" => [1, 0, 0],
-                    "ouest" | "o" => [-1, 0, 0],
-                    "sud" | "s" => [0, 0, 1],
-                    "nord" | "n" => [0, 0, -1],
-                    "haut" | "h" => [0, 1, 0],
-                    "bas" | "b" => [0, -1, 0],
-                    _ => usage(),
-                };
-                args.op = Some(Op::Empiler { fois, dir });
+                args.op = Some("empiler");
+                args.params.poser("fois", Valeur::Entier(fois));
+                args.params
+                    .poser("direction", Valeur::Direction(direction(a.next())));
             }
-            "--remplir" => args.remplir = a.next().unwrap_or_else(|| usage()),
-            "--naturaliser" => args.op = Some(Op::Naturaliser),
-            "--biome" => args.op = Some(Op::Biome(a.next().unwrap_or_else(|| usage()))),
+            "--remplir" => {
+                args.params.poser("remplir", texte(a.next()));
+            }
+            "--naturaliser" => args.op = Some("naturaliser"),
+            "--biome" => {
+                args.op = Some("biome");
+                args.params.poser("biome", texte(a.next()));
+            }
             // Le nombre de passes est une option à part et non un second
             // argument positionnel : `std::env::Args` ne se relit pas, donc
             // « est-ce un nombre ou l'option suivante ? » ne se décide pas
             // sans consommer. Une option nommée ne pose pas la question.
             "--lisser" => {
-                args.op = Some(Op::Lisser {
-                    rayon: nombre(a.next()) as u32,
-                })
+                args.op = Some("lisser");
+                args.params
+                    .poser("rayon", Valeur::Entier(nombre(a.next()) as i64));
             }
-            "--passes" => args.passes = nombre(a.next()) as u32,
+            "--passes" => {
+                args.params
+                    .poser("passes", Valeur::Entier(nombre(a.next()) as i64));
+            }
             // Le repère Minecraft en toutes lettres, comme `--empiler` :
             // +X = Est, +Z = Sud, +Y = Haut.
             "--pousser" => {
-                let d = match a.next().unwrap_or_else(|| usage()).as_str() {
-                    "est" | "e" => Direction::PlusX,
-                    "ouest" | "o" => Direction::MoinsX,
-                    "sud" | "s" => Direction::PlusZ,
-                    "nord" | "n" => Direction::MoinsZ,
-                    "haut" | "h" => Direction::PlusY,
-                    "bas" | "b" => Direction::MoinsY,
-                    _ => usage(),
-                };
+                let d = direction(a.next());
                 args.gestes.push(Geste::Pousser(d, nombre(a.next()) as i32));
             }
             "--chunk" => args.gestes.push(Geste::Aligner(Niveau::Chunk)),
             "--mca" => args.gestes.push(Geste::Aligner(Niveau::Region)),
             "--sections" => args.gestes.push(Geste::AlignerSections),
-            "--creuser" => args.op = Some(Op::Creuser),
-            "--epaisseur" => args.epaisseur = nombre(a.next()) as u32,
-            "--couches" => {
-                args.couches = [
-                    a.next().unwrap_or_else(|| usage()),
-                    a.next().unwrap_or_else(|| usage()),
-                    a.next().unwrap_or_else(|| usage()),
-                ]
+            "--creuser" => args.op = Some("creuser"),
+            "--epaisseur" => {
+                args.params
+                    .poser("epaisseur", Valeur::Entier(nombre(a.next()) as i64));
             }
-            "--profondeur" => args.profondeur = nombre(a.next()) as u32,
+            "--couches" => {
+                args.params.poser("surface", texte(a.next()));
+                args.params.poser("sous-sol", texte(a.next()));
+                args.params.poser("roche", texte(a.next()));
+            }
+            "--profondeur" => {
+                args.params
+                    .poser("profondeur", Valeur::Entier(nombre(a.next()) as i64));
+            }
             "--sphere" => args.volume = Volume::Sphere(nombre(a.next())),
             "--cylindre" => args.volume = Volume::Cylindre(nombre(a.next()), nombre(a.next())),
             "--pyramide" => args.volume = Volume::Pyramide(nombre(a.next()), nombre(a.next())),
@@ -432,10 +419,38 @@ fn lire_args() -> Args {
             _ => usage(),
         }
     }
-    if let (Some(Op::CopierVers { transfo: t, .. }), Some(v)) = (args.op.as_mut(), transfo) {
-        *t = Some(v);
+    // Rotation et miroir se recollent ici : `--tourner` peut précéder
+    // `--copier-vers` sur la ligne de commande, et l'ordre des options n'a
+    // jamais de sens.
+    if let Some(v) = transfo {
+        args.params
+            .poser("transformation", Valeur::Transformation(Some(v)));
     }
     args
+}
+
+/// Un texte obligatoire, ou l'usage.
+fn texte(v: Option<String>) -> Valeur {
+    Valeur::Texte(v.unwrap_or_else(|| usage()))
+}
+
+/// Une direction du repère Minecraft — **+X = Est, +Z = Sud, +Y = Haut**.
+///
+/// Les noms vivent dans `Direction::nom`, pas ici : cet exemple en portait
+/// DEUX tables identiques (`--empiler` et `--pousser`), ce qui est déjà une de
+/// trop, et une coque en aurait écrit une troisième.
+fn direction(v: Option<String>) -> Direction {
+    let n = v.unwrap_or_else(|| usage());
+    Direction::depuis_nom(&n)
+        .or_else(|| {
+            // Les initiales, pour la frappe rapide — « n » est le NORD, donc
+            // −Z. C'est le seul endroit où l'abréviation est décidée.
+            DIRECTIONS
+                .iter()
+                .copied()
+                .find(|d| d.nom().starts_with(&n) && n.len() == 1)
+        })
+        .unwrap_or_else(|| usage())
 }
 
 fn nombre(v: Option<String>) -> f64 {
@@ -587,46 +602,15 @@ fn main() {
         }
     );
 
-    let (Some(op), Some(sel)) = (args.op, args.sel) else {
-        println!(
-            "\n(pas d'opération demandée — voir --poser / --remplacer / --melanger / \
-             --copier-vers / --deplacer / --empiler / --naturaliser / --biome / \
-             --lisser / --creuser)"
-        );
+    let (Some(nom_op), Some(sel)) = (args.op, args.sel) else {
+        // La liste vient du CATALOGUE, pas d'une phrase écrite à la main :
+        // celle-ci a déjà vieilli une fois, et rien ne l'aurait dit.
+        let noms: Vec<&str> = OPS.iter().flat_map(|d| d.we.iter().copied()).collect();
+        println!("\n(pas d'opération demandée — {})", noms.join(" "));
         return;
     };
 
     let mut interner = Interner::new();
-    let air = interner.intern("minecraft:air");
-    let plan = match &op {
-        Op::Poser(b) => Plan::nouveau(Masque::Tout, Motif::Bloc(interner.intern(b))),
-        Op::Remplacer(de, vers) => Plan::nouveau(
-            Masque::Etat(interner.intern(de)),
-            Motif::Bloc(interner.intern(vers)),
-        ),
-        Op::Melanger(v) => Plan::nouveau(
-            Masque::Tout,
-            Motif::melange(v.iter().map(|(p, b)| (*p, interner.intern(b))).collect()),
-        ),
-        // Ces trois-là se construisent plus bas : elles ont besoin du staging
-        // pour lire ce qu'elles vont reposer.
-        // Celles-là ne sont pas des plans : elles se construisent plus bas,
-        // parce qu'elles demandent le staging ou une autre forme de travail
-        // que « un masque et un motif ».
-        Op::CopierVers { .. }
-        | Op::Deplacer { .. }
-        | Op::Empiler { .. }
-        | Op::Naturaliser
-        | Op::Biome(_)
-        | Op::Lisser { .. }
-        | Op::Creuser => Plan::nouveau(Masque::Tout, Motif::Garder),
-    }
-    .avec_seed(args.seed);
-    let plan = if args.compter {
-        plan.en_comptant()
-    } else {
-        plan
-    };
 
     // ── les gestes de sélection, DANS L'ORDRE TAPÉ
     //
@@ -726,8 +710,7 @@ fn main() {
         Some(e) => forme.creuse(e),
         None => forme,
     };
-    let plan = plan.dans(forme);
-    if let Some(b) = plan.forme.bornes() {
+    if let Some(b) = forme.bornes() {
         let (fx, fy, fz) = b.size();
         // Une enveloppe n'est pas « centrée » : elle est PRISE sur la
         // sélection. Le dire autrement laisserait croire qu'on peut la
@@ -752,265 +735,98 @@ fn main() {
     };
     let staging = Staging::new(src, overlay);
 
-    // ── Le presse-papiers, quand l'opération en demande un.
+    // ── L'EXÉCUTION.
     //
-    // `//copy` est la seule opération du crate qui n'écrit rien : elle lit à
-    // travers le staging et rend un extrait détaché. Rien n'est réservé au
-    // monde tant que le collage n'est pas appliqué.
-    let mut presse = None;
-    if let Op::CopierVers { transfo, .. } = &op {
-        let t0 = std::time::Instant::now();
-        let mut p = match copier(&staging, &args.dim, Folder::Region, &sel, &mut interner) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("copie refusée : {e}");
-                std::process::exit(1);
-            }
-        };
-        println!(
-            "copié : {} × {} × {} en {:.0} ms · {} état(s) distinct(s) · {} block entities",
-            p.taille[0],
-            p.taille[1],
-            p.taille[2],
-            t0.elapsed().as_secs_f64() * 1000.0,
-            p.palette().len(),
-            p.entites.len()
-        );
-        if let Some(t) = transfo {
-            let table = regles(args.pack.as_deref());
-            let r = p.transformer(*t, &mut interner, &|cle, t| {
-                table.as_ref().and_then(|tb| tb.transformer(cle, t))
-            });
-            // Ce qu'on n'a pas su transformer est NOMMÉ. Le taire produirait
-            // un build à moitié tourné, et rien à l'écran pour le dire.
-            //
-            // Sans pack, TOUT est intact et les nommer un par un noierait le
-            // message dans une liste de pierres qui n'auraient rien tourné de
-            // toute façon : la seule information utile est qu'il manque un
-            // pack. Avec pack, au contraire, chaque nom compte — c'est un
-            // trou de la table, et il se répare.
-            match (table.is_none(), r.intacts.len()) {
-                (_, 0) => {}
-                (true, n) => println!(
-                    "ATTENTION : aucun pack, donc AUCUN des {n} états n'est réécrit — \
-                     les cases bougent, pas les orientations. `--pack <chemin>` les dérive."
-                ),
-                (false, n) => {
-                    let exemples: Vec<&str> = r
-                        .intacts
-                        .iter()
-                        .filter_map(|id| interner.resolve(*id))
-                        .take(5)
-                        .collect();
-                    println!(
-                        "ATTENTION : {n} état(s) laissés TELS QUELS — {}{}",
-                        exemples.join(", "),
-                        if n > exemples.len() { ", …" } else { "" }
-                    );
-                }
-            }
-            p = r.presse;
-        }
-        presse = Some(p);
-    }
-
-    // ── `//hollow` : la SEULE opération qui matérialise toute la sélection.
-    //
-    // Une diffusion ne se découpe ni par section ni par colonne — un couloir
-    // traverse la sélection de part en part, et décider case par case
-    // demanderait de savoir ce qu'il y a au bout. Le coût est donc celui du
-    // volume, une fois. Il est BORNÉ et il s'ANNONCE : sur une sélection
-    // d'utilisateur, « ça a l'air bloqué » serait la seule chose qu'on verrait.
-    if let Op::Creuser = &op {
-        let epaisseur = args.epaisseur.max(1);
-        // Le creusage a son PROPRE appétit : la copie, les quatre tampons de
-        // diffusion, et l'extrait creusé. Vérifier avec celui de `//copy`
-        // laisserait passer trois fois trop — et une allocation refusée
-        // abandonne le processus au lieu de rendre une erreur.
-        if let Err(e) = tf_ops::edition::verifier_materialisable(&sel, OCTETS_CREUSAGE) {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-        println!(
-            "creusage : {} cases à matérialiser (~{:.1} Mo) · paroi de {epaisseur} bloc(s)",
-            sel.volume(),
-            sel.volume() as f64 * OCTETS_CREUSAGE as f64 / 1_048_576.0
-        );
-        let t0 = std::time::Instant::now();
-        let p = match copier(&staging, &args.dim, Folder::Region, &sel, &mut interner) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("extraction refusée : {e}");
-                std::process::exit(1);
-            }
-        };
-        // Ce qui BLOQUE la diffusion, c'est tout ce qui n'est pas de l'air.
-        // C'est ce qui fait qu'une salle déjà percée d'une porte ne se remplit
-        // pas : le vide de la porte relie son intérieur au dehors.
-        let solide = Masque::Non(Box::new(Masque::Etat(air)));
-        let c = creuser(&p, &solide, epaisseur);
-        println!(
-            "creusé : {} case(s) intérieure(s) sur {} en {:.0} ms",
-            c.cases,
-            p.blocs.len(),
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-        presse = Some(extrait_creuse(&p, &c, air));
-    }
-
-    let collage = presse.as_ref().map(|p| {
-        let [dx, dy, dz] = match &op {
-            Op::CopierVers { d, .. } => *d,
-            _ => [0, 0, 0],
-        };
-        Collage {
-            presse: p,
-            coin: BlockPos {
-                x: sel.min.x + dx,
-                y: sel.min.y + dy,
-                z: sel.min.z + dz,
-            },
-            // **Creuser POSE de l'air.** Sans `avec_air`, le collage sauterait
-            // exactement les cases qu'on vient de calculer et ne changerait
-            // rien — une opération qui s'exécute, se rapporte, et ne fait rien.
-            avec_air: args.avec_air || matches!(op, Op::Creuser),
-            air,
-            compter: args.compter,
-        }
-    });
-    // Une opération ne paie que sa PORTÉE : un collage paie son extrait, pas
-    // la sélection d'où il vient.
-    let (operation, portee): (&dyn Operation, BBox) = match &collage {
-        Some(c) => (c, c.bornes()),
-        // Une opération ne paie que sa PORTÉE : la forme resserre la
-        // sélection avant qu'un seul chunk ne soit lu.
-        None => (&plan, plan.portee(&sel)),
+    // Tout ce que cet exemple portait — copier, transformer, creuser, coller,
+    // déplacer, empiler, lisser, naturaliser — vit maintenant dans
+    // `tf_ops::executer`. Deux cent cinquante lignes d'aiguillage en moins, et
+    // surtout : la coque prend exactement le même chemin. Deux chaînes
+    // d'appels auraient fini par ne plus dire la même chose, et la première à
+    // se tromper l'aurait fait en silence.
+    let table = regles(args.pack.as_deref());
+    let regle = |cle: &str, t: Transfo| table.as_ref().and_then(|tb| tb.transformer(cle, t));
+    let opts = Options {
+        compter: args.compter,
+        seed: args.seed,
+        avec_air: args.avec_air,
+        forme,
+        regle: table.as_ref().map(|_| &regle as tf_ops::Regle),
     };
 
-    let remplissage = interner.intern(&args.remplir);
-    let un_pas = |d: [i32; 3]| Pas {
-        d,
-        avec_air: args.avec_air,
-        air,
-        compter: args.compter,
+    let travail = match construire(nom_op, &args.params, &mut interner) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
     };
 
     let t0 = std::time::Instant::now();
-    // `deplacer` et `empiler` sont COMPOSÉES : elles enchaînent plusieurs
-    // passes et rendent leurs correctifs bout à bout, pour une seule entrée
-    // de journal. Un `Ctrl+Z` défera le déplacement entier.
-    let fait = match &op {
-        Op::Deplacer { d } => deplacer(
-            &staging,
-            &args.dim,
-            Folder::Region,
-            &sel,
-            un_pas(*d),
-            remplissage,
-            &mut interner,
-        ),
-        Op::Empiler { fois, dir } => {
-            let (sx, sy, sz) = sel.size();
-            let d = [dir[0] * sx as i32, dir[1] * sy as i32, dir[2] * sz as i32];
-            println!("pas : {},{},{} · {fois} fois", d[0], d[1], d[2]);
-            empiler(
-                &staging,
-                &args.dim,
-                Folder::Region,
-                &sel,
-                un_pas(d),
-                *fois,
-                &mut interner,
-            )
-        }
-        Op::Biome(nom) => {
-            let b = interner.intern(nom);
-            let op = PoserBiome {
-                biome: b,
-                compter: args.compter,
-            };
-            appliquer(&staging, &args.dim, Folder::Region, &sel, &op, &interner)
-        }
-        Op::Lisser { rayon } => {
-            let passes = args.passes.max(1);
-            // **La lecture déborde de la sélection**, du rayon du noyau. Sans
-            // cette marge, le bord se moyennerait contre des colonnes qu'on
-            // n'a pas lues — donc contre du vide — et s'effondrerait.
-            let m = *rayon as i32;
-            let large = BBox::new(
-                BlockPos {
-                    x: sel.min.x - m,
-                    y: sel.min.y,
-                    z: sel.min.z - m,
-                },
-                BlockPos {
-                    x: sel.max.x + m,
-                    y: sel.max.y,
-                    z: sel.max.z + m,
-                },
-            );
-            let solide = Masque::Non(Box::new(Masque::Etat(air)));
-            let t0 = std::time::Instant::now();
-            match relever(
-                &staging,
-                &args.dim,
-                Folder::Region,
-                &large,
-                &solide,
-                &mut interner,
-            ) {
-                Ok(brute) => {
-                    let (sx, _, sz) = sel.size();
-                    let voulue = brute
-                        .lissee(*rayon, passes)
-                        .resserree(sel.min.x, sel.min.z, sx, sz);
-                    println!(
-                        "relief : {} colonnes relevées en {:.0} ms · rayon {rayon}, {passes} passe(s)",
-                        brute.h.len(),
-                        t0.elapsed().as_secs_f64() * 1000.0
-                    );
-                    let op = Lissage {
-                        carte: &voulue,
-                        vide: air,
-                        compter: args.compter,
-                    };
-                    appliquer(&staging, &args.dim, Folder::Region, &sel, &op, &interner)
-                }
-                Err(e) => Err(e),
-            }
-        }
-        Op::Naturaliser => {
-            let mut n = Naturaliser::nouveau(
-                interner.intern(&args.couches[0]),
-                interner.intern(&args.couches[1]),
-                interner.intern(&args.couches[2]),
-                air,
-            );
-            n.profondeur = args.profondeur;
-            n.compter = args.compter;
-            println!(
-                "naturalisation : {} puis {} × {} puis {}",
-                args.couches[0], args.couches[1], args.profondeur, args.couches[2]
-            );
-            appliquer(&staging, &args.dim, Folder::Region, &sel, &n, &interner)
-        }
-        _ => appliquer(
-            &staging,
-            &args.dim,
-            Folder::Region,
-            &portee,
-            operation,
-            &interner,
-        ),
-    };
-    let rap = match fait {
-        Ok(r) => r,
+    let cr = match executer(
+        &travail,
+        &staging,
+        &args.dim,
+        Folder::Region,
+        &sel,
+        &mut interner,
+        &opts,
+    ) {
+        Ok(cr) => cr,
         Err(e) => {
             eprintln!("opération refusée : {e}");
             std::process::exit(1);
         }
     };
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let rap = &cr.rapport;
+
+    // ── Ce que le moteur a rapporté, dit à l'utilisateur.
+    //
+    // **Le moteur ne parle à personne** : il rend des données, et c'est ici
+    // qu'elles deviennent des phrases. La coque en fera des étiquettes à
+    // partir des mêmes chiffres, donc aucune des deux ne peut se tromper sur
+    // un nombre que l'autre a juste.
+    if let Some([tx, ty, tz]) = cr.extrait {
+        println!(
+            "extrait : {tx} × {ty} × {tz} · {} block entities",
+            cr.entites_copiees
+        );
+    }
+    if cr.cases_materialisees > 0 {
+        println!(
+            "matérialisé : {:.1} Mo — la seule opération qui paie tout le volume",
+            cr.cases_materialisees as f64 / 1e6
+        );
+    }
+    if let Some([dx, dy, dz]) = cr.pas {
+        println!("pas : {dx},{dy},{dz}");
+    }
+    if cr.colonnes_relevees > 0 {
+        println!("relief : {} colonnes relevées", cr.colonnes_relevees);
+    }
+    // Ce qu'on n'a pas su transformer est NOMMÉ. Le taire produirait un build
+    // à moitié tourné, et rien à l'écran pour le dire. Sans pack, au
+    // contraire, les nommer un par un noierait la seule information utile.
+    match (cr.sans_regle, cr.intacts.len()) {
+        (_, 0) => {}
+        (true, n) => println!(
+            "ATTENTION : aucun pack, donc AUCUN des {n} états n'est réécrit — \
+             les cases bougent, pas les orientations. `--pack <chemin>` les dérive."
+        ),
+        (false, n) => {
+            let exemples: Vec<&str> = cr
+                .intacts
+                .iter()
+                .filter_map(|id| interner.resolve(*id))
+                .take(5)
+                .collect();
+            println!(
+                "ATTENTION : {n} état(s) laissés TELS QUELS — {}{}",
+                exemples.join(", "),
+                if n > exemples.len() { ", …" } else { "" }
+            );
+        }
+    }
 
     println!(
         "\n{ms:.0} ms · {} chunks modifiés · étages : rien {} · section {} · palette {} · bloc {}",

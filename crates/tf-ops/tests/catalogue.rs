@@ -478,3 +478,48 @@ fn toutes_les_saisies_sont_enumerees() {
         }
     }
 }
+
+/// **Une valeur s'affiche comme on l'écrirait**, pas comme Rust la nomme.
+/// L'aide de la ligne de commande et le champ de la coque lisent la même
+/// table ; sans elle, l'aide montrait `Texte("minecraft:stone")` et
+/// `Direction(PlusX)` à quelqu'un qui tape une commande.
+#[test]
+fn une_valeur_s_affiche_comme_on_l_ecrirait() {
+    use tf_world::selection::Direction;
+    let cas = [
+        (Valeur::texte("minecraft:stone"), "minecraft:stone"),
+        (Valeur::Entier(-64), "-64"),
+        (Valeur::Vecteur([1, -2, 3]), "1,-2,3"),
+        (Valeur::Melange(vec![]), "aucun"),
+        (
+            Valeur::Melange(vec![
+                (3, "minecraft:stone".into()),
+                (1, "minecraft:dirt".into()),
+            ]),
+            "3:minecraft:stone,1:minecraft:dirt",
+        ),
+        (Valeur::Direction(Direction::MoinsZ), "nord"),
+        (Valeur::Transformation(None), "aucune"),
+        (
+            Valeur::Transformation(Some(tf_blocks::Transfo::MiroirX)),
+            "miroir est-ouest",
+        ),
+    ];
+    for (v, attendu) in cas {
+        assert_eq!(v.to_string(), attendu);
+    }
+    // Aucun défaut du catalogue ne doit s'afficher avec un nom de type Rust.
+    for d in OPS {
+        for p in d.params {
+            if let Some(def) = p.defaut {
+                let t = def.valeur().to_string();
+                assert!(
+                    !t.contains('(') && !t.contains('"'),
+                    "« {} » / {} affiche du Rust : {t}",
+                    d.id,
+                    p.nom
+                );
+            }
+        }
+    }
+}

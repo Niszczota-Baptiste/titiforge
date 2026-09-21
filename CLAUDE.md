@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (713 tests aujourd'hui)
+cargo test            # tous les crates (714 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1297,6 +1297,17 @@ propres à ce dépôt.
   le plus bas, par division plancher. Alterner selon la parité ferait sauter
   l'accroche d'un bloc quand on redimensionne, ce qui se lit « le milieu
   bouge tout seul ».
+- **Un texte d'aide faux se lit exactement comme un texte d'aide juste.**
+  `editer` listait ses dix opérations à la main ; la liste avait déjà vieilli,
+  et rien ne pouvait le dire — ce n'est pas du code, donc aucun compilateur, et
+  ce n'est pas une sortie vérifiée, donc aucun test. Elle vient maintenant du
+  catalogue, bornes et défauts compris : c'est la même donnée que le formulaire
+  de la coque, donc les deux ne peuvent plus se contredire.
+- **Un `{:?}` dans un texte destiné à un humain montre du Rust.** L'aide
+  engendrée affichait `Texte("minecraft:stone")` et `Direction(PlusX)` à
+  quelqu'un qui tape une commande. `Display` sur `Valeur` est la seule table, et
+  un test refuse tout défaut du catalogue qui s'afficherait avec une parenthèse
+  ou un guillemet.
 - **Une jonction que personne n'écrit, deuxième fois — et je l'ai vue écrite
   DANS UN TEST.** Rejouer une entrée de journal sur la copie de travail
   n'existait nulle part : le test d'édition le refaisait à la main, sous le
