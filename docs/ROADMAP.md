@@ -429,8 +429,17 @@ quatre-vingts chargements. Et `par_region` groupe la demande en LECTURES —
 une région lue une fois — parce qu'un chunk demandé seul coûte × 10 d'un
 chunk amorti.
 
-**Ce qui reste** : le FIL de chargement (il a sa liste de travail ; il lui
-manque d'exister), le branchement de
+✅ **Le FIL de chargement existe** (`tf-app/src/chargeur.rs`) : une lecture
+par RÉGION, une réponse par CELLULE, la plus urgente d'abord, et une demande
+neuve remplace la périmée au lieu de s'y ajouter. Huit tests, quatre
+mutations, zéro survivant — dont deux propriétés qui ne se voient nulle part
+ailleurs : qu'il ne fait jamais attendre l'hôte (fil témoin à attente bornée)
+et qu'il ne lit un `.mca` qu'une fois (source qui COMPTE ses lectures, là où
+un chronomètre dépendrait de la machine).
+
+**Ce qui reste** : le BRANCHEMENT — l'hôte doit fusionner les tables d'états
+rendues, poser les sections, mailler et remplacer les tranches, une cellule
+par image — puis le branchement de
 `Residency` sur la `Grille` et le `Chantier` — il faut un `Weighed` pour
 chacun, et aucun n'existe —, l'éviction qui retire un maillage de l'arène, et
 l'arène GPU par tranches.

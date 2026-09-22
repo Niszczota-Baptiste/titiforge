@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (803 tests aujourd'hui)
+cargo test            # tous les crates (811 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -375,7 +375,10 @@ crates/
                · ÉCRIRE DANS LA SAVE ✅ (refus, sauvegarde, écriture)
                · OUTILS de Conception ✅ (tirer / poser / casser)
                · FORMES, comptage et graine réglables ✅
-               · REMAILLAGE INCRÉMENTAL ✅ (× 7 sur 64 chunks)
+               · REMAILLAGE INCRÉMENTAL ✅ (× 7 sur 64 chunks), et aucune
+                 édition ne recharge la zone — un COMPTEUR le tient
+               · FIL DE CHARGEMENT ✅ (`chargeur.rs`) : une lecture par
+                 RÉGION, une réponse par CELLULE, la plus urgente d'abord
                · résidence pilotée par la caméra et composants à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -1549,6 +1552,22 @@ propres à ce dépôt.
   produira à chaque pas de caméra dès que la résidence sera pilotée — et il se
   teste au niveau où il existe (`tf-render/tests/arene.rs`), pas au niveau où
   on aimerait qu'il existe.
+- **Une source qui COMPTE ses lectures dit ce qu'un chronomètre ne sait pas.**
+  « Un `.mca` n'est lu qu'une fois par lot » est la conclusion qui a décidé
+  l'unité de lecture du chargeur (× 10 entre un chunk seul et un chunk amorti,
+  soit 4,4 s gaspillées par région). Mesurée au temps, elle dépendrait de la
+  charge de la machine ; comptée, elle est exacte et la mutation « une lecture
+  par cellule » meurt en une ligne. Un compteur est une preuve, un seuil de
+  temps une opinion — même leçon que `Ouvert::rechargements`.
+- **L'emprise d'un lot est un RECTANGLE, la demande un DISQUE.** Le chargeur
+  lit chaque `.mca` une fois, sur la boîte qui couvre les cellules voulues de
+  cette région — mais un lot au bord de l'horizon n'occupe qu'un coin de son
+  rectangle. Mesuré (`tf-world --example demande`) : **31 % de chunks décodés
+  en trop à rayon 8, 12 % à rayon 64** — la part baisse quand le disque
+  grandit, parce que les régions centrales y sont entièrement dedans. C'est
+  réel, c'est borné, et ce n'est pas le prochain combat : ces chunks-là sont à
+  une cellule de l'horizon, donc le premier pas de caméra les réclame. Écrit
+  ici pour que personne n'ait à le redécouvrir en le soupçonnant.
 - **Un rechargement de ZONE derrière le geste le plus banal de l'éditeur.**
   Le remaillage est incrémental, mais il gardait une porte vers le chemin
   complet : un état de bloc que l'atlas ne connaît pas. Or prendre un bloc dans

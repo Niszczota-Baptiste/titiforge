@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chargeur;
 pub mod etat;
 pub mod interface;
 pub mod moteur;

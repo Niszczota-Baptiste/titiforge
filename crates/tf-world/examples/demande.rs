@@ -19,8 +19,35 @@
 use std::time::Instant;
 
 use tf_world::coords::BlockPos;
-use tf_world::demande::{planifier, voulues};
+use tf_world::demande::{par_region, planifier, voulues};
 use tf_world::Niveau;
+
+/// **Ce que l'emprise d'un lot fait décoder en TROP.**
+///
+/// Le chargeur lit un `.mca` une fois par lot, sur le rectangle qui couvre
+/// toutes ses cellules. Mais la demande est un DISQUE : un lot au bord de
+/// l'horizon n'occupe qu'un coin de son rectangle, et les chunks du reste
+/// sont décodés pour rien. Le chiffre dit s'il faut s'en occuper, ou si c'est
+/// du travail qu'on aurait fait de toute façon.
+fn gaspillage(oeil: BlockPos, r: u32) -> (usize, usize) {
+    let v = voulues(oeil, [1.0, 0.0, 0.0], r, Niveau::Chunk, (-64, 319));
+    let voulus = v.len();
+    let couverts: usize = par_region(&v)
+        .iter()
+        .map(|l| {
+            let (mut x0, mut x1) = (i32::MAX, i32::MIN);
+            let (mut z0, mut z1) = (i32::MAX, i32::MIN);
+            for c in &l.cellules {
+                x0 = x0.min(c.cellule.x);
+                x1 = x1.max(c.cellule.x);
+                z0 = z0.min(c.cellule.z);
+                z1 = z1.max(c.cellule.z);
+            }
+            ((x1 - x0 + 1) as usize) * ((z1 - z0 + 1) as usize)
+        })
+        .sum();
+    (voulus, couverts)
+}
 
 fn main() {
     let oeil = BlockPos::new(8, 64, 8);
@@ -58,6 +85,23 @@ fn main() {
             p.charger.len(),
             p.jetables.len(),
             temps[temps.len() / 2]
+        );
+    }
+    println!();
+    println!("Chunks décodés en trop — l'emprise d'un lot est un RECTANGLE,");
+    println!("la demande un DISQUE :");
+    println!(
+        "  {:>6} {:>9} {:>9} {:>8}",
+        "rayon", "voulus", "couverts", "en trop"
+    );
+    for r in [8u32, 16, 24, 40, 64] {
+        let (voulus, couverts) = gaspillage(oeil, r);
+        println!(
+            "  {:>6} {:>9} {:>9} {:>7.0} %",
+            r,
+            voulus,
+            couverts,
+            (couverts as f64 / voulus as f64 - 1.0) * 100.0
         );
     }
 }
