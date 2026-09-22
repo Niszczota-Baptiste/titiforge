@@ -449,6 +449,31 @@ pub fn table_rendu(
 ) -> (tf_mesh::TableFormes, Vec<crate::apparence::Habillage>) {
     let mut t = tf_mesh::TableFormes::new();
     let mut h = Vec::new();
+    prolonger_rendu(cat, atlas, teintes, cles, translucide, &mut t, &mut h);
+    (t, h)
+}
+
+/// **Le même parcours, mais sur une table qu'on PROLONGE.**
+///
+/// Les deux sont indexés par `StateId`, et un état neuf porte l'identifiant
+/// suivant : accueillir un bloc jamais vu se fait donc en poussant à la fin,
+/// sans toucher à ce qui précède. C'est ce qui permet d'étendre l'atlas au
+/// lieu de recharger la zone — le `warmup(extent)` qui a coûté cher aux deux
+/// applications précédentes.
+///
+/// Écrite UNE fois et appelée par [`table_rendu`] : deux parcours qui
+/// dérivent, c'est le sol de tout un build qui perd sa teinte d'un côté
+/// seulement, et rien à l'écran ne dirait lequel des deux a raison.
+#[allow(clippy::too_many_arguments)]
+pub fn prolonger_rendu(
+    cat: &Catalogue,
+    atlas: &crate::atlas::Atlas,
+    teintes: &crate::apparence::Teintes,
+    cles: impl Iterator<Item = String>,
+    translucide: &dyn Fn(&str) -> bool,
+    t: &mut tf_mesh::TableFormes,
+    h: &mut Vec<crate::apparence::Habillage>,
+) {
     for cle in cles {
         let (forme, hab) = forme_et_habillage(cat, Some(atlas), Some(teintes), &cle, translucide);
         let id = t.pousser(forme.air, forme.opaque, forme.cuboides);
@@ -474,7 +499,6 @@ pub fn table_rendu(
         }
         h.push(hab);
     }
-    (t, h)
 }
 
 /// Tous les noms de texture cités par les modèles résolus.

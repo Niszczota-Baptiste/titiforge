@@ -281,6 +281,21 @@ pub struct Ouvert {
     pub nom: String,
     /// Le dossier temporaire de la copie de travail, à effacer en partant.
     couche: Option<std::path::PathBuf>,
+    /// **Combien de fois la ZONE ENTIÈRE a été rechargée.**
+    ///
+    /// Un compteur, pas un chronomètre : ce qu'on veut interdire est un
+    /// rechargement de zone après une édition de trois blocs, et un
+    /// chronomètre ne sait le dire qu'avec un seuil, c'est-à-dire une
+    /// opinion. Le compteur, lui, répond oui ou non.
+    ///
+    /// C'est le défaut qui a coûté le plus cher aux deux applications qui
+    /// précèdent celle-ci : `ExeWorldEdit` chauffait le build ENTIER avant
+    /// toute opération (`warmup(extent)`) — mesuré chez un utilisateur, une
+    /// sphère de 62 blocs prenait 5,2 s sur une sélection de 413 millions de
+    /// cases, dont 47 % à décoder des chunks jamais lus et 52 % à recoller
+    /// l'aperçu entier. Un test qui lit ce compteur est le seul moyen de ne
+    /// pas le repayer une troisième fois.
+    pub rechargements: u32,
 }
 
 impl Ouvert {
@@ -295,6 +310,7 @@ impl Ouvert {
                 zone,
                 nom: "fixture".into(),
                 couche: None,
+                rechargements: 0,
             });
         };
         // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
@@ -327,6 +343,7 @@ impl Ouvert {
             zone,
             nom: dir.to_string(),
             couche: Some(couche),
+            rechargements: 0,
         })
     }
 
@@ -428,9 +445,23 @@ impl Ouvert {
             },
         );
         self.monde.interner = interner;
-        if self.monde.interner.len() > connus {
-            // Un état que l'atlas ne connaît pas : on recharge tout plutôt que
-            // de lui donner la texture d'un autre.
+        // **Un état jamais vu ÉTEND l'atlas ; il ne recharge pas la zone.**
+        //
+        // C'était la dernière porte vers le chemin complet, et elle s'ouvrait
+        // au geste le plus banal d'un éditeur : prendre un bloc dans la
+        // palette et le poser. Mesuré sur une zone de 64 chunks, poser un bloc
+        // connu coûtait 0,7 ms et poser un bloc NEUF 22,3 — × 33 — et ce coût
+        // est en O(zone), donc 867 ms sur une région bâtie : une seconde de
+        // fenêtre figée pour un bloc. C'est le `warmup(extent)`
+        // d'`ExeWorldEdit` (5,2 s pour une sphère de 62 blocs), qui a coûté
+        // cher deux applications de suite.
+        //
+        // L'extension est sûre parce que les indices de couche déjà attribués
+        // ne bougent pas, et que `TableFormes` comme l'habillage sont indexés
+        // par `StateId` dans l'ORDRE d'internement : les états neufs portent
+        // les identifiants suivants, donc s'ajoutent à la fin. Rien de ce qui
+        // est déjà maillé ne change de sens.
+        if self.monde.interner.len() > connus && !self.etendre_atlas(connus) {
             return self.recharger();
         }
         phase("relecture", t0);
@@ -454,8 +485,59 @@ impl Ouvert {
         Ok(())
     }
 
+    /// **Accueille les états découverts depuis `connus`**, sans rien rebâtir.
+    ///
+    /// Rend `false` quand l'extension n'est pas possible — une texture neuve
+    /// plus grande que le côté du tableau, qu'on ne veut pas réduire — et
+    /// l'appelant recharge alors. Jamais silencieux : réduire une tuile
+    /// perdrait la moitié de ses pixels, et la règle du dépôt est d'agrandir
+    /// les petites.
+    fn etendre_atlas(&mut self, connus: usize) -> bool {
+        let neuves: Vec<String> = (connus..self.monde.interner.len())
+            .map(|i| {
+                self.monde
+                    .interner
+                    .resolve(i as StateId)
+                    .unwrap_or("minecraft:air")
+                    .to_string()
+            })
+            .collect();
+        let voulues = tf_assets::textures_des_etats(&self.assets.cat, neuves.iter().cloned());
+        let ajout = self.monde.atlas.etendre(&self.assets.src, voulues, &|n| {
+            self.assets.disposition.chemins_texture(n)
+        });
+        if let Some(nom) = ajout.trop_grande {
+            eprintln!("texture « {nom} » plus grande que l'atlas : rechargement");
+            return false;
+        }
+        // La table et l'habillage se prolongent par les états neufs, DANS
+        // l'ordre d'internement : c'est ce qui garde `StateId` valide comme
+        // indice des deux.
+        tf_assets::catalogue::prolonger_rendu(
+            &self.assets.cat,
+            &self.monde.atlas,
+            &self.assets.teintes,
+            neuves.into_iter(),
+            &|n| self.assets.translucides.contains(n),
+            &mut self.monde.table,
+            &mut self.monde.habillage,
+        );
+        debug_assert_eq!(
+            self.monde.habillage.len(),
+            self.monde.interner.len(),
+            "l'habillage est indexé par StateId : il doit couvrir tous les états"
+        );
+        true
+    }
+
     /// Tout relire et tout remailler — y compris l'atlas.
+    ///
+    /// **Le chemin coûteux, et il se COMPTE** (`rechargements`). Il paie la
+    /// ZONE, pas ce qui a changé : sur une région bâtie, 867 ms contre
+    /// quelques millisecondes pour un remaillage incrémental. Tout appel
+    /// après une édition ordinaire est un bug, et un test le vérifie.
     fn recharger(&mut self) -> Result<(), String> {
+        self.rechargements += 1;
         let st = self
             .staging
             .as_ref()

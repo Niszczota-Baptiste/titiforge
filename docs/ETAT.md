@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **790**, zéro échec |
+| Tests | **796**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-790 tests, répartis par ce qu'ils PROUVENT :
+796 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -77,6 +77,7 @@ cargo test --workspace
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 17 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
+| `tf-app` rechargement | 6 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement. Tourne sans pack : le codex est écrit à la volée |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 

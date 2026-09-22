@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (790 tests aujourd'hui)
+cargo test            # tous les crates (796 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1499,6 +1499,32 @@ propres à ce dépôt.
   **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
   texture manquante est simplement vide. Les deltas des deux passes
   s'enchaînent.
+- **Un rechargement de ZONE derrière le geste le plus banal de l'éditeur.**
+  Le remaillage est incrémental, mais il gardait une porte vers le chemin
+  complet : un état de bloc que l'atlas ne connaît pas. Or prendre un bloc dans
+  la palette et le poser est exactement ce qu'un éditeur sert à faire, donc
+  cette porte s'ouvrait en permanence. Mesuré sur une zone de 64 chunks : poser
+  un bloc connu coûte 0,7 ms, poser un bloc NEUF en coûtait **22,3** — × 33. Et
+  le coût est en O(ZONE) : 6,6 ms sur 16 chunks contre **85,7 sur 256**, donc
+  867 ms sur une région bâtie. C'est le `warmup(extent)` d'`ExeWorldEdit` sous
+  un autre nom — 5,2 s pour une sphère de 62 blocs, dont 47 % à décoder des
+  chunks jamais lus. L'atlas s'ÉTEND maintenant (`Atlas::etendre`), et la table
+  comme l'habillage se prolongent : les indices déjà attribués ne bougent pas,
+  donc rien de ce qui est maillé ne change de sens. 22,3 ms → 0,6. La défense
+  durable n'est pas le correctif mais le COMPTEUR : `Ouvert::rechargements` se
+  lit dans un test, là où un seuil de temps n'aurait été qu'une opinion.
+- **Un test qui ne tourne pas ne dit rien.** Neuf tests de la coque — ceux qui
+  tiennent la JONCTION entre la coque, le moteur et le rendu — étaient gated
+  sur un vrai pack (`TF_PACK`), donc ne tournaient jamais ailleurs que sur la
+  machine qui a le serveur. Le codex du site se reconnaît à UN fichier
+  (`blockstates.json` à la racine) : on en écrit donc un à la volée, modèles et
+  PNG compris, comme les régions et pour la même raison — pas de fixture
+  binaire dans le dépôt. Corollaire qui a mordu tout de suite : une fixture qui
+  ne couvre pas ce que l'AUTRE fixture écrit est un test vert qui ne mesure
+  rien. Le premier codex ne déclarait que des `minecraft:*` alors que `Build`
+  pose 221 `minefield:*` : une région bâtie de 256 chunks se chargeait en
+  **six quads**, et la mesure prise dessus annonçait 0,1 ms là où la vraie
+  valeur est 85.
 - **Une fonction publique ne doit pas dépendre en silence de l'ordre de son
   entrée.** `par_region` groupe une demande en lectures de région ; son tri des
   lots ne décidait rien, parce que `voulues` rend déjà une liste triée et

@@ -31,7 +31,7 @@ pub mod texture;
 pub use apparence::GenreTeinte;
 pub use apparence::{textures_des_etats, Apparence, Habillage, Teintes};
 pub use archive::Archive;
-pub use atlas::Atlas;
+pub use atlas::{Ajout, Atlas};
 pub use blockstates::{Blockstate, Variante};
 pub use catalogue::{table_rendu, Catalogue, Classement};
 pub use jeu::{catalogue, est_une_installation, inspecter, Genre, Installation, Version};
