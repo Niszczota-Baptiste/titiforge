@@ -31,6 +31,8 @@
 //!    sommet retrouve sa pose par **recherche dichotomique**. Un appel, zéro
 //!    octet par face, vingt itérations sur un million de poses.
 
+use std::collections::{HashMap, HashSet};
+
 use bytemuck::{Pod, Zeroable};
 use tf_anvil::StateId;
 use tf_mesh::forme::{Cuboide, FACES};
@@ -103,6 +105,16 @@ pub struct AreneModeles {
     pub tranches: Vec<(Adresse, u32, u32)>,
     /// Total des faces à dessiner. C'est le nombre d'INSTANCES.
     pub faces_a_dessiner: u32,
+    /// La géométrie déjà construite, par `(état, biome)` → `(début, nombre)`
+    /// dans `faces`.
+    ///
+    /// **Gardée entre deux appels**, et c'est ce qui rend [`remplacer`]
+    /// possible : refaire une tranche sans elle rappellerait `modele` et
+    /// ferait grossir `faces` d'une copie à chaque édition, sans fin et sans
+    /// que rien ne le dise.
+    ///
+    /// [`remplacer`]: AreneModeles::remplacer
+    connus: HashMap<(StateId, StateId), (u32, u32)>,
 }
 
 impl AreneModeles {
@@ -139,36 +151,9 @@ impl AreneModeles {
         modele: &dyn Fn(StateId, StateId) -> Vec<FaceModele>,
     ) -> AreneModeles {
         let mut a = AreneModeles::default();
-        // La géométrie d'un état n'est construite QU'UNE fois par biome où il
-        // se teinte — une seule fois tout court pour le reste du catalogue,
-        // quel que soit le nombre de blocs qui la portent. C'est tout
-        // l'intérêt.
-        let mut connus: std::collections::HashMap<(StateId, StateId), (u32, u32)> =
-            std::collections::HashMap::new();
-
         for (section, lot) in chantier.lots.iter().enumerate() {
             let debut_pose = a.poses.len() as u32;
-            for p in &lot.poses.poses {
-                let (debut_modele, nombre) = *connus.entry((p.id, p.biome)).or_insert_with(|| {
-                    let f = modele(p.id, p.biome);
-                    let debut = a.faces.len() as u32;
-                    a.faces.extend(f);
-                    (debut, a.faces.len() as u32 - debut)
-                });
-                if nombre == 0 {
-                    continue;
-                }
-                a.poses.push(Pose {
-                    local: p.pos[0] as u32
-                        | (p.pos[1] as u32) << 8
-                        | (p.pos[2] as u32) << 16
-                        | (p.voisins_opaques as u32) << 24,
-                    section: section as u32,
-                    debut_face: a.faces_a_dessiner,
-                    debut_modele,
-                });
-                a.faces_a_dessiner += nombre;
-            }
+            a.empiler(lot, section as u32, modele);
             if a.poses.len() as u32 == debut_pose {
                 continue; // section sans bloc-modèle : rien à noter
             }
@@ -176,6 +161,113 @@ impl AreneModeles {
                 .push((lot.adresse, debut_pose, a.poses.len() as u32 - debut_pose));
         }
         a
+    }
+
+    /// Empile les poses d'un lot. Écrite UNE fois : [`AreneModeles::depuis`]
+    /// et [`AreneModeles::remplacer`] doivent produire exactement les mêmes
+    /// octets, sinon une édition rendrait autre chose qu'un rechargement et
+    /// rien à l'écran ne dirait laquelle des deux a raison.
+    ///
+    /// La géométrie d'un état n'est construite QU'UNE fois par biome où il se
+    /// teinte — une seule fois tout court pour le reste du catalogue, quel
+    /// que soit le nombre de blocs qui la portent. C'est tout l'intérêt.
+    fn empiler(
+        &mut self,
+        lot: &tf_mesh::Lot,
+        section: u32,
+        modele: &dyn Fn(StateId, StateId) -> Vec<FaceModele>,
+    ) {
+        for p in &lot.poses.poses {
+            let (debut_modele, nombre) = match self.connus.get(&(p.id, p.biome)) {
+                Some(&v) => v,
+                None => {
+                    let f = modele(p.id, p.biome);
+                    let debut = self.faces.len() as u32;
+                    self.faces.extend(f);
+                    let v = (debut, self.faces.len() as u32 - debut);
+                    self.connus.insert((p.id, p.biome), v);
+                    v
+                }
+            };
+            if nombre == 0 {
+                continue;
+            }
+            self.poses.push(Pose {
+                local: p.pos[0] as u32
+                    | (p.pos[1] as u32) << 8
+                    | (p.pos[2] as u32) << 16
+                    | (p.voisins_opaques as u32) << 24,
+                section,
+                debut_face: self.faces_a_dessiner,
+                debut_modele,
+            });
+            self.faces_a_dessiner += nombre;
+        }
+    }
+
+    /// **Refait les tranches VISÉES, recopie les autres.**
+    ///
+    /// Même raison que [`Arene::remplacer`] : rebâtir la passe de modèles à
+    /// chaque édition coûtait, mesuré sur une région bâtie de 256 chunks,
+    /// **23 à 29 ms** pour trois blocs posés — du O(scène) sur un geste en
+    /// O(édition).
+    ///
+    /// **Deux champs doivent être recalculés à la copie, pas un.** `section`
+    /// est l'indice du LOT, qui décale quand une section apparaît ou
+    /// disparaît ; `debut_face` est une somme PRÉFIXE sur tout le flot, donc
+    /// une tranche qui change de longueur décale toutes les suivantes. Le
+    /// second est la raison pour laquelle cette passe a attendu : c'est le
+    /// nombre de faces de chaque pose qu'il faut retrouver, et il ne vit que
+    /// dans la mémo.
+    ///
+    /// [`Arene::remplacer`]: crate::Arene::remplacer
+    pub fn remplacer(
+        &mut self,
+        chantier: &Chantier,
+        visees: &[Adresse],
+        modele: &dyn Fn(StateId, StateId) -> Vec<FaceModele>,
+    ) {
+        let a_refaire: HashSet<Adresse> = visees.iter().copied().collect();
+        let ancien: HashMap<Adresse, (u32, u32)> =
+            self.tranches.iter().map(|&(a, d, n)| (a, (d, n))).collect();
+        // Combien de faces porte un modèle, depuis son début : c'est ce qui
+        // permet de recalculer la somme préfixe d'une pose recopiée.
+        let taille: HashMap<u32, u32> = self.connus.values().map(|&(d, n)| (d, n)).collect();
+
+        let anciennes = std::mem::take(&mut self.poses);
+        let mut poses = Vec::with_capacity(anciennes.len());
+        let mut tranches = Vec::with_capacity(self.tranches.len());
+        self.faces_a_dessiner = 0;
+
+        for (section, lot) in chantier.lots.iter().enumerate() {
+            let debut_pose = poses.len() as u32;
+            match ancien.get(&lot.adresse) {
+                Some(&(d, n)) if !a_refaire.contains(&lot.adresse) => {
+                    for p in &anciennes[d as usize..(d + n) as usize] {
+                        let nombre = taille.get(&p.debut_modele).copied().unwrap_or(0);
+                        poses.push(Pose {
+                            section: section as u32,
+                            debut_face: self.faces_a_dessiner,
+                            ..*p
+                        });
+                        self.faces_a_dessiner += nombre;
+                    }
+                }
+                _ => {
+                    // `empiler` pousse dans `self.poses` : on la lui prête le
+                    // temps du lot plutôt que de dédoubler la boucle.
+                    std::mem::swap(&mut self.poses, &mut poses);
+                    self.empiler(lot, section as u32, modele);
+                    std::mem::swap(&mut self.poses, &mut poses);
+                }
+            }
+            if poses.len() as u32 == debut_pose {
+                continue;
+            }
+            tranches.push((lot.adresse, debut_pose, poses.len() as u32 - debut_pose));
+        }
+        self.poses = poses;
+        self.tranches = tranches;
     }
 
     /// La même, pour un appelant qui n'a pas de biomes.

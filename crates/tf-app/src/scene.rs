@@ -278,10 +278,24 @@ fn arene_modeles(
     interner: &Interner,
     climat: &tf_assets::climat::Climat,
 ) -> AreneModeles {
-    let teinte_de = |genre: tf_assets::GenreTeinte, biome: StateId| -> Option<[f32; 3]> {
+    AreneModeles::depuis(chantier, &modele_de(table, habillage, interner, climat))
+}
+
+/// La géométrie d'un état pour un biome : ses faces, habillées.
+///
+/// Écrite une fois et partagée par le chemin complet et le chemin
+/// incrémental, comme [`apparence`] — deux copies décideraient de la FORME de
+/// chaque bloc-modèle.
+fn modele_de<'a>(
+    table: &'a TableFormes,
+    habillage: &'a [tf_assets::apparence::Habillage],
+    interner: &'a Interner,
+    climat: &'a tf_assets::climat::Climat,
+) -> impl Fn(StateId, StateId) -> Vec<tf_render::FaceModele> + 'a {
+    let teinte_de = move |genre: tf_assets::GenreTeinte, biome: StateId| -> Option<[f32; 3]> {
         teinte_de(interner, climat, genre, biome)
     };
-    AreneModeles::depuis(chantier, &|id, biome| {
+    move |id, biome| {
         let Some(h) = habillage.get(id as usize) else {
             return Vec::new();
         };
@@ -299,7 +313,7 @@ fn arene_modeles(
             })
             .collect();
         tf_render::faces_de(tf_mesh::forme::Formes::cuboides(table, id), &hab)
-    })
+    }
 }
 
 /// **Le monde OUVERT : le pack, la copie de travail, et ce que le GPU dessine.**
@@ -523,16 +537,18 @@ impl Ouvert {
                 &self.assets.climat,
             ),
         );
-        // La passe de MODÈLES se refait encore en entier : ses poses portent
-        // un décalage de face CUMULATIF, donc une tranche qui change de
-        // longueur décale toutes les suivantes. C'est le prochain morceau, et
-        // il pèse 19 ms des 80 — à faire quand celui-ci sera mesuré.
-        self.monde.modeles = arene_modeles(
+        // **La passe de MODÈLES se remplace aussi.** Une fois l'arène des
+        // quads corrigée, c'est elle qui dominait : 23 à 29 ms des 35 pour
+        // trois blocs posés sur une région bâtie.
+        self.monde.modeles.remplacer(
             &self.monde.chantier,
-            &self.monde.table,
-            &self.monde.habillage,
-            &self.monde.interner,
-            &self.assets.climat,
+            &visees,
+            &modele_de(
+                &self.monde.table,
+                &self.monde.habillage,
+                &self.monde.interner,
+                &self.assets.climat,
+            ),
         );
         phase("arènes   ", t2);
         self.monde.quads = self.monde.chantier.quads();

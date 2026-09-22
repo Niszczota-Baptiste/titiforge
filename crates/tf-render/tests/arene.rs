@@ -164,3 +164,153 @@ fn sans_changement_de_lot_le_remplacement_est_exact() {
         "et le même nombre d'instances"
     );
 }
+
+// ---- La passe de MODÈLES ------------------------------------------------
+//
+// Elle a un champ de plus à tenir juste : `debut_face` est une somme PRÉFIXE
+// sur tout le flot, que le shader dichotomise. Une tranche qui change de
+// longueur décale donc toutes les suivantes — et un seul rang faux fait
+// dessiner les faces d'une pose pour une autre.
+
+const MODELE: StateId = 2;
+
+fn table_modele() -> TableFormes {
+    let mut t = table();
+    // Une dalle : elle ne remplit pas la case, donc elle reste NON opaque.
+    t.pousser(
+        false,
+        false,
+        vec![tf_mesh::forme::Cuboide {
+            min: [0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0],
+            faces: 0x3F,
+            cull: 0x3F,
+        }],
+    );
+    t
+}
+
+/// Une section remplie d'un seul état.
+fn section_de(y: i8, id: StateId) -> Section {
+    let palette: Vec<StateId> = vec![AIR, CUBE, MODELE];
+    let k = palette.iter().position(|p| *p == id).unwrap() as u16;
+    let bits = bits_for(palette.len());
+    let data = pack(&vec![k; 4096], bits.into(), Packing::NoStraddle);
+    Section {
+        y,
+        palette,
+        bits,
+        data: data.into_boxed_slice(),
+        packing: Packing::NoStraddle,
+    }
+}
+
+/// Six faces plates, distinctes par état : de quoi voir une géométrie qui
+/// change de place.
+fn faces(id: StateId, _: StateId) -> Vec<tf_render::FaceModele> {
+    (0..6)
+        .map(|f| tf_render::FaceModele {
+            min: [id as f32, 0.0, 0.0, 0.0],
+            max: [16.0, 8.0, 16.0, 0.0],
+            uv: [0.0, 0.0, 16.0, 16.0],
+            face: f,
+            couche: 0,
+            teinte: 0,
+            cullable: 0,
+        })
+        .collect()
+}
+
+/// Le SENS d'une pose : sa case, son lot, son rang de face.
+fn poses(a: &tf_render::AreneModeles) -> Vec<(u32, u32, u32)> {
+    a.poses
+        .iter()
+        .map(|p| (p.local, p.section, p.debut_face))
+        .collect()
+}
+
+/// **Une section de modèles qui apparaît décale la somme préfixe.**
+#[test]
+fn une_section_de_modeles_qui_apparait_ne_decale_pas_les_poses() {
+    let t = table_modele();
+    let mut g = Grille::new();
+    g.poser(0, 0, section_de(1, MODELE));
+    g.poser(1, 0, section_de(1, MODELE));
+    g.poser(1, 0, section_de(2, MODELE));
+    let chantier = g.mailler(&t);
+    let mut a = tf_render::AreneModeles::depuis(&chantier, &faces);
+    assert!(!a.poses.is_empty(), "la prémisse : il faut des poses");
+    let avant = chantier.lots.len();
+
+    g.poser(0, 0, section_de(0, MODELE));
+    let chantier = g.mailler(&t);
+    assert!(chantier.lots.len() > avant, "un lot doit être apparu");
+
+    a.remplacer(&chantier, &[(0, 0, 0), (0, 0, 1)], &faces);
+    let rebatie = tf_render::AreneModeles::depuis(&chantier, &faces);
+    assert_eq!(
+        poses(&a),
+        poses(&rebatie),
+        "les poses recopiées ont gardé leur ancien rang de face ou leur ancien lot"
+    );
+    assert_eq!(
+        a.faces_a_dessiner, rebatie.faces_a_dessiner,
+        "le total de faces à dessiner doit suivre"
+    );
+    assert_eq!(a.tranches.len(), rebatie.tranches.len());
+}
+
+/// **Une section de modèles qui disparaît**, dans l'autre sens.
+#[test]
+fn une_section_de_modeles_qui_disparait_ne_decale_pas_les_poses() {
+    let t = table_modele();
+    let mut g = Grille::new();
+    g.poser(0, 0, section_de(0, MODELE));
+    g.poser(0, 0, section_de(1, MODELE));
+    g.poser(1, 0, section_de(1, MODELE));
+    let chantier = g.mailler(&t);
+    let mut a = tf_render::AreneModeles::depuis(&chantier, &faces);
+    let avant = chantier.lots.len();
+
+    assert!(g.retirer((0, 0, 0)));
+    let chantier = g.mailler(&t);
+    assert!(chantier.lots.len() < avant, "un lot doit avoir disparu");
+
+    a.remplacer(&chantier, &[(0, 0, 0), (0, 0, 1)], &faces);
+    let rebatie = tf_render::AreneModeles::depuis(&chantier, &faces);
+    assert_eq!(poses(&a), poses(&rebatie));
+    assert_eq!(a.faces_a_dessiner, rebatie.faces_a_dessiner);
+}
+
+/// **Une tranche qui change de LONGUEUR décale toutes les suivantes.**
+///
+/// C'est le cas propre à la passe de modèles : `debut_face` est une somme
+/// préfixe. Sans recalcul, les poses d'après désignent les faces d'avant.
+#[test]
+fn une_tranche_plus_courte_decale_la_somme_prefixe() {
+    let t = table_modele();
+    let mut g = Grille::new();
+    g.poser(0, 0, section_de(0, MODELE));
+    g.poser(1, 0, section_de(0, MODELE));
+    g.poser(2, 0, section_de(0, MODELE));
+    let chantier = g.mailler(&t);
+    let mut a = tf_render::AreneModeles::depuis(&chantier, &faces);
+    let poses_avant = a.poses.len();
+
+    // La première colonne devient du CUBE : elle perd toutes ses poses, donc
+    // la somme préfixe de tout ce qui suit recule.
+    g.poser(0, 0, section_de(0, CUBE));
+    let chantier = g.mailler(&t);
+    let visees = Grille::sections_autour([0, 0, 0], [15, 15, 15]);
+    a.remplacer(&chantier, &visees, &faces);
+
+    assert!(a.poses.len() < poses_avant, "des poses devaient partir");
+    let rebatie = tf_render::AreneModeles::depuis(&chantier, &faces);
+    assert_eq!(
+        poses(&a),
+        poses(&rebatie),
+        "la somme préfixe n'a pas été recalculée : les poses d'après \
+         désignent les faces d'avant"
+    );
+    assert_eq!(a.faces_a_dessiner, rebatie.faces_a_dessiner);
+}

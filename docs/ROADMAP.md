@@ -381,9 +381,14 @@ gagnait **× 1,1**, parce que la relecture pesait cent fois le maillage. Une foi
 × 7 sur 64 chunks, et le chargement en profite autant. Détail et chiffres :
 `docs/ETAT.md`.
 
-Reste l'arène GPU par TRANCHES : elle se reconstruit encore en entier, 3,5 ms
-sur les 4,4 d'un remaillage. Sous le budget de 8 ms, donc pas encore le bon
-combat — mais c'est le prochain dès que les zones grandissent.
+✅ **Les deux arènes se remplacent par TRANCHES.** Le chiffre « 3,5 ms sur
+4,4, donc pas encore le bon combat » avait été pris sur du terrain, où une
+section homogène rend six quads. Repris sur du BÂTI, à 256 chunks : une
+édition de trois blocs coûtait **80 ms**, dont 52 dans l'arène des quads et
+23 à 29 dans la passe de modèles. **80 → 27 ms.** Ce qui reste est de la
+bande passante — recopier 276 k instances et 178 k poses — et descendre sous
+8 ms demande des tampons GPU par SECTION au lieu d'un tableau à plat. C'est
+la même pièce dont la résidence a besoin.
 
 **Ce que coûte une région, mesuré avant d'écrire quoi que ce soit**
 (`cargo run --release -p tf-app --example residence`, médiane de 3, écart

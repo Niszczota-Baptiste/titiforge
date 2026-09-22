@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (800 tests aujourd'hui)
+cargo test            # tous les crates (803 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1505,11 +1505,20 @@ propres à ce dépôt.
   toutes deux rebâties en entier à chaque coup de pinceau. Du O(scène) pour un
   geste en O(édition), la troisième forme du `warmup(extent)` dans la même
   séance. `Arene::remplacer` refait les tranches visées et RECOPIE les autres :
-  80 → 39 ms. Le reste est la passe de modèles, dont les poses portent un
-  décalage de face CUMULATIF — une tranche qui change de longueur décale
-  toutes les suivantes — et c'est le prochain morceau. **Corollaire : réparer
-  le poste dominant ne clôt pas le sujet, il DÉSIGNE le suivant.** Trois fois
-  de suite dans ce dépôt.
+  80 → 39 ms. Puis la passe de MODÈLES est devenue le poste dominant à son
+  tour (23 à 29 ms des 35), et elle a un champ de plus à tenir juste :
+  `debut_face` est une somme PRÉFIXE sur tout le flot, que le shader
+  dichotomise, donc une tranche qui change de longueur décale toutes les
+  suivantes. Retrouver le nombre de faces d'une pose recopiée demande la mémo
+  `(état, biome) → géométrie`, qui vit maintenant DANS l'arène plutôt que dans
+  une locale — sans elle, refaire une tranche rappellerait `modele` et ferait
+  grossir la table de faces d'une copie à chaque édition, sans fin.
+  **80 → 27 ms en tout.** Ce qui reste est de la bande passante : recopier
+  276 k instances et 178 k poses. Pour descendre sous les 8 ms il faudra des
+  tampons GPU par SECTION au lieu d'un tableau à plat — c'est la marche
+  suivante, et c'est celle dont la résidence a besoin de toute façon.
+  **Corollaire : réparer le poste dominant ne clôt pas le sujet, il DÉSIGNE le
+  suivant.** Quatre fois de suite dans ce dépôt.
 - **Découper une fonction en deux et appeler quand même l'ancienne.** Premier
   jet du remplacement d'arène : gain **zéro**, parce que le chemin incrémental
   appelait toujours `arenes()` pour en tirer la passe de modèles — donc
@@ -1525,7 +1534,12 @@ propres à ce dépôt.
   `StateId` relatif à SON interner, sous une troisième forme — et le remède est
   le même : *ce qui traverse les deux se compare par NOM*. Un test qui compare
   des octets entre deux mondes indexés différemment accuse toujours le mauvais
-  coupable.
+  coupable. Le piège s'est refermé QUATRE fois sur le même test avant qu'il
+  soit juste : `InstanceQuad::couche`, puis `FaceModele::couche`, puis
+  `Pose::debut_modele` — qui indexe une table de faces dont l'ordre de
+  remplissage diffère — et enfin le nombre de faces d'une pose, qui ne se
+  devine pas mais se DÉDUIT de la somme préfixe. Chaque fois, le test
+  rougissait sur du code juste.
 - **Une prémisse de test qui ne tient pas rend le test muet.** Deux mutations
   du remplacement d'arène survivaient — l'indice de lot non corrigé à la copie,
   les origines non refaites. J'ai écrit le test qui manquait côté application :
