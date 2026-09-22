@@ -9,6 +9,7 @@
 
 pub mod coords;
 pub mod decoupe;
+pub mod demande;
 pub mod fs_source;
 pub mod inference;
 pub mod journal;
@@ -22,6 +23,7 @@ pub use coords::{
     floor_div, floor_mod, BBox, BlockPos, ChunkPos, Height, LocalBox, RegionPos, SectionPos,
 };
 pub use decoupe::{cellules_autour, Cellule, Niveau, RAYON_MAX};
+pub use demande::{planifier, voulues, Plan, Voulue};
 pub use fs_source::{sauvegarder, FsSource};
 pub use inference::{accrocher, Accroche, Ancre, Raison, Reference, TOLERANCE};
 pub use journal::{

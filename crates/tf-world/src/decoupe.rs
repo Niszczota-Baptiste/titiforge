@@ -25,7 +25,7 @@
 use crate::coords::{floor_div, BBox, BlockPos, ChunkPos, RegionPos};
 
 /// L'unité de découpage regardée.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Niveau {
     /// 16 × 16 blocs — ce que Minecraft montre avec F3+G.
     Chunk,

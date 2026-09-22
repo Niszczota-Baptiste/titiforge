@@ -412,6 +412,22 @@ Quatre conclusions, et elles décident la forme de la phase :
    sous-sol la grille pèse 45 fois le maillage ; sur du bâti le maillage passe
    DEVANT. Les deux postes du budget se mesurent sur `Build`.
 
+✅ **La DEMANDE est faite** (`tf-world/src/demande.rs`) : ce que la caméra
+veut, dans quel ordre, et ce qu'il faut jeter. Pure, donc vérifiable sans
+monter une machine — dix tests, cinq mutations, zéro survivant après deux
+corrections. Un DISQUE de cellules et non un carré (30 % de moins à horizon
+égal, et invariant par rotation) ; l'appartenance décidée sur la GRILLE de
+cellules, l'urgence sur la position réelle — les mélanger jetait la cellule
+où l'on se tient ; devant avant le dos, continûment ; et `planifier` par
+ensembles, parce qu'en tranches il prenait 11,4 ms à rayon 40 pour décider
+quatre-vingts chargements.
+
+**Ce qui reste** : le FIL de chargement (lecture à la région, décodage et
+maillage au chunk, cf. les quatre conclusions ci-dessus), le branchement de
+`Residency` sur la `Grille` et le `Chantier` — il faut un `Weighed` pour
+chacun, et aucun n'existe —, l'éviction qui retire un maillage de l'arène, et
+l'arène GPU par tranches.
+
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.
 

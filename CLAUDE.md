@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (773 tests aujourd'hui)
+cargo test            # tous les crates (783 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -230,6 +230,8 @@ cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
 # ce qu'une RÉGION coûte à rendre résidente — le budget de la phase 5
 cargo run --release -p tf-app --example residence
+# ce que DÉCIDER coûte : le croisement demande × résidence, à l'échelle
+cargo run --release -p tf-world --example demande
 
 # Les outils acceptent les TROIS formes d'assets, reconnues au contenu :
 #   un codex extrait (un seul blockstates.json), un pack (assets/<ns>/...,
@@ -1497,6 +1499,39 @@ propres à ce dépôt.
   **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
   texture manquante est simplement vide. Les deltas des deux passes
   s'enchaînent.
+- **L'APPARTENANCE et l'URGENCE ne se mesurent pas de la même façon.** La
+  demande de la caméra découpe un disque de cellules autour de l'œil et les
+  classe par urgence. J'avais fait les deux avec la même mesure — la distance
+  de l'œil au centre de la cellule — et le premier test l'a démolie : avec un
+  rayon de 0 et un œil près d'un coin, la cellule où l'on SE TIENT est à 0,707
+  de son centre, donc jetée de sa propre demande. Et la conséquence générale
+  est pire que le cas limite : découper sur la position EXACTE fait glisser
+  l'ensemble demandé pendant qu'on marche à l'intérieur d'une cellule, donc on
+  charge et on jette en continu — exactement le va-et-vient que le disque
+  existe pour empêcher. L'appartenance se décide sur la grille de cellules
+  (elle ne change qu'en franchissant une frontière), l'urgence sur la position
+  réelle. Corollaire mesuré : un disque au lieu d'un carré, c'est 30 % de
+  cellules en moins À HORIZON ÉGAL, et surtout un ensemble invariant par
+  rotation — tourner sur place ne fait plus rien entrer ni sortir.
+- **Un tri STABLE rend un départage inopérant, donc invérifiable.** Le
+  comparateur de la demande départage les ex æquo sur `(z, x)`. La mutation qui
+  retirait cette ligne survivait : sur une trentaine d'éléments le tri retombe
+  sur une insertion, qui est stable, et les ex æquo gardaient l'ordre
+  d'émission de `cellules_autour` — lequel est justement `(z, x)`. La ligne ne
+  décidait donc rien, et l'ordre « garanti » reposait en fait sur un détail
+  d'un AUTRE module, du genre qui se casse le jour où ce module change sans que
+  rien ne le dise. Deux corrections, et il fallait les deux : tri INSTABLE pour
+  que le comparateur décide seul, et le test porté à quelques milliers de
+  cellules pour sortir du tri par insertion. Avant ça, « l'ordre est total »
+  était une opinion.
+- **Filtrer APRÈS avoir itéré rend quadratique — troisième fois.** `planifier`
+  croisait la demande et la résidence avec un `contains` sur deux tranches.
+  Mesuré : 0,04 ms à rayon 8, et **11,4 ms à rayon 40**, c'est-à-dire tout le
+  budget d'image dépassé pour décider quatre-vingts chargements — et 40 chunks
+  est une distance d'affichage ordinaire, pas un cas limite. Par ensembles :
+  0,60 ms, × 19. Les ensembles ne servent QUE à l'appartenance ; l'ordre des
+  deux listes vient des tranches d'entrée, sinon le hasard d'un `HashSet`
+  donnerait deux chargements différents de la même scène.
 - **La date d'un DOSSIER ne bouge pas quand on réécrit ce qu'il contient.**
   Une copie de travail qu'un `kill` laisse derrière ne se voit pas — elle vit
   dans le dossier temporaire — et elle pèse ce que pèsent les régions éditées :
