@@ -297,6 +297,12 @@ impl Ouvert {
                 couche: None,
             });
         };
+        // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
+        // copie de travail, et personne ne la verra jamais autrement.
+        let balayes = balayer_les_abandons();
+        if balayes > 0 {
+            eprintln!("{balayes} copie(s) de travail abandonnée(s) effacée(s)");
+        }
         let source = tf_world::FsSource::open(dir).map_err(|e| format!("monde : {e:?}"))?;
         // **La copie de travail vit à côté.** La save n'est pas ouverte en
         // écriture tant qu'on ne l'a pas demandé — invariant n° 1.
@@ -477,6 +483,106 @@ impl Drop for Ouvert {
             let _ = std::fs::remove_dir_all(c);
         }
     }
+}
+
+/// Depuis quand une copie de travail abandonnée peut être effacée.
+///
+/// Généreux exprès. Le risque de ce balayage n'est PAS de perdre une save —
+/// la source n'est jamais touchée — mais de jeter la copie de travail d'une
+/// séance encore ouverte, donc les opérations non écrites. Vingt-quatre heures
+/// veulent dire qu'il faudrait laisser l'application ouverte un jour entier
+/// SANS une seule édition pour que ça arrive — à condition de mesurer l'âge
+/// là où une édition se voit, ce que fait [`plus_recente`].
+const AGE_ABANDON: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// Combien d'entrées le balayage consent à regarder, en tout.
+///
+/// Un budget, pas une limite de profondeur : une copie de travail, c'est
+/// `level.dat` et les régions matérialisées, donc quelques dizaines
+/// d'entrées. Le budget est là pour qu'un dossier temporaire inattendu ne
+/// puisse pas retarder l'ouverture d'un monde, jamais pour tronquer un cas
+/// normal. Épuisé, on garde le dossier (voir [`plus_recente`]).
+const BUDGET_BALAYAGE: u32 = 10_000;
+
+/// **La date la plus récente de l'arborescence** — surtout pas celle du
+/// dossier racine.
+///
+/// Mesuré : réécrire `region/r.0.0.mca` ne change NI la date du dossier
+/// racine, NI celle de `region/`. Un dossier ne voit passer que les créations
+/// et les suppressions d'entrées ; une édition qui réécrit une région DÉJÀ
+/// matérialisée ne touche que le fichier. Se fier à la date de la racine
+/// reviendrait donc à effacer la copie de travail d'une séance ouverte depuis
+/// un jour et toujours en train d'éditer — c'est-à-dire ses opérations non
+/// écrites, le seul endroit du programme où elles existent.
+///
+/// Rend `None` quand rien n'est lisible ou que le budget est épuisé.
+/// L'appelant traite `None` comme « pas vieux » : dans le doute, on garde.
+fn plus_recente(dir: &std::path::Path, reste: &mut u32) -> Option<std::time::SystemTime> {
+    let entrees = std::fs::read_dir(dir).ok()?;
+    let mut max = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+    for e in entrees.flatten() {
+        if *reste == 0 {
+            return None;
+        }
+        *reste -= 1;
+        let chemin = e.path();
+        let date = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            plus_recente(&chemin, reste)?
+        } else {
+            e.metadata().and_then(|m| m.modified()).ok()?
+        };
+        if max.is_none_or(|m| date > m) {
+            max = Some(date);
+        }
+    }
+    max
+}
+
+/// **Efface les copies de travail qu'un arrêt brutal a laissées.**
+///
+/// Une copie de travail se supprime à la fermeture (`Drop`), mais un `kill`,
+/// une panne de courant ou un plantage la laissent derrière. Elles ne se
+/// voient pas — elles vivent dans le dossier temporaire — et elles pèsent ce
+/// que pèsent les régions qu'on a éditées : des mégaoctets par séance, sans
+/// fin. Mesuré après une séance de développement : dix-sept mégaoctets en
+/// dix-sept dossiers.
+///
+/// **On ne touche qu'à ce qui porte notre préfixe et qui est VIEUX.** Un
+/// processus vivant n'est pas détectable de façon portable — c'est la même
+/// limite que `session.lock` de Minecraft, qui n'est consultable que sous
+/// Windows — donc on se fie à l'âge plutôt que d'affirmer qu'un dossier est
+/// abandonné. Et « vieux » se mesure sur le fichier le plus récent de
+/// l'arborescence ([`plus_recente`]), pas sur le dossier racine, dont la date
+/// ne bouge plus une fois la copie faite.
+///
+/// Rend le nombre de dossiers effacés. Une erreur ne remonte pas : ne pas
+/// pouvoir faire le ménage n'est pas une raison de refuser d'ouvrir un monde.
+pub fn balayer_les_abandons() -> usize {
+    let base = std::env::temp_dir();
+    let Ok(entrees) = std::fs::read_dir(&base) else {
+        return 0;
+    };
+    let maintenant = std::time::SystemTime::now();
+    let mut budget = BUDGET_BALAYAGE;
+    let mut n = 0;
+    for e in entrees.flatten() {
+        let nom = e.file_name();
+        let Some(nom) = nom.to_str() else { continue };
+        if !nom.starts_with("titiforge-") {
+            continue;
+        }
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let vieux = plus_recente(&e.path(), &mut budget)
+            .and_then(|t| maintenant.duration_since(t).ok())
+            .map(|d| d > AGE_ABANDON)
+            .unwrap_or(false);
+        if vieux && std::fs::remove_dir_all(e.path()).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// **Ce que chaque phase du remaillage coûte**, quand on le demande

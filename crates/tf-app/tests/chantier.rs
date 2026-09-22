@@ -28,6 +28,37 @@ fn semer(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// **Un dossier d'essai qui s'efface QUOI QU'IL ARRIVE.**
+///
+/// Un `remove_dir_all` en fin de test ne s'exécute pas quand le test panique
+/// ou sort tôt — et un test qui échoue est justement celui qu'on relance dix
+/// fois. Mesuré après une séance : dix-sept mégaoctets de dossiers d'essai
+/// oubliés dans le temporaire. `Drop` n'a pas ce défaut.
+struct Jetable(std::path::PathBuf);
+
+impl Jetable {
+    fn neuf(etiquette: &str) -> Jetable {
+        let d = std::env::temp_dir().join(format!("tf-essai-{}-{etiquette}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        semer(&d).expect("monde jetable");
+        Jetable(d)
+    }
+
+    fn chemin(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn texte(&self) -> &str {
+        self.0.to_str().expect("chemin lisible")
+    }
+}
+
+impl Drop for Jetable {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn attendre(m: &mut Moteur) -> Reponse {
     let debut = Instant::now();
     loop {
@@ -45,9 +76,8 @@ fn ce_que_le_fil_ecrit_la_coque_le_relit() {
         eprintln!("TF_PACK absent — test sauté (il a besoin d'un vrai pack)");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-chantier-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
+    let jetable = Jetable::neuf("relit");
+    let dir = jetable.chemin().to_path_buf();
 
     let mut ouvert = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1])
         .expect("le monde doit s'ouvrir");
@@ -95,7 +125,6 @@ fn ce_que_le_fil_ecrit_la_coque_le_relit() {
 
     moteur.arreter();
     drop(ouvert);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// **Écrire dans la save : l'ordre, et la preuve qu'il est tenu.**
@@ -109,9 +138,8 @@ fn ecrire_sauvegarde_avant_d_ecrire() {
         eprintln!("TF_PACK absent — test sauté");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-ecrire-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
+    let jetable = Jetable::neuf("ecrire");
+    let dir = jetable.chemin().to_path_buf();
     let avant = std::fs::read(dir.join("region/r.0.0.mca")).unwrap();
 
     let ouvert = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1]).unwrap();
@@ -168,7 +196,6 @@ fn ecrire_sauvegarde_avant_d_ecrire() {
 
     moteur.arreter();
     drop(ouvert);
-    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(sauvegarde);
 }
 
@@ -190,9 +217,8 @@ fn croiser_les_deux_chemins(bloc: &str, sel: BBox, etiquette: &str) {
         eprintln!("TF_PACK absent — test sauté");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-increment-{}-{etiquette}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
+    let jetable = Jetable::neuf(etiquette);
+    let dir = jetable.chemin().to_path_buf();
 
     let mut vite = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1]).unwrap();
     let mut moteur = Moteur::lancer(
@@ -241,7 +267,6 @@ fn croiser_les_deux_chemins(bloc: &str, sel: BBox, etiquette: &str) {
 
     moteur.arreter();
     drop(vite);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// **Le remaillage incrémental doit donner LA MÊME image qu'un rechargement
@@ -318,9 +343,8 @@ fn mesurer_les_deux_chemins() {
         eprintln!("TF_PACK absent — mesure sautée");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-mesure-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
+    let jetable = Jetable::neuf("mesure");
+    let dir = jetable.chemin().to_path_buf();
 
     // Une zone plus large que 2 × 2 : c'est là que la différence se voit, le
     // chemin complet payant la ZONE pendant que l'incrémental paie ce qui a
@@ -374,7 +398,6 @@ fn mesurer_les_deux_chemins() {
 
     moteur.arreter();
     drop(o);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Ce que coûte la RELECTURE, découpée. Voir `mesurer_les_deux_chemins` : le
@@ -386,10 +409,8 @@ fn mesurer_la_relecture() {
         eprintln!("TF_PACK absent — mesure sautée");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-relire-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
-    let o = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1]).unwrap();
+    let jetable = Jetable::neuf("relire");
+    let o = Ouvert::ouvrir(&pack, Some(jetable.texte()), [0, 0, 1, 1]).unwrap();
     let st = o.staging.clone().unwrap();
 
     let med = |mut v: Vec<f64>| {
@@ -433,7 +454,6 @@ fn mesurer_la_relecture() {
         med(tout)
     );
     drop(o);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Ce que coûte le RECHARGEMENT complet, découpé — c'est lui qu'un état
@@ -444,15 +464,13 @@ fn mesurer_le_rechargement() {
         eprintln!("TF_PACK absent — mesure sautée");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("tf-recharge-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    semer(&dir).expect("monde jetable");
+    let jetable = Jetable::neuf("recharge");
 
     let t = std::time::Instant::now();
     let assets = tf_app::scene::Assets::charger(&pack).unwrap();
     let pack_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    let mut o = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 7, 7]).unwrap();
+    let mut o = Ouvert::ouvrir(&pack, Some(jetable.texte()), [0, 0, 7, 7]).unwrap();
     let mut v = Vec::new();
     for _ in 0..3 {
         let t = std::time::Instant::now();
@@ -466,5 +484,4 @@ fn mesurer_le_rechargement() {
     );
     drop(assets);
     drop(o);
-    let _ = std::fs::remove_dir_all(&dir);
 }

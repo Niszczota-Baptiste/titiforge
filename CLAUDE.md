@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (772 tests aujourd'hui)
+cargo test            # tous les crates (773 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1495,6 +1495,32 @@ propres à ce dépôt.
   **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
   texture manquante est simplement vide. Les deltas des deux passes
   s'enchaînent.
+- **La date d'un DOSSIER ne bouge pas quand on réécrit ce qu'il contient.**
+  Une copie de travail qu'un `kill` laisse derrière ne se voit pas — elle vit
+  dans le dossier temporaire — et elle pèse ce que pèsent les régions éditées :
+  mesuré après une séance, dix-sept mégaoctets en dix-sept dossiers. Le
+  balayage se fie donc à l'ÂGE, faute de savoir détecter un processus vivant de
+  façon portable (la limite de `session.lock`, déjà payée). Sauf que j'avais
+  écrit, dans le commentaire qui justifiait le seuil de 24 h, qu'« une édition
+  réécrit des régions dans la couche, donc rafraîchit sa date ». Mesuré, c'est
+  FAUX dans les deux sens : réécrire `region/r.0.0.mca` ne change ni la date de
+  la racine, ni celle de `region/` — un dossier ne voit passer que les
+  créations et les suppressions d'ENTRÉES. Une séance ouverte depuis plus d'un
+  jour et toujours en train d'éditer se serait donc fait effacer sa copie de
+  travail par n'importe quelle autre instance, c'est-à-dire toutes ses
+  opérations non écrites, le seul endroit du programme où elles existent.
+  L'âge se mesure sur le fichier le plus RÉCENT de l'arborescence. Corollaire
+  sur les tests : la fixture ne datait que le dossier, donc elle verrouillait
+  le critère cassé — deux mutations (la date de la racine, la date la plus
+  ancienne) passaient au vert. **Un raisonnement écrit dans un commentaire n'a
+  pas été mesuré** : celui-ci était faux le jour où je l'ai écrit.
+- **Un disque plein sort par le compilateur, pas par le programme.**
+  `LLVM ERROR: IO failure on output stream: No space left on device` en plein
+  `cargo build`. La cause n'était ni le code ni la machine : `target/debug`
+  pesait 26 Go, dont **8,4 pour le seul `incremental`**, qui est un cache pur et
+  se régénère à la demande. Un `target/` qu'on ne vide jamais finit par coûter
+  la séance ; l'effacer est gratuit, et la première chose à faire avant de
+  chercher plus loin.
 - **Des coordonnées de démonstration écrites en dur mentent poliment.** Le
   contour de sélection de la capture était cadré à y = 64..97, une hauteur de
   surface vanilla ; la fixture de BUILD vit autour de y = −10. Le contour était
