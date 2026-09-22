@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **796**, zéro échec |
+| Tests | **800**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -30,6 +30,7 @@ n'y valent rien, **les comptes si**.
 | Blocs réellement réécrits puis annulés au bit près | **606 M** |
 | Coût du suivi des block entities sur le balayage | **nul** (6,04 ms contre 6,07, médiane de 3) |
 | Appels de dessin, quelle que soit la scène | **2** |
+| Éditer 3 blocs sur 256 chunks bâtis | **80 → 39 ms** (atlas + arène) |
 | Résident par région bâtie | **186 Mo** — 2 Go n'en tiennent que **11** |
 | Charger une région bâtie | **867 ms**, soit 108 images à 8 ms |
 
@@ -41,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-796 tests, répartis par ce qu'ils PROUVENT :
+800 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -77,7 +78,8 @@ cargo test --workspace
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 17 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
-| `tf-app` rechargement | 6 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement. Tourne sans pack : le codex est écrit à la volée |
+| `tf-app` rechargement | 7 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement. Tourne sans pack : le codex est écrit à la volée |
+| `tf-render` arene | 3 | le REMPLACEMENT de tranches d'arène : qu'une section qui apparaît ou disparaît décale les lots, et que les instances recopiées suivent — sinon un pan du build se dessine ailleurs |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 

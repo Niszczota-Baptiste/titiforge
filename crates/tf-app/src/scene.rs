@@ -210,6 +210,49 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
 /// **Les deux arènes GPU, depuis un chantier.** Écrite une fois : le
 /// chargement et le remaillage incrémental y passent tous les deux, et deux
 /// copies finiraient par teinter différemment ce qui vient d'être édité.
+/// L'habillage d'une FACE : sa couche d'atlas et sa teinte finale.
+///
+/// Écrite une fois et partagée par le chemin complet et le chemin
+/// incrémental. Deux copies décideraient de la couleur de chaque face, et
+/// elles divergeraient le jour où l'une apprend une teinte que l'autre ignore
+/// — ce dépôt a payé QUATRE fois le piège des tables qui divergent.
+fn apparence<'a>(
+    habillage: &'a [tf_assets::apparence::Habillage],
+    interner: &'a Interner,
+    climat: &'a tf_assets::climat::Climat,
+) -> impl Fn(StateId, tf_mesh::forme::Face, StateId) -> (u32, [f32; 3]) + 'a {
+    move |id, face, biome| match habillage.get(id as usize) {
+        Some(h) => {
+            let a = h.cube[face.indice()];
+            (
+                a.couche,
+                teinte_de(interner, climat, a.genre, biome).unwrap_or(a.teinte),
+            )
+        }
+        None => (0, [1.0; 3]),
+    }
+}
+
+/// La teinte de biome d'un genre donné, ou rien.
+fn teinte_de(
+    interner: &Interner,
+    climat: &tf_assets::climat::Climat,
+    genre: tf_assets::GenreTeinte,
+    biome: StateId,
+) -> Option<[f32; 3]> {
+    if genre == tf_assets::GenreTeinte::Aucune {
+        return None;
+    }
+    let nom = interner.resolve(biome)?;
+    let c = match genre {
+        tf_assets::GenreTeinte::Herbe => climat.herbe(nom),
+        tf_assets::GenreTeinte::Feuillage => climat.feuillage(nom),
+        tf_assets::GenreTeinte::Eau => climat.eau(nom),
+        tf_assets::GenreTeinte::Aucune => None,
+    }?;
+    Some(tf_assets::apparence::teinte_finale(c))
+}
+
 fn arenes(
     chantier: &tf_mesh::Chantier,
     table: &TableFormes,
@@ -217,30 +260,28 @@ fn arenes(
     interner: &Interner,
     climat: &tf_assets::climat::Climat,
 ) -> (Arene, AreneModeles) {
+    let arene = Arene::depuis(chantier, &apparence(habillage, interner, climat));
+    let modeles = arene_modeles(chantier, table, habillage, interner, climat);
+    (arene, modeles)
+}
+
+/// **La passe de modèles, seule.**
+///
+/// Séparée parce que le chemin incrémental n'a plus besoin de la passe des
+/// quads : les appeler ensemble faisait rebâtir l'arène des quads pour la
+/// jeter aussitôt — mesuré, la correction ne gagnait rien du tout, et le
+/// chiffre l'a dit avant que je l'annonce.
+fn arene_modeles(
+    chantier: &tf_mesh::Chantier,
+    table: &TableFormes,
+    habillage: &[tf_assets::apparence::Habillage],
+    interner: &Interner,
+    climat: &tf_assets::climat::Climat,
+) -> AreneModeles {
     let teinte_de = |genre: tf_assets::GenreTeinte, biome: StateId| -> Option<[f32; 3]> {
-        if genre == tf_assets::GenreTeinte::Aucune {
-            return None;
-        }
-        let nom = interner.resolve(biome)?;
-        let c = match genre {
-            tf_assets::GenreTeinte::Herbe => climat.herbe(nom),
-            tf_assets::GenreTeinte::Feuillage => climat.feuillage(nom),
-            tf_assets::GenreTeinte::Eau => climat.eau(nom),
-            tf_assets::GenreTeinte::Aucune => None,
-        }?;
-        Some(tf_assets::apparence::teinte_finale(c))
+        teinte_de(interner, climat, genre, biome)
     };
-    let arene = Arene::depuis(
-        chantier,
-        &|id, face, biome| match habillage.get(id as usize) {
-            Some(h) => {
-                let a = h.cube[face.indice()];
-                (a.couche, teinte_de(a.genre, biome).unwrap_or(a.teinte))
-            }
-            None => (0, [1.0; 3]),
-        },
-    );
-    let modeles = AreneModeles::depuis(chantier, &|id, biome| {
+    AreneModeles::depuis(chantier, &|id, biome| {
         let Some(h) = habillage.get(id as usize) else {
             return Vec::new();
         };
@@ -258,8 +299,7 @@ fn arenes(
             })
             .collect();
         tf_render::faces_de(tf_mesh::forme::Formes::cuboides(table, id), &hab)
-    });
-    (arene, modeles)
+    })
 }
 
 /// **Le monde OUVERT : le pack, la copie de travail, et ce que le GPU dessine.**
@@ -470,15 +510,30 @@ impl Ouvert {
         self.monde.chantier.remplacer(&visees, neufs);
         phase("maillage ", t1);
         let t2 = std::time::Instant::now();
-        let (arene, modeles) = arenes(
+        // **L'arène des quads se REMPLACE tranche par tranche.** La rebâtir
+        // entière coûtait 52 ms sur les 80 d'une édition de trois blocs, sur
+        // une région bâtie de 256 chunks : du travail en O(scène) pour un
+        // geste en O(édition), la même famille que le rechargement d'atlas.
+        self.monde.arene.remplacer(
+            &self.monde.chantier,
+            &visees,
+            &apparence(
+                &self.monde.habillage,
+                &self.monde.interner,
+                &self.assets.climat,
+            ),
+        );
+        // La passe de MODÈLES se refait encore en entier : ses poses portent
+        // un décalage de face CUMULATIF, donc une tranche qui change de
+        // longueur décale toutes les suivantes. C'est le prochain morceau, et
+        // il pèse 19 ms des 80 — à faire quand celui-ci sera mesuré.
+        self.monde.modeles = arene_modeles(
             &self.monde.chantier,
             &self.monde.table,
             &self.monde.habillage,
             &self.monde.interner,
             &self.assets.climat,
         );
-        self.monde.arene = arene;
-        self.monde.modeles = modeles;
         phase("arènes   ", t2);
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();

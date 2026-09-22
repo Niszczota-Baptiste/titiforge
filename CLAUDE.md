@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (796 tests aujourd'hui)
+cargo test            # tous les crates (800 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1499,6 +1499,42 @@ propres à ce dépôt.
   **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
   texture manquante est simplement vide. Les deltas des deux passes
   s'enchaînent.
+- **Le même défaut avait un ÉTAGE de plus.** L'atlas réparé, j'ai remesuré : une
+  édition de trois blocs coûtait encore **80 ms** sur une région bâtie de 256
+  chunks, dont **52 dans l'arène des quads** et 19 dans la passe de modèles —
+  toutes deux rebâties en entier à chaque coup de pinceau. Du O(scène) pour un
+  geste en O(édition), la troisième forme du `warmup(extent)` dans la même
+  séance. `Arene::remplacer` refait les tranches visées et RECOPIE les autres :
+  80 → 39 ms. Le reste est la passe de modèles, dont les poses portent un
+  décalage de face CUMULATIF — une tranche qui change de longueur décale
+  toutes les suivantes — et c'est le prochain morceau. **Corollaire : réparer
+  le poste dominant ne clôt pas le sujet, il DÉSIGNE le suivant.** Trois fois
+  de suite dans ce dépôt.
+- **Découper une fonction en deux et appeler quand même l'ancienne.** Premier
+  jet du remplacement d'arène : gain **zéro**, parce que le chemin incrémental
+  appelait toujours `arenes()` pour en tirer la passe de modèles — donc
+  rebâtissait l'arène des quads pour la jeter aussitôt. Le chiffre l'a dit
+  avant que je l'annonce, et c'est tout l'intérêt de mesurer APRÈS comme
+  avant : une optimisation qui ne gagne rien se lit exactement comme une
+  optimisation qui gagne, tant qu'on n'a pas relu le chronomètre.
+- **Un numéro de couche d'atlas est un système de coordonnées.** Le croisement
+  « l'arène remplacée est-elle celle qu'un rechargement donnerait ? » a échoué
+  sur 276 328 instances sur 276 328, et uniquement sur le champ `couche`.
+  Aucun bug : un atlas ÉTENDU ajoute ses couches à la fin, un atlas REBÂTI les
+  range par nom. Les deux sont justes, chacun avec le sien. C'est le piège du
+  `StateId` relatif à SON interner, sous une troisième forme — et le remède est
+  le même : *ce qui traverse les deux se compare par NOM*. Un test qui compare
+  des octets entre deux mondes indexés différemment accuse toujours le mauvais
+  coupable.
+- **Une prémisse de test qui ne tient pas rend le test muet.** Deux mutations
+  du remplacement d'arène survivaient — l'indice de lot non corrigé à la copie,
+  les origines non refaites. J'ai écrit le test qui manquait côté application :
+  sa prémisse (« un lot doit apparaître ») était FAUSSE, parce que le monde
+  porte déjà toutes ses sections et que notre écrivain n'en supprime jamais.
+  Le cas ne peut donc pas se produire dans la coque aujourd'hui — il se
+  produira à chaque pas de caméra dès que la résidence sera pilotée — et il se
+  teste au niveau où il existe (`tf-render/tests/arene.rs`), pas au niveau où
+  on aimerait qu'il existe.
 - **Un rechargement de ZONE derrière le geste le plus banal de l'éditeur.**
   Le remaillage est incrémental, mais il gardait une porte vers le chemin
   complet : un état de bloc que l'atlas ne connaît pas. Or prendre un bloc dans

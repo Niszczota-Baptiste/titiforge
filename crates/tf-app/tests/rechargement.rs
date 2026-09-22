@@ -447,3 +447,110 @@ fn ce_qu_une_edition_doit_encore_a_la_zone() {
     );
     moteur.arreter();
 }
+
+/// **L'arène remplacée doit dire la même chose que l'arène rebâtie.**
+///
+/// C'est l'invariant porteur du dépôt appliqué au rendu : *toute stratégie
+/// rapide se compare au résultat de la stratégie lente, et le compte doit
+/// être exact — pas « du même ordre »*. Une instance recopiée qui garde
+/// l'indice de lot d'AVANT se dessine à la place d'une autre : un pan de
+/// build posé ailleurs, sans la moindre erreur à l'écran.
+///
+/// **Mais pas au bit près, et c'est le piège que ce test a trouvé.** Premier
+/// jet : je comparais les octets. Écart sur 276 328 instances sur 276 328 —
+/// et uniquement sur le champ `couche`. La cause n'était pas un bug : un
+/// atlas ÉTENDU ajoute ses couches à la fin, un atlas REBÂTI les range par
+/// nom, donc les deux numérotent différemment. Comparer des numéros de couche
+/// entre deux atlas, c'est comparer deux systèmes de coordonnées — exactement
+/// ce que `StateId` interdit entre deux interners, sous une troisième forme.
+/// Ce qui traverse les deux se compare par NOM.
+#[test]
+fn l_arene_remplacee_dit_la_meme_chose_qu_un_rebati() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &["emerald_block"]);
+    let m = Jetable::neuf("monde");
+    commun::semer_build(m.chemin(), 8);
+
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 7, 7]).expect("monde ouvert");
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(m.chemin().to_path_buf()),
+    );
+
+    // Trois éditions de suite, dont une avec un bloc NEUF : c'est
+    // l'empilement qui fait dériver un état incrémental, pas la première
+    // passe.
+    for (bloc, y) in [
+        ("minecraft:stone", -40),
+        ("minecraft:emerald_block", -39),
+        ("minecraft:stone", -38),
+    ] {
+        let sel = BBox::new(BlockPos::new(4, y, 4), BlockPos::new(6, y, 6));
+        let bornes = poser(&mut moteur, bloc, sel).expect("écrit");
+        o.remailler(Some(bornes)).expect("remaillage");
+    }
+    assert_eq!(o.rechargements, 0);
+
+    /// Ce qu'une instance VEUT DIRE : sa géométrie, sa teinte, son lot, et le
+    /// NOM de sa texture — jamais le numéro de couche, qui n'a de sens que
+    /// relativement à son atlas.
+    fn sens(o: &Ouvert) -> Vec<(u32, u32, u32, String)> {
+        o.monde
+            .arene
+            .instances
+            .iter()
+            .map(|i| {
+                let nom = o
+                    .monde
+                    .atlas
+                    .couches
+                    .get(i.couche as usize)
+                    .map(|c| c.nom.clone())
+                    .unwrap_or_else(|| format!("hors atlas : {}", i.couche));
+                (i.geo, i.teinte, i.section, nom)
+            })
+            .collect()
+    }
+
+    let vite = sens(&o);
+    let tranches = o.monde.arene.tranches.clone();
+    let origines: Vec<u8> = bytemuck::cast_slice(&o.monde.arene.origines).to_vec();
+
+    // Le témoin, sur le MÊME `Ouvert` : un second aurait sa propre copie de
+    // travail et lirait le monde d'AVANT.
+    o.remailler(None).expect("rechargement complet");
+    let lent = sens(&o);
+
+    assert_eq!(
+        vite.len(),
+        lent.len(),
+        "pas le même nombre d'instances : {} contre {}",
+        vite.len(),
+        lent.len()
+    );
+    if let Some(k) = (0..vite.len()).find(|&k| vite[k] != lent[k]) {
+        panic!(
+            "instance {k} sur {} : remplacée {:?} contre rebâtie {:?}",
+            vite.len(),
+            vite[k],
+            lent[k]
+        );
+    }
+    assert_eq!(
+        tranches.len(),
+        o.monde.arene.tranches.len(),
+        "pas le même nombre de tranches"
+    );
+    assert_eq!(
+        origines,
+        bytemuck::cast_slice::<_, u8>(&o.monde.arene.origines).to_vec(),
+        "les origines de section doivent suivre les lots"
+    );
+    println!(
+        "arène : {} instances, même sens entre remplacement et rechargement",
+        lent.len()
+    );
+    moteur.arreter();
+}

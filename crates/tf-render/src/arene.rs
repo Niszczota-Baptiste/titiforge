@@ -9,6 +9,8 @@
 //! sans toucher aux autres, et de ne dessiner que les tranches visibles avec un
 //! seul `multi_draw_indirect`.
 
+use std::collections::{HashMap, HashSet};
+
 use bytemuck::{Pod, Zeroable};
 use tf_mesh::{Adresse, Chantier};
 
@@ -159,6 +161,82 @@ impl Arene {
             });
         }
         a
+    }
+
+    /// **Refait les tranches VISÉES, recopie les autres.**
+    ///
+    /// Sans ça, éditer trois blocs coûtait la ZONE : mesuré sur une région
+    /// bâtie de 256 chunks, 1,06 million de quads reconstruits à chaque coup
+    /// de pinceau — **52 ms** sur les 80 d'une édition, pour huit sections
+    /// changées. C'est la même famille que le rechargement d'atlas et que le
+    /// `warmup(extent)` d'`ExeWorldEdit` : du travail en O(scène) sur un
+    /// geste en O(édition).
+    ///
+    /// **Le champ `section` d'une instance est l'indice de son LOT**, qui sert
+    /// à retrouver son origine. Une section qui apparaît ou disparaît décale
+    /// donc tous les lots qui suivent, et une instance recopiée telle quelle
+    /// se dessinerait à la place d'une autre — un pan de build posé ailleurs,
+    /// sans la moindre erreur. On le corrige à la copie, et seulement quand
+    /// l'indice a bougé : le cas courant (une édition qui ne crée ni ne
+    /// détruit de section) ne paie rien.
+    pub fn remplacer(
+        &mut self,
+        chantier: &Chantier,
+        visees: &[Adresse],
+        apparence: &dyn Fn(
+            tf_anvil::StateId,
+            tf_mesh::forme::Face,
+            tf_anvil::StateId,
+        ) -> (u32, [f32; 3]),
+    ) {
+        // Par ENSEMBLE : un `contains` sur deux tranches rend quadratique, et
+        // ce dépôt l'a déjà payé trois fois.
+        let a_refaire: HashSet<Adresse> = visees.iter().copied().collect();
+        // L'ancienne disposition, pour savoir d'où recopier.
+        let ancien: HashMap<Adresse, (u32, u32, u32)> = self
+            .tranches
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.adresse, (t.debut, t.nombre, i as u32)))
+            .collect();
+
+        let mut instances = Vec::with_capacity(self.instances.len());
+        let mut tranches = Vec::with_capacity(chantier.lots.len());
+        for (section, lot) in chantier.lots.iter().enumerate() {
+            let debut = instances.len() as u32;
+            match ancien.get(&lot.adresse) {
+                // Inchangée : on recopie ses octets. Aucun appel à
+                // `apparence`, qui est tout le coût.
+                Some(&(d, n, i)) if !a_refaire.contains(&lot.adresse) => {
+                    let tranche = &self.instances[d as usize..(d + n) as usize];
+                    instances.extend_from_slice(tranche);
+                    if i != section as u32 {
+                        for inst in &mut instances[debut as usize..] {
+                            inst.section = section as u32;
+                        }
+                    }
+                }
+                _ => {
+                    for q in &lot.quads.quads {
+                        let (couche, teinte) = apparence(q.id, q.face, q.biome);
+                        instances.push(InstanceQuad {
+                            geo: empaqueter(q.min, q.taille, q.face as u32),
+                            couche,
+                            teinte: en_rgba8(teinte),
+                            section: section as u32,
+                        });
+                    }
+                }
+            }
+            tranches.push(Tranche {
+                adresse: lot.adresse,
+                debut,
+                nombre: instances.len() as u32 - debut,
+            });
+        }
+        self.instances = instances;
+        self.tranches = tranches;
+        self.origines = crate::modeles::origines(chantier);
     }
 
     pub fn len(&self) -> usize {
