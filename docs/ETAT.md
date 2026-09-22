@@ -30,6 +30,8 @@ n'y valent rien, **les comptes si**.
 | Blocs réellement réécrits puis annulés au bit près | **606 M** |
 | Coût du suivi des block entities sur le balayage | **nul** (6,04 ms contre 6,07, médiane de 3) |
 | Appels de dessin, quelle que soit la scène | **2** |
+| Résident par région bâtie | **186 Mo** — 2 Go n'en tiennent que **11** |
+| Charger une région bâtie | **867 ms**, soit 108 images à 8 ms |
 
 ---
 
@@ -518,6 +520,64 @@ de placement qu'on n'a mesurée que sur du vanilla la rendrait fausse sans qu'on
 sache dans quel sens. Le dimensionnement ABSOLU vient des vrais mondes ; le
 bench reste un instrument de COMPARAISON, où un pessimisme uniforme ne trompe
 sur rien. Détail : `fixtures.md`.
+
+---
+
+## 6 bis. Ce qu'une région coûte à rendre résidente
+
+```bash
+cargo run --release -p tf-app --example residence
+cargo run --release -p tf-app --example residence -- 16   # côté en chunks
+```
+
+La phase 5 promet « 800 régions, vol continu, RAM bornée, aucune pause > 8 ms ».
+Ce chiffre se budgète, il ne s'espère pas — et ce dépôt a payé trois fois le
+piège n° 1. Mesuré sur une région pleine (1 024 chunks, 24 576 sections),
+médiane de 3, écart entre passes **< 2 %** :
+
+| | disque | lire | décoder | mailler | **TOTAL** |
+|---|---:|---:|---:|---:|---:|
+| `Terrain` (sous-sol) | 8,4 Mo | 4,2 ms | 114 ms | 102 ms | **220 ms** |
+| `Build` (bâtiment) | 24,1 Mo | 13 ms | 449 ms | 406 ms | **867 ms** |
+
+Maillage parallèle contre séquentiel : **× 3,9** et **× 3,7** (4 cœurs). Les
+deux chemins rendent le même nombre de quads — l'exemple l'affirme en
+assertion, pas en commentaire.
+
+**Ce qui reste résident**, puisque la fenêtre est plafonnée en OCTETS :
+
+| | grille | maillage | **TOTAL** | par chunk | 2 Go tiennent |
+|---|---:|---:|---:|---:|---:|
+| `Terrain` | 27,2 Mo | 0,6 Mo | **27,9 Mo** | 27 ko | 72 régions |
+| `Build` | 85,3 Mo | 100,7 Mo | **186,0 Mo** | 182 ko | **11 régions** |
+
+Quatre conclusions, et elles décident la phase 5 :
+
+1. **La contrainte qui mord est la MÉMOIRE, pas le temps.** Deux gigaoctets ne
+   tiennent que **onze régions bâties** sur les 800 annoncées. L'éviction
+   n'est donc pas une optimisation à ajouter plus tard, c'est le sujet.
+2. **Les deux fixtures diffèrent d'un facteur 6,7 en résidence**, et elles
+   n'ont pas le même poste dominant : sur du sous-sol la grille pèse 45 fois le
+   maillage, sur du bâti le maillage passe DEVANT la grille (100,7 contre
+   85,3). Dimensionner une fenêtre de résidence sur `Terrain` la ferait
+   déborder d'un ordre de grandeur sur un vrai build. `docs/fixtures.md` le
+   disait déjà pour le rendu ; ça vaut aussi pour la mémoire.
+3. **Aucune région ne se charge en une image.** 867 ms font **108 images à
+   8 ms**, soit 1,8 s à 60 im/s. Un vol qui traverse une région plus vite que
+   ça distance le chargeur : il doit donc vivre dans un FIL, et le fil
+   principal ne faire que poser ce qui est prêt.
+4. **On lit à la RÉGION, on décode au chunk.** Un chunk demandé seul coûte
+   4,74 ms contre 0,47 ms amorti — **× 10**, parce que le `.mca` est relu à
+   chaque appel. Streamer au chunk gaspillerait **4,4 s par région** en
+   relectures. C'est la mesure qui choisit l'unité de lecture, et elle dit
+   l'inverse de l'unité d'affichage.
+
+**Ce que ce relevé ne dit pas** : la part de `Build` dépend de
+`densite_decor`, qui est un RÉGLAGE et non une mesure (55 % le long des murs).
+Et les blocs-modèles de la fixture portent 3,58 cuboïdes là où deux mondes
+réels en donnent 1,54 et 1,75 : la résidence d'un vrai build sera donc plus
+basse que 186 Mo, sans qu'on sache de combien. Le chiffre qui engage est
+l'ORDRE de grandeur et le rapport entre les deux postes, pas la décimale.
 
 ---
 

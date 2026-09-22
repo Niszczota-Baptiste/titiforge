@@ -228,6 +228,8 @@ cargo run --release -p tf-ops --example compression        # ce que coûte chaqu
 cargo run --release -p tf-ops --example empreinte
 cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
+# ce qu'une RÉGION coûte à rendre résidente — le budget de la phase 5
+cargo run --release -p tf-app --example residence
 
 # Les outils acceptent les TROIS formes d'assets, reconnues au contenu :
 #   un codex extrait (un seul blockstates.json), un pack (assets/<ns>/...,

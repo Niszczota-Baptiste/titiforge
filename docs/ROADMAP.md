@@ -221,7 +221,7 @@ mesurée.
 > reposer à sa propre place doit rendre **zéro chunk modifié** — vérifié sur le
 > monde d'essai comme en test.
 
-## Phase 4 — La coque, et le geste SketchUp · **en cours**
+## Phase 4 — La coque, et le geste SketchUp · ✅ **faite**
 
 C'est ce qui transforme un moteur mesuré en outil.
 
@@ -248,10 +248,14 @@ Le normaliseur est SUR le chemin de toute construction — il n'existe pas de
 façon de fabriquer un travail sans passer par sa description — ce qui exige
 qu'il soit idempotent, et un test l'exige pour chaque opération.
 
-**Ce qui manque, et l'interface le DIT à l'écran :** « Appliquer » ne fait rien.
-Le moteur doit tourner dans un FIL à part, sinon une opération de trois
-secondes fige la fenêtre — et c'est une règle d'architecture qui ne se
-retrofite pas.
+**Le FIL MOTEUR est là**, et c'était une règle d'architecture qui ne se
+retrofite pas : une opération de trois secondes ne doit pas figer la fenêtre.
+`moteur.rs` prend des commandes et rend des réponses par `mpsc`, la coque ne
+fait que des `try_recv` — un test le vérifie dans un fil TÉMOIN à attente
+bornée, parce qu'une propriété qui se dit « ça ne doit pas attendre » a pour
+seul symptôme, quand elle casse, l'absence de symptôme. « Appliquer »,
+« Annuler », « Refaire » et l'écriture dans la save passent tous par là, sur la
+copie de travail, et la coque RELIT le staging — jamais la source.
 
 **La coque sait se dessiner dans une TEXTURE** (`--capture ecran.png`),
 interface comprise. Ce n'est pas un mode dégradé : c'est ce qui permet de la
@@ -380,6 +384,33 @@ gagnait **× 1,1**, parce que la relecture pesait cent fois le maillage. Une foi
 Reste l'arène GPU par TRANCHES : elle se reconstruit encore en entier, 3,5 ms
 sur les 4,4 d'un remaillage. Sous le budget de 8 ms, donc pas encore le bon
 combat — mais c'est le prochain dès que les zones grandissent.
+
+**Ce que coûte une région, mesuré avant d'écrire quoi que ce soit**
+(`cargo run --release -p tf-app --example residence`, médiane de 3, écart
+entre passes < 2 %, détail dans `docs/ETAT.md`) :
+
+| | lire | décoder | mailler | TOTAL | résident |
+|---|---:|---:|---:|---:|---:|
+| `Terrain` | 4,2 ms | 114 ms | 102 ms | **220 ms** | 27,9 Mo |
+| `Build` | 13 ms | 449 ms | 406 ms | **867 ms** | **186 Mo** |
+
+Quatre conclusions, et elles décident la forme de la phase :
+
+1. **La contrainte qui mord est la MÉMOIRE.** Deux gigaoctets ne tiennent que
+   ONZE régions bâties sur les 800 annoncées. L'éviction n'est pas une
+   finition, c'est le sujet — et c'est pour ça que `Residency` est plafonnée
+   en octets depuis le premier jour.
+2. **Aucune région ne se charge en une image** : 867 ms font 108 images à
+   8 ms. Le chargeur vit donc dans un FIL, et le fil principal ne fait que
+   poser ce qui est prêt. Même règle d'architecture que le fil moteur, et elle
+   ne se retrofite pas davantage.
+3. **On lit à la RÉGION, on décode au chunk.** Un chunk demandé seul coûte
+   × 10 d'un chunk amorti, parce que le `.mca` est relu à chaque appel :
+   4,4 s gaspillées par région. L'unité de LECTURE n'est pas l'unité
+   d'affichage, et c'est la mesure qui le dit.
+4. **Dimensionner sur `Terrain` déborderait d'un ordre de grandeur.** Sur du
+   sous-sol la grille pèse 45 fois le maillage ; sur du bâti le maillage passe
+   DEVANT. Les deux postes du budget se mesurent sur `Build`.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.
