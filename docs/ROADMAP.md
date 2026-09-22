@@ -420,10 +420,12 @@ corrections. Un DISQUE de cellules et non un carré (30 % de moins à horizon
 cellules, l'urgence sur la position réelle — les mélanger jetait la cellule
 où l'on se tient ; devant avant le dos, continûment ; et `planifier` par
 ensembles, parce qu'en tranches il prenait 11,4 ms à rayon 40 pour décider
-quatre-vingts chargements.
+quatre-vingts chargements. Et `par_region` groupe la demande en LECTURES —
+une région lue une fois — parce qu'un chunk demandé seul coûte × 10 d'un
+chunk amorti.
 
-**Ce qui reste** : le FIL de chargement (lecture à la région, décodage et
-maillage au chunk, cf. les quatre conclusions ci-dessus), le branchement de
+**Ce qui reste** : le FIL de chargement (il a sa liste de travail ; il lui
+manque d'exister), le branchement de
 `Residency` sur la `Grille` et le `Chantier` — il faut un `Weighed` pour
 chacun, et aucun n'existe —, l'éviction qui retire un maillage de l'arène, et
 l'arène GPU par tranches.

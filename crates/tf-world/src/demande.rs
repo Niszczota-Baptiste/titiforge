@@ -27,9 +27,9 @@
 //! lieu de la rotation. L'ordre, lui, suit la position réelle : c'est une
 //! question d'urgence, pas d'appartenance.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::coords::BlockPos;
+use crate::coords::{BlockPos, RegionPos};
 use crate::decoupe::{cellules_autour, Cellule, Niveau, RAYON_MAX};
 
 /// Ce que coûte d'être DERRIÈRE, en multiple de la distance.
@@ -236,4 +236,92 @@ pub fn planifier(voulues: Vec<Voulue>, residentes: &[Cellule]) -> Plan {
         .cloned()
         .collect();
     Plan { charger, jetables }
+}
+
+/// Un lot de travail : **une région lue une fois**, et les cellules qu'elle
+/// porte, par ordre d'urgence.
+///
+/// C'est la forme que le chargeur veut. Mesuré (`tf-app --example residence`) :
+/// un chunk demandé seul coûte 4,74 ms contre 0,47 ms amorti sur sa région —
+/// **× 10**, parce que le `.mca` est relu à chaque appel. Servir 1 024 chunks
+/// un par un gaspillerait 4,4 secondes par région en relectures pures.
+/// L'unité de LECTURE n'est pas l'unité d'affichage, et c'est la mesure qui
+/// le dit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lot {
+    pub region: RegionPos,
+    /// Les cellules à tirer de cette région, la plus urgente d'abord.
+    pub cellules: Vec<Voulue>,
+}
+
+impl Lot {
+    /// L'urgence du lot : celle de sa cellule la plus pressée.
+    ///
+    /// Le MINIMUM et non la moyenne : une région qui porte la cellule sous nos
+    /// pieds doit passer devant une région dont tout le contenu est à
+    /// mi-distance, même si sa moyenne est moins bonne. Ce qu'on veut, c'est
+    /// que la prochaine lecture serve ce dont on a besoin MAINTENANT.
+    ///
+    /// Lire la PREMIÈRE cellule suffit parce que [`par_region`] trie celles de
+    /// chaque lot. C'était faux tant qu'il ne le faisait pas : sur une demande
+    /// donnée en désordre, `first` rendait une cellule quelconque, les lots
+    /// étaient triés sur une clé fausse, et l'ordre de chargement partait de
+    /// travers sans que rien ne le signale.
+    pub fn urgence(&self) -> f32 {
+        self.cellules
+            .first()
+            .map(|v| v.score)
+            .unwrap_or(f32::INFINITY)
+    }
+}
+
+/// **Groupe une demande en lectures de région**, les plus urgentes d'abord.
+///
+/// **La fonction est TOTALE** : quelle que soit l'entrée, les cellules de
+/// chaque lot ressortent par urgence croissante et les lots suivent leur
+/// cellule la plus pressée. Sur le résultat de [`voulues`], déjà trié, les
+/// deux tris ne coûtent presque rien — un tri détecte les suites ordonnées.
+/// Un lot ne réordonne donc jamais ce que la caméra a classé : il regroupe.
+///
+/// Au niveau `Region`, une cellule EST une région : chaque lot en porte
+/// exactement une, et la fonction ne coûte que le groupement.
+pub fn par_region(voulues: &[Voulue]) -> Vec<Lot> {
+    // `IndexMap` n'est pas une dépendance : on garde l'ordre d'apparition à la
+    // main. C'est ce qui rend la sortie déterministe sans dépendre de l'ordre
+    // d'une table de hachage — deux chargements différents de la même scène
+    // seraient invisibles et impossibles à tester.
+    let mut rangs: HashMap<(i32, i32), usize> = HashMap::new();
+    let mut lots: Vec<Lot> = Vec::new();
+    for v in voulues {
+        let r = v.cellule.region;
+        match rangs.get(&(r.x, r.z)) {
+            Some(&i) => lots[i].cellules.push(v.clone()),
+            None => {
+                rangs.insert((r.x, r.z), lots.len());
+                lots.push(Lot {
+                    region: r,
+                    cellules: vec![v.clone()],
+                });
+            }
+        }
+    }
+    // **On trie, et il faut les DEUX tris.** `voulues` rend déjà une liste
+    // triée, donc sur son propre résultat ces lignes ne décident rien — et la
+    // mutation qui retirait le tri des lots survivait, faute d'un test qui
+    // donne autre chose. Mais `par_region` est publique et prend une tranche
+    // quelconque : un appelant qui filtre, concatène ou construit sa demande
+    // lui-même obtenait des lots dans un ordre qui dépendait de l'ordre
+    // d'entrée. Le test écrit pour le prouver a d'ailleurs échoué sur le code
+    // INTACT : sans le tri interne, `Lot::urgence` lisait une cellule
+    // quelconque, donc les lots se triaient sur une clé fausse.
+    //
+    // Trier une tranche déjà triée est bon marché — le tri détecte les suites
+    // ordonnées — donc le cas normal ne paie presque rien.
+    for l in &mut lots {
+        l.cellules.sort_by(|a, b| a.score.total_cmp(&b.score));
+    }
+    // Stable exprès : à urgence égale, l'ordre d'apparition départage, et il
+    // vient de l'entrée — pas d'une table de hachage.
+    lots.sort_by(|a, b| a.urgence().total_cmp(&b.urgence()));
+    lots
 }

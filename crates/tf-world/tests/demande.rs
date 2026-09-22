@@ -6,7 +6,7 @@
 //! n'ira jamais au bout de la liste. L'ORDRE est la fonctionnalité.
 
 use tf_world::coords::BlockPos;
-use tf_world::demande::{planifier, voulues, Voulue};
+use tf_world::demande::{par_region, planifier, voulues, Voulue};
 use tf_world::{Cellule, Niveau, RAYON_MAX};
 
 /// Regard vers l'est (+X), le repère Minecraft du dépôt.
@@ -298,4 +298,162 @@ fn le_plan_dit_quoi_charger_et_quoi_jeter() {
     let vide = planifier(v.clone(), &[]);
     assert_eq!(vide.charger.len(), v.len());
     assert!(vide.jetables.is_empty());
+}
+
+/// **Une région n'est lue qu'UNE fois.** C'est la conclusion mesurée qui
+/// décide l'unité de lecture : un chunk demandé seul coûte 4,74 ms contre
+/// 0,47 ms amorti sur sa région, et servir 1 024 chunks un par un
+/// gaspillerait 4,4 s par région en relectures pures.
+#[test]
+fn chaque_region_ne_figure_qu_une_fois() {
+    let v = au_chunk(BlockPos::new(8, 64, 8), EST, 40);
+    let lots = par_region(&v);
+    let mut vues: Vec<(i32, i32)> = lots.iter().map(|l| (l.region.x, l.region.z)).collect();
+    let avant = vues.len();
+    vues.sort();
+    vues.dedup();
+    assert_eq!(avant, vues.len(), "une région apparaît deux fois");
+    assert!(lots.len() > 1, "un rayon de 40 chunks déborde de sa région");
+}
+
+/// Rien ne se perd et rien ne se duplique : le groupement est une PARTITION
+/// de la demande. Une cellule oubliée serait un trou dans le monde que rien
+/// ne signalerait.
+#[test]
+fn le_groupement_partitionne_la_demande() {
+    let v = au_chunk(BlockPos::new(300, 64, -700), [0.3, 0.1, -0.9], 24);
+    let lots = par_region(&v);
+    let total: usize = lots.iter().map(|l| l.cellules.len()).sum();
+    assert_eq!(total, v.len(), "le compte doit être conservé");
+    let mut dedans: Vec<(i32, i32)> = lots
+        .iter()
+        .flat_map(|l| l.cellules.iter().map(|w| (w.cellule.x, w.cellule.z)))
+        .collect();
+    let mut attendu: Vec<(i32, i32)> = v.iter().map(|w| (w.cellule.x, w.cellule.z)).collect();
+    dedans.sort();
+    attendu.sort();
+    assert_eq!(dedans, attendu, "les mêmes cellules, ni plus ni moins");
+    // Et chaque cellule est bien dans SA région — sans quoi le lot lirait le
+    // mauvais fichier, ce qu'aucune image ne montrerait comme une erreur.
+    for l in &lots {
+        for w in &l.cellules {
+            assert_eq!(
+                w.cellule.region, l.region,
+                "cellule rangée dans la mauvaise région"
+            );
+        }
+    }
+}
+
+/// **Le groupement ne réordonne jamais ce que la caméra a classé.** Les lots
+/// suivent leur cellule la plus pressée, et à l'intérieur d'un lot l'ordre
+/// d'urgence survit.
+#[test]
+fn les_lots_suivent_l_urgence() {
+    let v = au_chunk(BlockPos::new(8, 64, 8), EST, 40);
+    let lots = par_region(&v);
+    for p in lots.windows(2) {
+        assert!(
+            p[0].urgence() <= p[1].urgence(),
+            "les lots doivent être triés par urgence"
+        );
+    }
+    for l in &lots {
+        for p in l.cellules.windows(2) {
+            assert!(
+                p[0].score <= p[1].score,
+                "l'ordre d'urgence survit dans le lot"
+            );
+        }
+    }
+    // La cellule la plus urgente du monde est la première du premier lot :
+    // c'est celle sous nos pieds, et elle ne doit pas attendre qu'une autre
+    // région soit lue.
+    assert_eq!(
+        (lots[0].cellules[0].cellule.x, lots[0].cellules[0].cellule.z),
+        (v[0].cellule.x, v[0].cellule.z)
+    );
+}
+
+/// L'urgence d'un lot est celle de sa cellule la plus pressée — le MINIMUM,
+/// pas la moyenne. Une région qui porte la cellule sous nos pieds passe devant
+/// une région dont tout le contenu est à mi-distance.
+#[test]
+fn l_urgence_d_un_lot_est_celle_de_sa_meilleure_cellule() {
+    let v = au_chunk(BlockPos::new(8, 64, 8), EST, 40);
+    let lots = par_region(&v);
+    for l in &lots {
+        let mini = l
+            .cellules
+            .iter()
+            .map(|w| w.score)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (l.urgence() - mini).abs() < 1e-6,
+            "l'urgence du lot doit être le minimum de ses cellules"
+        );
+    }
+}
+
+/// Au niveau RÉGION, une cellule EST une région : chaque lot en porte
+/// exactement une, et le groupement ne coûte rien.
+#[test]
+fn au_niveau_region_un_lot_porte_une_cellule() {
+    let v = voulues(BlockPos::new(8, 64, 8), EST, 4, Niveau::Region, HAUTEUR);
+    let lots = par_region(&v);
+    assert_eq!(lots.len(), v.len());
+    for l in &lots {
+        assert_eq!(l.cellules.len(), 1);
+    }
+}
+
+/// Déterministe : l'ordre vient de l'entrée, jamais d'une table de hachage.
+/// Deux chargements différents de la même scène seraient invisibles et
+/// impossibles à tester.
+#[test]
+fn le_groupement_est_deterministe() {
+    let v = au_chunk(BlockPos::new(-1300, 64, 900), [0.6, 0.0, 0.8], 20);
+    assert_eq!(par_region(&v), par_region(&v));
+    assert!(
+        par_region(&[]).is_empty(),
+        "une demande vide ne fait aucun lot"
+    );
+}
+
+/// **Le groupement remet en ordre une demande qu'on lui donne en désordre.**
+///
+/// `voulues` rend déjà une liste triée, donc sur son propre résultat le tri
+/// des lots ne décide rien — la mutation qui le retirait survivait, faute
+/// d'un test qui lui donne autre chose. Or `par_region` est publique et prend
+/// une tranche quelconque : un appelant qui filtre, concatène ou construit sa
+/// demande lui-même aurait obtenu des lots dans un ordre dépendant de
+/// l'ordre d'entrée, sans que rien ne le dise. C'est le même piège que le
+/// départage rendu inopérant par un tri stable, dans l'autre sens : là une
+/// ligne ne décidait rien, ici elle décide — encore faut-il l'éprouver.
+#[test]
+fn une_demande_en_desordre_ressort_groupee_dans_le_bon_ordre() {
+    let v = au_chunk(BlockPos::new(8, 64, 8), EST, 40);
+    let attendu: Vec<(i32, i32)> = par_region(&v)
+        .iter()
+        .map(|l| (l.region.x, l.region.z))
+        .collect();
+    assert!(
+        attendu.len() > 1,
+        "il faut plusieurs régions pour que l'ordre ait un sens"
+    );
+
+    // Renversée : l'ordre d'apparition des régions devient le pire possible.
+    let mut envers = v.clone();
+    envers.reverse();
+    let obtenu: Vec<(i32, i32)> = par_region(&envers)
+        .iter()
+        .map(|l| (l.region.x, l.region.z))
+        .collect();
+    assert_eq!(
+        obtenu, attendu,
+        "l'ordre des lots doit venir de l'URGENCE, pas de l'ordre d'entrée"
+    );
+    for p in par_region(&envers).windows(2) {
+        assert!(p[0].urgence() <= p[1].urgence());
+    }
 }

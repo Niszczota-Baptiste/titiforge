@@ -23,7 +23,7 @@ pub use coords::{
     floor_div, floor_mod, BBox, BlockPos, ChunkPos, Height, LocalBox, RegionPos, SectionPos,
 };
 pub use decoupe::{cellules_autour, Cellule, Niveau, RAYON_MAX};
-pub use demande::{planifier, voulues, Plan, Voulue};
+pub use demande::{par_region, planifier, voulues, Plan, Voulue};
 pub use fs_source::{sauvegarder, FsSource};
 pub use inference::{accrocher, Accroche, Ancre, Raison, Reference, TOLERANCE};
 pub use journal::{

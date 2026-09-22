@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (783 tests aujourd'hui)
+cargo test            # tous les crates (790 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1499,6 +1499,19 @@ propres à ce dépôt.
   **pas un seul caractère**. Aucune erreur, aucune validation en défaut : la
   texture manquante est simplement vide. Les deltas des deux passes
   s'enchaînent.
+- **Une fonction publique ne doit pas dépendre en silence de l'ordre de son
+  entrée.** `par_region` groupe une demande en lectures de région ; son tri des
+  lots ne décidait rien, parce que `voulues` rend déjà une liste triée et
+  qu'aucun test ne lui donnait autre chose. La mutation qui le retirait
+  survivait donc. En écrivant le test qui manquait — une demande à l'envers —
+  il a échoué sur le code INTACT : `Lot::urgence` lisait la PREMIÈRE cellule du
+  lot, ce qui n'est la plus urgente que si l'entrée était triée, donc les lots
+  se triaient sur une clé fausse. Deux leçons, et la seconde vaut la première :
+  une mutation qui survit dit parfois qu'il manque un test, et ce test-là
+  trouve alors un vrai bug ailleurs. La fonction est maintenant TOTALE — les
+  cellules d'un lot sont triées, donc `first` est exact par construction — et
+  trier une tranche déjà triée ne coûte presque rien, le tri détectant les
+  suites ordonnées.
 - **L'APPARTENANCE et l'URGENCE ne se mesurent pas de la même façon.** La
   demande de la caméra découpe un disque de cellules autour de l'œil et les
   classe par urgence. J'avais fait les deux avec la même mesure — la distance
