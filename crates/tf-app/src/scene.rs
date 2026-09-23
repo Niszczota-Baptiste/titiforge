@@ -13,6 +13,81 @@ use tf_world::decoupe::{cellules_autour, Niveau};
 
 use crate::etat::Quadrillage;
 
+/// **Le budget de résidence par défaut**, en octets.
+///
+/// Mesuré, pas choisi au jugé (`cargo run --release -p tf-app --example
+/// residence`) : une région BÂTIE de 1 024 chunks laisse 186 Mo résidents —
+/// 85 Mo de grille et 101 de maillage — quand une région de TERRAIN n'en
+/// laisse que 28. Le rapport entre les deux est de 6,7, et celui de leurs
+/// maillages de 168 : c'est pourquoi le plafond se compte en octets et pas en
+/// cellules, et pourquoi il se mesure sur du bâti.
+///
+/// 1,5 Go font donc huit régions bâties, ou cinquante-quatre de terrain. Le
+/// reste de l'enveloppe d'un processus 64 bits va aux textures, au pack, aux
+/// tampons du GPU et à la copie de travail.
+///
+/// **C'est une cible, pas une limite dure** : rien de modifié ni d'épinglé
+/// n'est jamais évincé pour la tenir. Et c'est un défaut, réglable par
+/// `budget_residence` — une machine à 8 Go et une à 64 ne veulent pas le
+/// même.
+pub const BUDGET_RESIDENCE: usize = 1_500_000_000;
+
+/// Ce qu'une cellule résidente coûte, et de quoi la retirer.
+///
+/// La fenêtre de résidence est ici un COMPTABLE, pas un magasin : les blocs
+/// restent dans la grille et le maillage dans le chantier. Elle ne tient que
+/// le poids et la récence, et dit quoi évincer. Y ranger les sections
+/// elles-mêmes obligerait à les en ressortir à chaque lecture de bloc, c'est-
+/// à-dire des millions de fois par opération.
+struct Resident {
+    cellule: tf_world::Cellule,
+    octets: usize,
+}
+
+impl tf_world::Weighed for Resident {
+    /// Le poids de la CELLULE, pas celui de la fiche.
+    ///
+    /// La `Cellule` gardée ici pèse une quarantaine d'octets qu'on ne compte
+    /// pas exprès : les additionner ferait diverger `Residency::used` de ce
+    /// que la scène porte vraiment, et c'est justement cette égalité qui rend
+    /// la comptabilité vérifiable au lieu d'être une fiction.
+    fn bytes(&self) -> usize {
+        self.octets
+    }
+}
+
+/// La clé d'une cellule résidente.
+///
+/// Le NIVEAU en fait partie : la cellule de chunk (3, 4) et la cellule de
+/// région (3, 4) ne désignent pas la même chose, et une clé qui les
+/// confondrait ferait évincer 512 × 512 blocs en croyant en lâcher 16 × 16.
+type Cle = (Niveau, i32, i32);
+
+/// **Les adresses de section qu'une cellule couvre**, déduites de sa
+/// géométrie.
+///
+/// Pas d'un balayage de la grille : `Grille::adresses` alloue et trie la
+/// scène entière, donc l'appeler une fois par cellule coûte O(scène ×
+/// cellules) là où la cellule sait elle-même ce qu'elle couvre. Et le
+/// balayage filtrait sur `a.0 == cellule.x`, ce qui n'est vrai qu'au niveau
+/// CHUNK — une cellule de RÉGION en couvre 32 × 32, donc on n'en retirait
+/// qu'un millième.
+fn adresses_de(c: &tf_world::Cellule) -> Vec<tf_mesh::Adresse> {
+    let b = &c.boite;
+    let (cx0, cx1) = (b.min.x.div_euclid(16), b.max.x.div_euclid(16));
+    let (cz0, cz1) = (b.min.z.div_euclid(16), b.max.z.div_euclid(16));
+    let (sy0, sy1) = (b.min.y.div_euclid(16), b.max.y.div_euclid(16));
+    let mut v = Vec::new();
+    for cz in cz0..=cz1 {
+        for cx in cx0..=cx1 {
+            for sy in sy0..=sy1 {
+                v.push((cx, cz, sy as i8));
+            }
+        }
+    }
+    v
+}
+
 /// Tout ce qu'une scène chargée porte.
 pub struct Monde {
     pub grille: Grille,
@@ -376,6 +451,34 @@ pub struct Ouvert {
     /// poignée que l'édition a touchée, ou la grille entière quand on
     /// recharge.
     pub sections_remaillees: usize,
+    /// **La fenêtre de résidence** : ce que la scène s'autorise à tenir.
+    ///
+    /// Sans elle, un vol continu ne rend jamais rien — mesuré, une région
+    /// bâtie laisse 186 Mo, donc onze tiennent dans 2 Go et la douzième tue
+    /// l'application. C'est la moitié du contrat de la phase 5 : la demande
+    /// dit quoi charger, la résidence dit quoi LÂCHER.
+    ///
+    /// Un comptable et pas un magasin : la valeur ne porte que le poids et de
+    /// quoi retrouver la cellule (voir `Resident`).
+    residence: tf_world::Residency<Cle, Resident>,
+    /// **Les cellules évincées qu'il reste à retirer de la scène.**
+    ///
+    /// Le poids exact d'une cellule n'est connu QU'APRÈS son maillage : le
+    /// maillage d'une région bâtie pèse 168 fois celui d'une région de
+    /// terrain, donc l'estimer avant reviendrait à inventer un facteur. On
+    /// l'inscrit donc après `refaire`, et l'éviction que cette inscription
+    /// déclenche est reportée à l'appel SUIVANT.
+    ///
+    /// Ce report est ce qui garde **une seule recopie d'arène par appel** :
+    /// retirer tout de suite demanderait un second `refaire`, c'est-à-dire un
+    /// second travail en O(scène) — 27 ms mesurés — à chaque image d'un vol.
+    /// C'est exactement la famille de défaut que ce dépôt traque.
+    ///
+    /// Le dépassement est donc borné par ce qu'UN lot fait évincer, et il se
+    /// résorbe au prochain appel. `integrer(vec![])` suffit à le vider : un
+    /// hôte qui appelle à chaque image converge même quand plus rien
+    /// n'arrive.
+    a_degager: Vec<tf_world::Cellule>,
 }
 
 impl Ouvert {
@@ -392,6 +495,13 @@ impl Ouvert {
                 couche: None,
                 rechargements: 0,
                 sections_remaillees: 0,
+                // **La fixture n'inscrit rien**, et c'est voulu : son contenu
+                // ne vient pas de `zone` mais d'un bâtiment engendré en
+                // mémoire. Inscrire la zone ferait tenir la comptabilité sur
+                // des cellules qui ne correspondent à rien, et évincer
+                // effacerait le seul contenu qu'il y ait à montrer.
+                residence: tf_world::Residency::new(BUDGET_RESIDENCE),
+                a_degager: Vec::new(),
             });
         };
         // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
@@ -417,7 +527,7 @@ impl Ouvert {
             tf_world::FsSource::open(&couche).map_err(|e| format!("copie de travail : {e:?}"))?;
         let staging = std::sync::Arc::new(tf_world::Staging::new(source, overlay));
         let m = charger_monde(&assets, Ou::Source(staging.as_ref(), zone, dir.to_string()))?;
-        Ok(Ouvert {
+        let mut o = Ouvert {
             assets,
             monde: m,
             staging: Some(staging),
@@ -426,7 +536,224 @@ impl Ouvert {
             couche: Some(couche),
             rechargements: 0,
             sections_remaillees: 0,
-        })
+            residence: tf_world::Residency::new(BUDGET_RESIDENCE),
+            a_degager: Vec::new(),
+        };
+        o.inscrire_la_zone();
+        Ok(o)
+    }
+
+    /// Le plafond de résidence, en octets, et de quoi le changer.
+    ///
+    /// Réglable parce qu'une machine à 8 Go et une à 64 ne veulent pas le
+    /// même — et parce qu'un test doit pouvoir le serrer assez pour que
+    /// l'éviction ARRIVE : un budget de 1,5 Go ne se remplit pas avec une
+    /// fixture, donc un test qui garderait le défaut ne prouverait rien.
+    ///
+    /// Ne provoque aucune éviction immédiate : elle a lieu à la prochaine
+    /// intégration, comme le reste.
+    pub fn budget_residence(&mut self, octets: usize) {
+        self.residence.set_budget(octets);
+    }
+
+    /// Ce que la fenêtre de résidence CROIT tenir.
+    pub fn octets_comptes(&self) -> usize {
+        self.residence.used()
+    }
+
+    /// Le plafond en vigueur.
+    pub fn budget_actuel(&self) -> usize {
+        self.residence.budget()
+    }
+
+    /// Combien de cellules sont résidentes.
+    pub fn residentes(&self) -> usize {
+        self.residence.len()
+    }
+
+    /// **Combien de cellules évincées attendent encore d'être retirées.**
+    ///
+    /// Zéro veut dire que la comptabilité est EXACTE : `octets_comptes` et
+    /// `octets_residents` sont alors égaux. Non nul, la scène porte en plus
+    /// ce que le prochain appel va dégager.
+    pub fn en_attente(&self) -> usize {
+        self.a_degager.len()
+    }
+
+    /// Combien de cellules ont été évincées depuis l'ouverture.
+    ///
+    /// Un compteur, comme `rechargements` et `sections_remaillees` — et pour
+    /// la même raison : un test qui vérifie qu'un vol continu se borne doit
+    /// pouvoir dire que l'éviction a EU LIEU, sinon il passe aussi bien sur
+    /// un monde trop petit pour la déclencher.
+    pub fn evictions(&self) -> u64 {
+        self.residence.evictions()
+    }
+
+    /// Ce que la scène porte VRAIMENT : les sections de la grille, le
+    /// maillage en mémoire vive, et sa forme packée pour le GPU.
+    ///
+    /// Compté depuis les structures elles-mêmes, pas depuis la fenêtre de
+    /// résidence. C'est ce qui rend la comptabilité vérifiable : une fois
+    /// dégagé ce qui est en attente, les deux nombres doivent être ÉGAUX —
+    /// un budget qui ne se compare à rien est un budget qu'on peut tenir en
+    /// se trompant.
+    pub fn octets_residents(&self) -> usize {
+        self.monde.grille.octets()
+            + self.monde.chantier.octets()
+            + self.monde.chantier.octets_vive()
+    }
+
+    /// **Inscrit la zone d'ouverture dans la fenêtre de résidence.**
+    ///
+    /// Sans ça elle ne serait jamais évinçable : on ouvre un monde à un
+    /// endroit, on vole cinq mille blocs plus loin, et les chunks du départ
+    /// restent en mémoire pour toujours. C'est exactement la fuite que la
+    /// fenêtre existe pour empêcher, et elle serait passée inaperçue — la
+    /// scène a l'air bornée tant qu'on ne regarde que ce qui ARRIVE.
+    fn inscrire_la_zone(&mut self) {
+        let [x0, z0, x1, z1] = self.zone;
+        let mut cs = Vec::new();
+        for cz in z0..=z1 {
+            for cx in x0..=x1 {
+                cs.push(tf_world::Cellule {
+                    niveau: Niveau::Chunk,
+                    x: cx,
+                    z: cz,
+                    // La même hauteur que `charger_monde` a lue : une boîte
+                    // plus courte laisserait des sections hors de toute
+                    // cellule, donc hors de tout budget.
+                    boite: tf_world::BBox::new(
+                        BlockPos::new(cx * 16, -64, cz * 16),
+                        BlockPos::new(cx * 16 + 15, 319, cz * 16 + 15),
+                    ),
+                    region: tf_world::coords::RegionPos {
+                        x: cx.div_euclid(32),
+                        z: cz.div_euclid(32),
+                    },
+                });
+            }
+        }
+        // Les visées : la zone est TOUTE la scène à ce moment, donc repeser
+        // les cellules touchées revient à peser les cellules posées. On passe
+        // leurs adresses telles quelles.
+        let visees: Vec<tf_mesh::Adresse> = cs.iter().flat_map(adresses_de).collect();
+        self.peser(cs, &visees);
+    }
+
+    /// **Pèse et inscrit**, une fois le maillage fait.
+    ///
+    /// Le poids exact ne se connaît qu'ICI : le maillage d'une région bâtie
+    /// pèse 168 fois celui d'une région de terrain (101 Mo contre 0,6),
+    /// l'estimer avant reviendrait à inventer un facteur que la mesure dément.
+    ///
+    /// **Les arrivées ne sont pas les seules à repeser.** Une cellule maigrit
+    /// quand sa voisine arrive — les faces de son bord, jusque-là exposées à
+    /// du vide, se retrouvent masquées — et regrossit quand cette voisine est
+    /// évincée. Un chunk bâti porte environ 6 800 quads ; ses quatre murs de
+    /// bord en valent plusieurs fois autant. Ne repeser que les arrivées
+    /// laisserait donc chaque cellule inscrite au poids qu'elle avait SEULE,
+    /// soit un surcompte durable — et une fenêtre qui tient la moitié de ce
+    /// qu'elle pourrait, en croyant tenir le compte.
+    ///
+    /// On repèse donc toute cellule résidente qui possède une section VISÉE :
+    /// ce sont exactement celles que le remaillage vient de changer.
+    ///
+    /// Les arrivées passent par `insert` — elles viennent d'être demandées,
+    /// leur récence est juste. Les autres par `update`, qui corrige le poids
+    /// SANS toucher à la récence : les faire remonter ferait garder au LRU
+    /// exactement ce qu'il faudrait lâcher.
+    ///
+    /// **Une seule passe sur le chantier.** Demander à chaque cellule ce que
+    /// ses lots pèsent coûterait O(scène × cellules) — la faute exacte que ce
+    /// dépôt a payée trois fois sous le nom de « chauffer le build entier
+    /// pour écrire trois blocs ».
+    fn peser(&mut self, arrivees: Vec<tf_world::Cellule>, visees: &[tf_mesh::Adresse]) {
+        // 1. Les cellules à repeser : les arrivées, plus les résidentes qui
+        //    possèdent une section visée.
+        let mut cles: std::collections::HashSet<Cle> =
+            arrivees.iter().map(|c| (c.niveau, c.x, c.z)).collect();
+        let mut touchees: Vec<tf_world::Cellule> = Vec::new();
+        for a in visees {
+            // Les deux niveaux, plutôt qu'un champ qui dirait lequel la scène
+            // emploie : deux constantes pour une même vérité finissent par
+            // diverger, et celle-ci ne coûte qu'une recherche de plus.
+            for n in [Niveau::Chunk, Niveau::Region] {
+                let k = (n, n.cellule_axe(a.0 * 16), n.cellule_axe(a.1 * 16));
+                if cles.contains(&k) {
+                    continue;
+                }
+                if let Some(r) = self.residence.peek(&k) {
+                    touchees.push(r.cellule.clone());
+                    cles.insert(k);
+                }
+            }
+        }
+
+        if cles.is_empty() {
+            return;
+        }
+
+        // 2. Le poids de chaque cellule, en UNE passe sur les lots.
+        let mut octets: std::collections::HashMap<Cle, usize> =
+            std::collections::HashMap::with_capacity(cles.len());
+        let mut ou: std::collections::HashMap<tf_mesh::Adresse, Cle> =
+            std::collections::HashMap::new();
+        for c in arrivees.iter().chain(touchees.iter()) {
+            let k = (c.niveau, c.x, c.z);
+            for a in adresses_de(c) {
+                ou.insert(a, k);
+            }
+            octets.insert(k, 0);
+        }
+        // **Une section ne compte que pour UNE cellule.** Sommer les adresses
+        // cellule par cellule compterait deux fois ce que deux cellules
+        // couvrent toutes les deux — ce qui arrive dès qu'un hôte mêle les
+        // niveaux, une cellule de RÉGION contenant 32 × 32 cellules de chunk.
+        // La table d'appartenance tranche : un propriétaire par adresse.
+        for (a, k) in &ou {
+            *octets.get_mut(k).expect("clé posée juste au-dessus") +=
+                self.monde.grille.octets_de(*a);
+        }
+        for l in &self.monde.chantier.lots {
+            if let Some(k) = ou.get(&l.adresse) {
+                // Les DEUX formes : le `Vec<Quad>` en mémoire vive et sa copie
+                // packée dans l'arène. Ne compter que l'une sous-compterait le
+                // maillage d'un tiers, sur la moitié la plus lourde d'une
+                // région bâtie.
+                *octets.get_mut(k).expect("clé posée juste au-dessus") +=
+                    l.octets() + l.octets_vive();
+            }
+        }
+
+        // 3. Les corrections d'abord, les arrivées ensuite — c'est l'ordre qui
+        //    compte. Évincer sur des poids encore faux ferait lâcher la
+        //    mauvaise cellule.
+        for c in touchees {
+            let k = (c.niveau, c.x, c.z);
+            let n = octets.get(&k).copied().unwrap_or(0);
+            self.residence.update(
+                &k,
+                Resident {
+                    cellule: c,
+                    octets: n,
+                },
+            );
+        }
+        for c in arrivees {
+            let k = (c.niveau, c.x, c.z);
+            let n = octets.get(&k).copied().unwrap_or(0);
+            let ev = self.residence.insert(
+                k,
+                Resident {
+                    cellule: c,
+                    octets: n,
+                },
+                tf_world::State::Clean,
+            );
+            self.a_degager
+                .extend(ev.items.into_iter().map(|(_, r)| r.cellule));
+        }
     }
 
     /// Relit et remaille. **Depuis la copie de travail**, pas la source :
@@ -559,12 +886,49 @@ impl Ouvert {
     ///
     /// Rend le nombre de sections posées.
     pub fn integrer(&mut self, lot: Vec<Arrivee>) -> Result<usize, String> {
-        if lot.is_empty() {
+        // Rien à poser, rien à dégager, et rien au-dessus du budget : il n'y a
+        // pas de raison de recopier les arènes.
+        if lot.is_empty()
+            && self.a_degager.is_empty()
+            && self.residence.used() <= self.residence.budget()
+        {
             return Ok(0);
         }
         let connus = self.monde.interner.len();
         let mut posees = 0;
         let mut visees: Vec<tf_mesh::Adresse> = Vec::new();
+        let mut arrivees: Vec<tf_world::Cellule> = Vec::new();
+
+        // **Ce que l'appel précédent a évincé part d'ABORD**, et dans le même
+        // remaillage que ce qui arrive. C'est tout l'intérêt du report : une
+        // seule recopie d'arène par appel au lieu de deux.
+        //
+        // La marge vaut pour un RETRAIT autant que pour une pose : retirer une
+        // cellule découvre les faces de ses voisines, et sans le débordement
+        // d'une case il resterait un mur de faces fantômes le long de chaque
+        // frontière dégagée.
+        //
+        // Le `trim` vient AVANT le dégagement, donc ce qu'il évince part dans
+        // le même remaillage. C'est ce qui fait qu'un budget qu'on RESSERRE
+        // prend effet : sans lui, l'éviction n'aurait lieu qu'à la prochaine
+        // arrivée, et une caméra immobile garderait indéfiniment ce qu'on
+        // vient de lui interdire. Il décide sur les poids du dernier appel,
+        // qui sont justes — la correction, elle, n'a lieu qu'après le
+        // maillage.
+        let coupes = self.residence.trim();
+        self.a_degager
+            .extend(coupes.items.into_iter().map(|(_, r)| r.cellule));
+        for c in std::mem::take(&mut self.a_degager) {
+            for a in adresses_de(&c) {
+                self.monde.grille.retirer(a);
+            }
+            let b = &c.boite;
+            visees.extend(Grille::sections_autour(
+                [b.min.x, b.min.y, b.min.z],
+                [b.max.x, b.max.y, b.max.z],
+            ));
+        }
+
         for Arrivee {
             cellule,
             mut sections,
@@ -595,15 +959,13 @@ impl Ouvert {
             // effacés resteraient à l'écran. Contrairement au cas de
             // `remailler`, celui-ci est RÉEL — une cellule évincée puis
             // rechargée peut avoir changé entre-temps.
-            let (cx, cz) = (cellule.x, cellule.z);
-            let anciennes: Vec<tf_mesh::Adresse> = self
-                .monde
-                .grille
-                .adresses()
-                .into_iter()
-                .filter(|a| a.0 == cx && a.1 == cz)
-                .collect();
-            for a in anciennes {
+            //
+            // Les adresses se DÉDUISENT de la cellule. Le balayage qui était
+            // écrit ici allouait et triait la grille entière par cellule
+            // intégrée — O(scène × cellules) — et filtrait sur `a.0 ==
+            // cellule.x`, ce qui n'est vrai qu'au niveau CHUNK : d'une cellule
+            // de RÉGION il n'aurait retiré qu'un millième des sections.
+            for a in adresses_de(&cellule) {
                 self.monde.grille.retirer(a);
             }
 
@@ -626,13 +988,27 @@ impl Ouvert {
                 [b.min.x, b.min.y, b.min.z],
                 [b.max.x, b.max.y, b.max.z],
             ));
+            arrivees.push(cellule);
         }
         // Deux cellules voisines partagent leur marge : sans dédoublonnage, la
         // section frontière serait maillée deux fois et `Chantier::remplacer`
         // en garderait deux lots.
         visees.sort_unstable();
         visees.dedup();
+        let avant = self.rechargements;
         self.refaire(&visees, connus)?;
+        // **La pesée vient APRÈS le maillage**, et l'éviction qu'elle
+        // déclenche part au prochain appel : voir `a_degager`.
+        //
+        // Sauf si le remaillage a fini par RECHARGER — le repli du cas où
+        // l'atlas ne peut pas s'étendre. Le rechargement remplace le monde
+        // par la seule zone, donc les cellules qu'on vient de poser n'y sont
+        // plus : les inscrire les ferait compter pour zéro octet, et la
+        // fenêtre croirait tenir des cellules absentes. `recharger` a déjà
+        // réinscrit ce qui reste.
+        if self.rechargements == avant {
+            self.peser(arrivees, &visees);
+        }
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();
         Ok(posees)
@@ -770,6 +1146,14 @@ impl Ouvert {
         )?;
         // Un rechargement refait TOUT : c'est ce que le compteur doit dire.
         self.sections_remaillees = self.monde.grille.len();
+        // **La fenêtre de résidence repart de zéro avec lui.** `recharger`
+        // remplace le monde par la seule ZONE : les cellules streamées ne sont
+        // plus là, et les laisser inscrites ferait évincer des sections qui
+        // n'existent plus tout en comptant des octets que personne ne porte.
+        let budget = self.residence.budget();
+        self.residence = tf_world::Residency::new(budget);
+        self.a_degager.clear();
+        self.inscrire_la_zone();
         Ok(())
     }
 

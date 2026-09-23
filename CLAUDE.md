@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (815 tests aujourd'hui)
+cargo test            # tous les crates (826 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -382,7 +382,11 @@ crates/
                · INTÉGRATION ✅ (`Ouvert::integrer`) : par LOT, tables d'états
                  fusionnées, et la scène streamée est identique à celle qu'un
                  chargement d'un bloc donne
-               · résidence pilotée par la caméra et composants à écrire.
+               · MÉMOIRE BORNÉE ✅ (`Ouvert::peser`) : la résidence sert de
+                 COMPTABLE, pas de magasin — une cellule pèse ses sections,
+                 son `Vec<Quad>` et sa copie packée, et ce que la fenêtre
+                 compte est ce que la scène porte, à l'octet près
+               · demande pilotée par la caméra et composants à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -405,6 +409,7 @@ couvriront le même terrain.
 | Une capacité de la coque | `etat.rs` si ça DÉCIDE (pur, testable sans écran), `interface.rs` si ça dessine. L'interface ne décide rien |
 | Une FORME (sphère, cylindre…) | `Volume` (`tf-ops/src/forme.rs`) — sa variante, son rang dans `rang` (exhaustif), son entrée dans `TOUS`, son cas dans `forme()`, puis son bras dans `interface::volume`. Les deux hôtes la voient aussitôt |
 | Un OUTIL de Conception | `Outil` (`tf-app/src/etat.rs`) : sa variante, son `nom`, sa `legende`, et son cas dans le `match` du clic (`coque.rs`). Un test exige que chaque outil dise ce que font les DEUX boutons |
+| Une chose que la scène TIENT en mémoire | son terme dans `Ouvert::peser` (`tf-app/src/scene.rs`) ET dans `octets_residents`, jamais dans l'un seul : c'est leur ÉGALITÉ qu'un test vérifie à l'octet près, et une comptabilité qui ne se compare à rien est une comptabilité qu'on peut tenir en se trompant |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -1698,3 +1703,44 @@ propres à ce dépôt.
   « une absence ne se voit pas », appliqué à ce qui sert à montrer que ça
   marche. Ce qu'une capture met en scène se DÉRIVE des bornes de ce qu'elle
   vient de charger.
+- **Un budget qu'on estime AVANT de mesurer invente un facteur.** Le poids
+  d'une cellule résidente, c'est ses sections plus son maillage — et le
+  rapport entre les deux vaut 0,022 sur du terrain contre 1,18 sur du bâti,
+  soit un facteur **54** entre les deux fixtures (`--example residence`).
+  L'estimer à la pose, avant le maillage, aurait donc voulu dire choisir une
+  des deux et se tromper d'un ordre de grandeur sur l'autre — c'est-à-dire sur
+  Minefield, qui est du bâti. La pesée a lieu APRÈS le maillage, et l'éviction
+  qu'elle déclenche est reportée à l'appel suivant : la payer tout de suite
+  demanderait un second remaillage, donc une seconde recopie d'arène en
+  O(scène), à chaque image d'un vol.
+- **Une cellule MAIGRIT quand sa voisine arrive.** Ses faces de bord, jusque-là
+  exposées à du vide, se retrouvent masquées. Ne repeser que les arrivées
+  laisse donc chaque cellule inscrite au poids qu'elle avait SEULE — un
+  surcompte durable, et une fenêtre qui tient une fraction de ce qu'elle croit
+  tenir. Rien ne le dit de soi-même : la scène reste juste, la mémoire reste
+  bornée, seul le chiffre ment. C'est l'égalité « ce que la fenêtre compte est
+  ce que la scène porte, à l'octet près » qui l'attrape, et c'est pour ça
+  qu'elle est écrite comme une égalité et pas comme un ordre de grandeur.
+- **Corriger un poids n'est pas un accès.** La correction ci-dessus passe par
+  `Residency::update`, qui ne touche ni à la récence ni à l'état. `insert`
+  ferait remonter en tête une cellule que personne n'a regardée : dans un vol
+  en ligne droite, chaque cellule est réchauffée par l'arrivée de la suivante,
+  donc la traînée n'est jamais rendue et le LRU garde exactement ce qu'il
+  faudrait lâcher. `edit` la marquerait modifiée, donc inévinçable pour
+  toujours. Mesuré par mutation : remplacer `update` par `insert` passait les
+  cinq autres tests — la comptabilité reste exacte, la scène reste juste,
+  seul CE QUI est lâché change.
+- **La zone d'OUVERTURE doit s'inscrire comme le reste.** Sinon elle n'est
+  jamais évinçable : on ouvre un monde, on vole cinq mille blocs plus loin, et
+  les chunks du départ restent en mémoire pour toujours — la fuite même que la
+  fenêtre existe pour empêcher. Invisible tant qu'on ne regarde que ce qui
+  ARRIVE, et c'est le défaut qu'on ne trouve qu'en se demandant ce qui entre
+  dans la scène SANS passer par la porte qu'on vient d'écrire.
+- **Un filtre juste à un niveau est faux d'un facteur mille à l'autre.** Pour
+  retrouver ce qu'une cellule portait, la scène balayait la grille sur
+  `adresse.0 == cellule.x`. Vrai au niveau CHUNK ; une cellule de RÉGION en
+  couvre 32 × 32, donc 1 023 colonnes sur 1 024 seraient restées dans la
+  grille pour toujours — et sans rien qui se voie, puisque l'affichage, lui,
+  aurait été juste. Les adresses se déduisent de la GÉOMÉTRIE de la cellule,
+  ce qui supprime au passage un balayage en O(scène × cellules) : la cellule
+  sait ce qu'elle couvre, la grille n'a pas à le chercher.

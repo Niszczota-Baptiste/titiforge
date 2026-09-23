@@ -286,6 +286,39 @@ impl<K: Eq + Hash + Clone, V: Weighed> Residency<K, V> {
         self.evict_to_budget(Some(i))
     }
 
+    /// **Corrige la valeur d'une entrée existante**, et son poids avec —
+    /// sans toucher à sa récence, à son état, ni évincer quoi que ce soit.
+    ///
+    /// Pour l'appelant qui se sert du cache comme d'un COMPTABLE : le poids
+    /// d'une entrée peut changer sans que personne ne l'ait regardée. Une
+    /// cellule de monde en est l'exemple — l'arrivée de sa voisine masque ses
+    /// faces de bord, donc son maillage maigrit tout seul.
+    ///
+    /// Ni `insert` ni `edit` ne conviennent, et c'est pour ça que celle-ci
+    /// existe : `insert` ferait remonter l'entrée en tête, donc le LRU
+    /// garderait justement ce qu'il faudrait lâcher ; `edit` la marquerait
+    /// modifiée, donc inévinçable pour toujours. Une comptabilité qu'on ne
+    /// peut corriger sans mentir sur la récence est une comptabilité qui
+    /// dérive.
+    ///
+    /// Rend faux si la clé est absente — ce n'est pas une insertion déguisée.
+    /// L'éviction n'a pas lieu ici : le budget est une cible, et elle se fait
+    /// à la prochaine insertion ou sur `trim`, comme partout ailleurs.
+    pub fn update(&mut self, k: &K, v: V) -> bool {
+        let Some(&i) = self.index.get(k) else {
+            return false;
+        };
+        let neuf = v.bytes();
+        let n = self.nodes[i]
+            .as_mut()
+            .expect("index et emplacements désynchronisés");
+        let ancien = n.bytes;
+        n.bytes = neuf;
+        n.value = v;
+        self.utilise = self.utilise + neuf - ancien;
+        true
+    }
+
     /// Retire une entrée, épinglée ou modifiée comprise. C'est un ordre, pas
     /// une suggestion — à l'appelant de savoir ce qu'il fait.
     pub fn remove(&mut self, k: &K) -> Option<V> {

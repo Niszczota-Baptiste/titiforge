@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **815**, zéro échec |
+| Tests | **826**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-815 tests, répartis par ce qu'ils PROUVENT :
+826 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -51,7 +51,7 @@ cargo test --workspace
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
-| `tf-world` journal/staging/residency/coords/source/lecture | 115 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
+| `tf-world` journal/staging/residency/coords/source/lecture | 120 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 64 | les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
@@ -78,10 +78,11 @@ cargo test --workspace
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 17 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
-| `tf-app` rechargement | 7 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement. Tourne sans pack : le codex est écrit à la volée |
+| `tf-app` rechargement | 8 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement ; et qu'un repli PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
 | `tf-render` arene | 6 | le REMPLACEMENT de tranches d'arène : qu'une section qui apparaît ou disparaît décale les lots, et que les instances recopiées suivent — sinon un pan du build se dessine ailleurs ; et pour les MODÈLES, que la somme préfixe `debut_face` se recalcule — un seul rang faux fait dessiner les faces d'une pose pour une autre |
 | `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
+| `tf-app` residence | 5 | que la MÉMOIRE est bornée : que ce que la fenêtre compte est ce que la scène porte À L'OCTET PRÈS, qu'un vol continu tient sous son budget sans jamais recharger la zone, que ce qui survit à l'éviction est quad pour quad ce qu'un chargement direct donnerait (la marge du dégagement, que rien d'autre ne voit), que corriger le poids d'une voisine n'en fait pas la plus récente, et qu'une cellule de RÉGION est pesée sur ses 32 × 32 colonnes |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 
@@ -585,6 +586,37 @@ réels en donnent 1,54 et 1,75 : la résidence d'un vrai build sera donc plus
 basse que 186 Mo, sans qu'on sache de combien. Le chiffre qui engage est
 l'ORDRE de grandeur et le rapport entre les deux postes, pas la décimale.
 
+### Et ce que la fenêtre en fait
+
+Le rapport maillage / grille vaut **0,022** sur du terrain et **1,18** sur du
+bâti — un facteur **54** entre les deux fixtures. C'est ce chiffre, et lui
+seul, qui a décidé la forme de la pesée : un poids estimé à la pose, avant le
+maillage, aurait voulu dire choisir une des deux fixtures et se tromper d'un
+ordre de grandeur sur l'autre, c'est-à-dire sur Minefield, qui est du bâti.
+
+La cellule est donc pesée APRÈS son maillage, et l'éviction que la pesée
+déclenche part à l'appel suivant, dans le même remaillage que les arrivées :
+la payer tout de suite demanderait une seconde recopie d'arène en O(scène) —
+27 ms mesurés — à chaque image d'un vol. Un `integrer` sur lot vide suffit à
+converger, donc une caméra immobile n'en reste pas moins bornée.
+
+Trois postes, pas deux : les sections de la grille, le `Vec<Quad>` du chantier
+**et** sa copie packée dans l'arène. Un `Quad` fait 32 octets en mémoire
+contre 16 une fois packé ; ne compter que la forme GPU sous-compterait le
+maillage d'un tiers, sur la moitié la plus lourde d'une région bâtie.
+
+Mesuré sur du bâti streamé (8 × 8 chunks, 197 cellules), sous un tiers du
+budget qu'il faudrait :
+
+| | résident | évictions | rechargements de zone |
+|---|---:|---:|---:|
+| sans plafond | 20,2 Mo | 0 | 0 |
+| plafond à 6,7 Mo | **6,6 Mo** | 39 | **0** |
+
+Le second chiffre est celui qui compte : borner la mémoire ne ressuscite PAS
+le rechargement de zone, qui est le défaut ayant coûté le plus cher aux deux
+applications précédentes.
+
 ---
 
 ## 7. Ce qui n'est pas fait, et ce qui n'est pas mesuré
@@ -597,10 +629,10 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **La fenêtre de résidence n'est pas branchée au rendu** | `tf-world::residency` existe et est testé ; rien ne le pilote encore depuis une caméra |
+| **La caméra ne demande rien** | la zone reste celle de `--zone`. La demande (`tf-world::demande`), le fil de chargement, l'intégration et l'éviction sont faits et testés bout à bout ; il manque la boucle de la coque qui les enchaîne à chaque image |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |
-| **Rien ne PILOTE la fenêtre de résidence** | la zone est choisie à la main (`--zone`) ; `tf-world::residency` existe et est testé, et rien ne le nourrit depuis la caméra. C'est le cœur de la phase 5 |
+| **L'arène GPU n'est pas par SECTION** | c'est la dernière dépense en O(scène) du chemin d'édition : 27 ms pour recopier 276 k instances et 178 k poses, là où le geste est en O(édition). Des tampons GPU par section la supprimeraient — et c'est la même pièce dont la résidence a besoin pour lâcher un maillage sans recopier le reste |
 | **Ni composants ni saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste, et les composants qu'on modifie une fois pour les mettre à jour partout, restent à écrire (phase 7) |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |

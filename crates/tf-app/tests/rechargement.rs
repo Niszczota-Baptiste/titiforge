@@ -21,7 +21,8 @@ mod commun;
 
 use std::time::{Duration, Instant};
 
-use commun::{codex, semer, Jetable};
+use commun::{codex, semer, streamer, Jetable};
+use tf_app::chargeur::Chargeur;
 use tf_app::moteur::{Commande, Moteur, Reponse};
 use tf_app::scene::Ouvert;
 use tf_ops::catalogue::{Params, Valeur};
@@ -658,4 +659,90 @@ fn l_arene_remplacee_dit_la_meme_chose_qu_un_rebati() {
         lent_poses.len()
     );
     moteur.arreter();
+}
+
+/// **Un rechargement pendant le streaming ne laisse pas de cellule fantôme.**
+///
+/// Le repli du cas « texture trop grande » remplace le monde par la seule
+/// ZONE : les cellules qu'on venait de poser n'y sont plus. Les inscrire
+/// quand même à la fenêtre de résidence les ferait compter pour zéro octet —
+/// donc invisibles à la comptabilité — tout en les déclarant résidentes. Une
+/// cellule déclarée résidente et jamais chargée est un trou dans le monde que
+/// rien ne vient combler : la demande la croit là et ne la redemande plus.
+///
+/// Rien d'autre ne le voit. Le contenu affiché est juste (c'est celui de la
+/// zone rechargée), la mémoire est bornée, la comptabilité reste exacte —
+/// seule la LISTE des résidentes ment.
+#[test]
+fn un_rechargement_pendant_le_streaming_ne_laisse_pas_de_cellule_fantome() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &["emerald_block"]);
+    commun::texture_hd(j.chemin(), "emerald_block", 32);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 4);
+
+    // La zone d'ouverture : UN chunk. C'est tout ce qui doit rester résident.
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
+    assert_eq!(o.residentes(), 1, "la zone, et elle seule");
+
+    // L'émeraude va dans le chunk (2, 2), HORS de la zone : la scène ne la
+    // connaîtra qu'en streamant cette cellule.
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(m.chemin().to_path_buf()),
+    );
+    let sel = BBox::new(BlockPos::new(36, -40, 36), BlockPos::new(38, -40, 38));
+    poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
+    moteur.arreter();
+
+    let mut c = Chargeur::lancer(o.staging.clone().unwrap(), tf_world::Dimension::Overworld);
+    // **Une cellule ORDINAIRE d'abord.** C'est elle qui rend le test
+    // porteur : au rechargement elle disparaît de la grille comme le reste,
+    // et si la fenêtre garde son inscription, elle déclare résidente une
+    // cellule qui n'existe plus — tout en comptant ses octets.
+    let cellule = |bx: i32, bz: i32| {
+        tf_world::demande::par_region(&tf_world::demande::voulues(
+            BlockPos::new(bx, 64, bz),
+            [1.0, 0.0, 0.0],
+            0,
+            tf_world::Niveau::Chunk,
+            (-64, 319),
+        ))
+    };
+    let lots = cellule(24, 24);
+    assert_eq!(lots.iter().map(|l| l.cellules.len()).sum::<usize>(), 1);
+    c.demander(lots);
+    assert_eq!(streamer(&mut o, &mut c, 1), 1);
+    assert_eq!(o.rechargements, 0, "celle-là n'apporte rien d'inconnu");
+    assert_eq!(o.residentes(), 2, "la zone, plus la cellule streamée");
+
+    // Puis celle qui porte l'émeraude, et qui force le repli.
+    let lots = cellule(40, 40);
+    let n: usize = lots.iter().map(|l| l.cellules.len()).sum();
+    assert_eq!(n, 1, "un rayon de zéro demande la cellule où l'on est");
+    c.demander(lots);
+    assert_eq!(streamer(&mut o, &mut c, n), n);
+    c.arreter();
+
+    assert_eq!(
+        o.rechargements, 1,
+        "une tuile plus grande que l'atlas doit forcer le repli"
+    );
+    assert_eq!(
+        o.residentes(),
+        1,
+        "le rechargement remet la scène à la ZONE : la cellule streamée n'en \
+         fait plus partie et ne doit pas rester inscrite"
+    );
+    assert!(
+        (-4..20).all(|sy| o.monde.grille.section((2, 2, sy)).is_none()),
+        "et elle n'est effectivement plus dans la grille"
+    );
+    assert_eq!(
+        o.octets_comptes(),
+        o.octets_residents(),
+        "la comptabilité reste exacte après le repli"
+    );
 }

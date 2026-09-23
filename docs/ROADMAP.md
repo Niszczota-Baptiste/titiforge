@@ -444,10 +444,53 @@ bloc donne. Par LOT et non par cellule : la recopie d'arène est en O(scène),
 donc une par une on la paie N fois — mesuré, 4 577 ms contre 826 pour
 197 cellules.
 
-**Ce qui reste** : le branchement de
-`Residency` sur la `Grille` et le `Chantier` — il faut un `Weighed` pour
-chacun, et aucun n'existe —, l'éviction qui retire un maillage de l'arène, et
-l'arène GPU par tranches.
+✅ **La MÉMOIRE est bornée** (`Ouvert::peser`, `a_degager`). La fenêtre de
+résidence sert de COMPTABLE et non de magasin : les blocs restent dans la
+grille, le maillage dans le chantier, et elle ne tient que le poids et la
+récence. Une cellule pèse ses sections, son `Vec<Quad>` et sa copie packée —
+les trois, parce qu'en ne comptant que la forme GPU on sous-compte le
+maillage d'un tiers.
+
+Trois choses s'y sont décidées à la mesure :
+
+1. **Le poids ne se connaît qu'APRÈS le maillage.** Le maillage d'une région
+   bâtie pèse 168 fois celui d'une région de terrain (101 Mo contre 0,6) :
+   l'estimer avant reviendrait à inventer un facteur que la mesure dément.
+   L'éviction qu'une pesée déclenche part donc à l'appel SUIVANT, dans le
+   même remaillage que les arrivées — une seule recopie d'arène par appel au
+   lieu de deux, et un `integrer` sur lot vide suffit à converger.
+2. **Une cellule MAIGRIT quand sa voisine arrive**, ses faces de bord cessant
+   d'être exposées. Ne repeser que les arrivées laisserait chaque cellule
+   inscrite au poids qu'elle avait SEULE. On repèse donc toute résidente
+   qu'un remaillage a touchée — par `Residency::update`, qui corrige le poids
+   sans toucher à la récence : `insert` ferait garder au LRU exactement ce
+   qu'il faudrait lâcher, et la traînée d'un vol en ligne droite ne serait
+   jamais rendue.
+3. **La zone d'OUVERTURE s'inscrit comme le reste.** Sans ça elle n'est
+   jamais évinçable : on ouvre un monde, on vole cinq mille blocs plus loin,
+   et les chunks du départ restent là pour toujours — la fuite même que la
+   fenêtre existe pour empêcher, invisible tant qu'on ne regarde que ce qui
+   arrive.
+
+Six tests, huit mutations, zéro survivant. Deux propriétés portent le reste :
+la comptabilité est EXACTE (ce que la fenêtre croit tenir et ce que la scène
+porte sont le même nombre à l'octet près), et ce qui survit à l'éviction est
+quad pour quad ce qu'un chargement direct donnerait — c'est le seul test qui
+voit la marge du dégagement, retirer une cellule DÉCOUVRANT les faces de ses
+voisines. Mesuré sur du bâti : 197 cellules, 20,2 Mo ramenés à 6,6 sous un
+tiers de budget, 39 évictions, **zéro rechargement de zone**.
+
+Au passage, un défaut latent : la scène retrouvait ce qu'une cellule portait
+en filtrant la grille sur `adresse.0 == cellule.x`. Vrai au niveau chunk,
+faux d'un facteur mille au niveau RÉGION — une cellule de région en couvre
+32 × 32, donc 1 023 colonnes sur 1 024 seraient restées dans la grille pour
+toujours, invisibles puisque l'affichage, lui, aurait été juste. Les adresses
+se déduisent maintenant de la GÉOMÉTRIE de la cellule, ce qui supprime aussi
+un balayage en O(scène × cellules).
+
+**Ce qui reste** : la coque ne pilote toujours pas la demande — la zone reste
+celle de `--zone`, la caméra ne déclenche aucun chargement — et l'arène GPU
+par tranches, qui est la dernière dépense en O(scène) du chemin d'édition.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.

@@ -87,6 +87,37 @@ impl Grille {
         self.sections.get(&a)
     }
 
+    /// Ce qu'UNE section coûte : sa palette, ses indices packés, et ses
+    /// biomes quand on les a. Zéro pour une adresse absente.
+    ///
+    /// Par adresse et pas seulement en total, parce que la fenêtre de
+    /// résidence évince par CELLULE : il faut pouvoir dire ce qu'une cellule
+    /// pèse sans balayer la scène entière.
+    ///
+    /// Approximatif — les `HashMap` eux-mêmes ne sont pas comptés — mais
+    /// STABLE, ce que `Weighed` demande : tant que la section ne change pas,
+    /// le nombre ne bouge pas.
+    pub fn octets_de(&self, a: Adresse) -> usize {
+        let s = match self.sections.get(&a) {
+            Some(s) => s.packed_bytes(),
+            None => return 0,
+        };
+        let b = self
+            .biomes
+            .get(&a)
+            .map(|v| v.len() * std::mem::size_of::<StateId>())
+            .unwrap_or(0);
+        s + b
+    }
+
+    /// Ce que la grille entière coûte, section par section.
+    pub fn octets(&self) -> usize {
+        self.sections
+            .keys()
+            .map(|a| self.octets_de(*a))
+            .sum::<usize>()
+    }
+
     /// Un bloc, en coordonnées MONDE. `0` — l'air — pour ce qui n'est pas là.
     ///
     /// Ce qui manque vaut de l'air et non « opaque » : au bord d'une zone
@@ -339,6 +370,28 @@ impl Lot {
     pub fn est_vide(&self) -> bool {
         self.quads.is_empty() && self.poses.is_empty()
     }
+
+    /// Ce que ce lot pèsera sur le **GPU** : 16 octets par quad — la forme
+    /// packée, pas la structure — et 12 par pose.
+    ///
+    /// C'est la brique de `Chantier::octets`, et c'est voulu : une somme
+    /// écrite deux fois finirait par ne plus dire la même chose que ses
+    /// termes, et le budget de résidence en dépend.
+    pub fn octets(&self) -> usize {
+        self.quads.len() * 16 + self.poses.octets()
+    }
+
+    /// Ce que ce lot coûte en mémoire **vive** — un autre nombre, et un autre
+    /// nom, parce que c'est une autre règle.
+    ///
+    /// Un `Quad` fait 32 octets en mémoire contre 16 une fois packé : le
+    /// confondre avec `octets` sous-compterait le maillage d'un facteur deux,
+    /// et la fenêtre de résidence est plafonnée en OCTETS. Une pose, elle,
+    /// est déjà sa propre forme GPU — d'où le même terme des deux côtés.
+    pub fn octets_vive(&self) -> usize {
+        self.quads.len() * std::mem::size_of::<crate::maillage::Quad>()
+            + self.poses.len() * std::mem::size_of::<crate::maillage::Instance>()
+    }
 }
 
 /// Ce qu'un chantier a produit.
@@ -390,9 +443,14 @@ impl Chantier {
         self.lots.iter().map(|l| l.poses.len()).sum()
     }
 
-    /// Octets que ça pèse : 16 par quad, 12 par pose.
+    /// Ce que le chantier pèsera sur le **GPU**, lot par lot.
     pub fn octets(&self) -> usize {
-        self.quads() * 16 + self.poses() * std::mem::size_of::<crate::maillage::Instance>()
+        self.lots.iter().map(Lot::octets).sum()
+    }
+
+    /// Ce que le chantier coûte en mémoire **vive**, lot par lot.
+    pub fn octets_vive(&self) -> usize {
+        self.lots.iter().map(Lot::octets_vive).sum()
     }
 
     /// Les lots dans un ordre stable, quel que soit celui de production.

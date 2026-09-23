@@ -438,3 +438,102 @@ fn trim_ramene_sous_le_budget_apres_des_ecritures_qui_ont_grossi() {
     assert!(c.used() <= 1000, "used = {}", c.used());
     c.debug_check_invariants();
 }
+
+// ── correction de poids ─────────────────────────────────────────────────────
+
+/// **Corriger un poids ne doit pas mentir sur la récence.**
+///
+/// C'est la raison d'être d'`update`. L'appelant qui se sert du cache comme
+/// d'un comptable voit le poids d'une entrée changer sans que personne ne
+/// l'ait regardée — une cellule de monde maigrit quand sa voisine arrive et
+/// masque ses faces de bord. `insert` ferait remonter l'entrée en tête, donc
+/// le LRU garderait justement ce qu'il faudrait lâcher.
+#[test]
+fn update_corrige_le_poids_sans_toucher_a_la_recence() {
+    let mut c = cache(1000);
+    c.insert(1, Bloc::new(100), State::Clean);
+    c.insert(2, Bloc::new(100), State::Clean);
+    c.insert(3, Bloc::new(100), State::Clean);
+    assert_eq!(c.keys_mru(), vec![3, 2, 1]);
+
+    assert!(c.update(&1, Bloc::new(400)));
+    c.debug_check_invariants();
+    assert_eq!(
+        c.keys_mru(),
+        vec![3, 2, 1],
+        "corriger un poids n'est pas un accès"
+    );
+    assert_eq!(c.used(), 600, "le budget doit suivre la correction");
+    assert_eq!(c.peek(&1).map(|b| b.poids), Some(400));
+}
+
+/// Un poids corrigé reste ÉVINÇABLE. `edit` marquerait l'entrée modifiée,
+/// donc protégée pour toujours — un cache dont tout est « modifié » ne peut
+/// plus rien rendre.
+#[test]
+fn update_ne_marque_pas_l_entree_modifiee() {
+    let mut c = cache(1000);
+    c.insert(7, Bloc::new(10), State::Clean);
+    c.update(&7, Bloc::new(20));
+    assert_eq!(c.state(&7), Some(State::Clean));
+    assert!(c.dirty_keys().is_empty());
+}
+
+/// **`update` n'évince pas**, même en dépassant le budget : le plafond est une
+/// cible, et l'éviction a lieu à la prochaine insertion ou sur `trim`. Sinon
+/// un appelant qui corrige dix poids d'affilée verrait le cache se vider au
+/// milieu de sa passe, sur des poids encore faux.
+#[test]
+fn update_n_evince_pas_meme_au_dela_du_budget() {
+    let mut c = cache(1000);
+    c.insert(1, Bloc::new(100), State::Clean);
+    c.insert(2, Bloc::new(100), State::Clean);
+
+    assert!(c.update(&1, Bloc::new(5000)));
+    c.debug_check_invariants();
+    assert_eq!(c.len(), 2, "rien ne doit partir sur une correction");
+    assert_eq!(c.used(), 5100);
+    assert_eq!(c.evictions(), 0);
+
+    // C'est `trim` qui tranche, et il évince le plus ANCIEN accès d'abord —
+    // ici l'entrée corrigée, qui est aussi la plus froide. Elle suffit à
+    // repasser sous le plafond, donc `2` reste : on évince ce qu'il faut, pas
+    // tout ce qu'on peut.
+    let sortis = c.trim();
+    c.debug_check_invariants();
+    assert_eq!(
+        sortis.items.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(c.used(), 100);
+    assert!(c.contains(&2));
+}
+
+/// **Ce n'est pas une insertion déguisée.** Une clé absente rend faux et ne
+/// crée rien : le comptable corrige ce qu'il connaît, il n'invente pas
+/// d'entrée dont personne ne tient le contenu.
+#[test]
+fn update_refuse_une_cle_absente() {
+    let mut c = cache(1000);
+    assert!(!c.update(&42, Bloc::new(10)));
+    c.debug_check_invariants();
+    assert!(c.is_empty());
+    assert_eq!(c.used(), 0);
+}
+
+/// Une correction qui allège doit rendre les octets, pas seulement les
+/// compter : sans la soustraction, le budget ne ferait que monter et le cache
+/// finirait par tout évincer pour de la place déjà libre.
+#[test]
+fn update_rend_les_octets_quand_l_entree_maigrit() {
+    let mut c = cache(1000);
+    c.insert(1, Bloc::new(500), State::Clean);
+    c.insert(2, Bloc::new(400), State::Clean);
+    assert_eq!(c.used(), 900);
+    c.update(&1, Bloc::new(50));
+    c.debug_check_invariants();
+    assert_eq!(c.used(), 450);
+    // La place rendue sert : l'insertion suivante n'évince plus rien.
+    let sortis = c.insert(3, Bloc::new(500), State::Clean);
+    assert!(sortis.is_empty(), "il y avait la place");
+}

@@ -21,6 +21,10 @@
 //! se mesurer sur un vrai pack (`TF_PACK`).
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use tf_app::chargeur::{Chargeur, Reponse};
+use tf_app::scene::{Arrivee, Ouvert};
 
 /// Les blocs que les fixtures de `tf-bench` posent vraiment.
 ///
@@ -295,4 +299,104 @@ pub fn semer_build(dir: &Path, chunks: u32) {
     )
     .expect("écriture");
     std::fs::write(dir.join("level.dat"), []).expect("level.dat");
+}
+
+// ── Ce que trois fichiers de test partagent ────────────────────────────────
+//
+// Écrites une fois : `chargement`, `residence` et tout ce qui suivra comparent
+// une scène streamée à une scène chargée d'un bloc, et deux copies de la
+// canonisation des couches d'atlas finiraient par ne plus canoniser la même
+// chose.
+
+/// Ramène les couches d'atlas d'un côté à un dictionnaire COMMUN.
+///
+/// Un numéro de couche n'a de sens que relativement à son atlas, et les deux
+/// chemins n'ont pas le même : celui qui charge d'un bloc bâtit son atlas par
+/// nom, celui qui streame l'ÉTEND à mesure. Comparer les numéros, c'est
+/// comparer deux systèmes de coordonnées.
+pub fn canon(o: &Ouvert, mots: &mut Vec<String>) -> Vec<u32> {
+    o.monde
+        .atlas
+        .couches
+        .iter()
+        .map(|c| match mots.iter().position(|m| *m == c.nom) {
+            Some(i) => i as u32,
+            None => {
+                mots.push(c.nom.clone());
+                mots.len() as u32 - 1
+            }
+        })
+        .collect()
+}
+
+/// Ce que la scène MONTRE : chaque quad par sa géométrie, sa teinte, son
+/// origine de section et le NOM de sa texture.
+///
+/// L'origine et non l'indice de lot : l'ordre des lots dépend de l'ordre
+/// d'arrivée des cellules, qui est justement ce qui diffère entre les deux
+/// chemins. Ce qu'on veut savoir est si les mêmes quads sont au même ENDROIT.
+pub fn montre(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, [u32; 4], String)> {
+    let mut v: Vec<(u32, u32, [u32; 4], String)> = o
+        .monde
+        .arene
+        .instances
+        .iter()
+        .map(|i| {
+            let nom = o
+                .monde
+                .atlas
+                .couches
+                .get(i.couche as usize)
+                .map(|x| x.nom.clone())
+                .unwrap_or_default();
+            let org = o
+                .monde
+                .arene
+                .origines
+                .get(i.section as usize)
+                .map(|p| p.position.map(|f| f.to_bits()))
+                .unwrap_or([0; 4]);
+            (
+                i.geo,
+                i.teinte,
+                org,
+                c.get(i.couche as usize).map(|_| nom).unwrap_or_default(),
+            )
+        })
+        .collect();
+    // L'ORDRE des instances suit l'ordre des lots, donc l'ordre d'arrivée.
+    // Ce qui doit être identique est l'ENSEMBLE, pas la suite.
+    v.sort();
+    v
+}
+
+/// Fait tourner le chargeur jusqu'à ce que `n` cellules soient intégrées.
+pub fn streamer(o: &mut Ouvert, c: &mut Chargeur, n: usize) -> usize {
+    let debut = Instant::now();
+    let mut faites = 0;
+    while faites < n && debut.elapsed() < Duration::from_secs(60) {
+        let lot = c.recevoir(0);
+        if lot.is_empty() {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        let mut arrivees = Vec::new();
+        for r in lot {
+            match r {
+                Reponse::Prete {
+                    cellule,
+                    sections,
+                    interner,
+                } => arrivees.push(Arrivee {
+                    cellule,
+                    sections,
+                    interner,
+                }),
+                Reponse::Echec(e) => panic!("le chargeur a échoué : {e}"),
+            }
+        }
+        faites += arrivees.len();
+        o.integrer(arrivees).expect("intégration");
+    }
+    faites
 }
