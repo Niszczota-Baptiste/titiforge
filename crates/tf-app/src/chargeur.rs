@@ -31,7 +31,7 @@
 //! chargement en silence. Le fil attrape ce qu'il peut et rend un `Echec`,
 //! puis continue.
 
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender, SyncSender, TryRecvError};
 
 use tf_anvil::Interner;
 use tf_world::coords::{BBox, BlockPos};
@@ -81,10 +81,33 @@ impl Reponse {
     }
 }
 
+/// **Combien de cellules le fil peut avoir d'AVANCE sur l'hôte.**
+///
+/// Le canal des réponses est BORNÉ, et c'est la correction d'un défaut que
+/// seul le pilote pouvait montrer : le fil lit une région d'un coup et émet
+/// ses mille cellules, quand l'hôte n'en intègre que deux par image. Mesuré
+/// sur un vol de soixante chunks — 240 images, une demande tous les quatre —
+/// l'hôte recevait encore des cellules **300 images après s'être arrêté**, et
+/// les sections décodées s'empilaient dans le canal, hors de tout budget :
+/// la fenêtre de résidence ne compte que ce qui est POSÉ.
+///
+/// Borné, le fil attend quand l'hôte est en retard. C'est exactement ce qu'on
+/// veut : il n'a rien de mieux à faire, et ce qu'il aurait décodé en avance
+/// serait de toute façon périmé au premier mouvement de caméra.
+///
+/// 64 cellules de bâti font une douzaine de mégaoctets en attente — le même
+/// ordre qu'une image de travail, et trente images d'avance à deux cellules
+/// par image.
+const AVANCE_MAX: usize = 64;
+
 /// La poignée côté hôte.
 pub struct Chargeur {
     vers: Sender<Commande>,
-    depuis: Receiver<Reponse>,
+    /// **Une `Option` pour pouvoir la LÂCHER.** Le canal étant borné, le fil
+    /// peut être bloqué dans un `send` ; le joindre sans rien faire serait
+    /// alors un interblocage. Lâcher le récepteur fait échouer son `send`,
+    /// donc sortir sa boucle — déterministe, sans sondage ni délai.
+    depuis: Option<Receiver<Reponse>>,
     /// Cellules demandées dont la réponse n'est pas revenue.
     en_vol: usize,
     vivant: bool,
@@ -103,14 +126,16 @@ impl Chargeur {
         S: RegionSource + Send + Sync + 'static,
     {
         let (vers, commandes) = channel::<Commande>();
-        let (reponses, depuis) = channel::<Reponse>();
+        // BORNÉ : voir `AVANCE_MAX`. Un canal sans borne laisse le fil
+        // décoder des gigaoctets que l'hôte ne prendra jamais.
+        let (reponses, depuis) = std::sync::mpsc::sync_channel::<Reponse>(AVANCE_MAX);
         let fil = std::thread::Builder::new()
             .name("chargeur".into())
             .spawn(move || travailler(&*source, dim, commandes, reponses))
             .expect("le fil du chargeur doit démarrer");
         Chargeur {
             vers,
-            depuis,
+            depuis: Some(depuis),
             en_vol: 0,
             vivant: true,
             fil: Some(fil),
@@ -157,11 +182,14 @@ impl Chargeur {
     /// « tout ce qui est là ».
     pub fn recevoir(&mut self, budget: usize) -> Vec<Reponse> {
         let mut out = Vec::new();
+        let Some(depuis) = self.depuis.as_ref() else {
+            return out;
+        };
         loop {
             if budget > 0 && out.len() >= budget {
                 break;
             }
-            match self.depuis.try_recv() {
+            match depuis.try_recv() {
                 Ok(r) => {
                     self.en_vol = self.en_vol.saturating_sub(1);
                     out.push(r);
@@ -196,6 +224,12 @@ impl Chargeur {
     pub fn arreter(&mut self) {
         let _ = self.vers.send(Commande::Arreter);
         self.vivant = false;
+        // **On LÂCHE le récepteur avant de joindre.** Le canal des réponses
+        // est borné (`AVANCE_MAX`) : le fil peut être bloqué dans un `send`
+        // que plus personne ne viendra lire, et le joindre en l'état serait un
+        // interblocage — l'application ne se fermerait plus. Sans récepteur,
+        // son `send` échoue, `servir` rend faux, et la boucle sort.
+        self.depuis = None;
         if let Some(f) = self.fil.take() {
             let _ = f.join();
         }
@@ -213,7 +247,7 @@ fn travailler<S: RegionSource + ?Sized>(
     source: &S,
     dim: Dimension,
     commandes: Receiver<Commande>,
-    reponses: Sender<Reponse>,
+    reponses: SyncSender<Reponse>,
 ) {
     let mut file: Vec<Lot> = Vec::new();
     loop {
@@ -257,7 +291,7 @@ fn servir<S: RegionSource + ?Sized>(
     source: &S,
     dim: &Dimension,
     lot: &Lot,
-    reponses: &Sender<Reponse>,
+    reponses: &SyncSender<Reponse>,
 ) -> bool {
     // L'emprise qui couvre toutes les cellules du lot : une seule lecture du
     // `.mca`, et c'est tout l'intérêt du groupement.

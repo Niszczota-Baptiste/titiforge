@@ -7,81 +7,19 @@
 //! nulle part ailleurs : qu'il ne fait JAMAIS attendre l'hôte, et qu'il ne lit
 //! un `.mca` qu'UNE fois.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod commun;
+
+use commun::monde;
 use tf_app::chargeur::{Chargeur, Reponse};
-use tf_world::coords::{BlockPos, RegionPos};
+use tf_world::coords::BlockPos;
 use tf_world::demande::{par_region, voulues, Lot};
-use tf_world::source::{Dimension, Folder, Overview, RegionSource, Result as ResSource};
-use tf_world::{MemorySource, Niveau};
+use tf_world::source::Dimension;
+use tf_world::Niveau;
 
 const HAUTEUR: (i32, i32) = (-64, 319);
 const EST: [f32; 3] = [1.0, 0.0, 0.0];
-
-/// Une source qui COMPTE ses lectures.
-///
-/// C'est la seule façon de vérifier la conclusion qui a décidé l'unité de
-/// lecture : un chunk demandé seul coûte × 10 d'un chunk amorti, parce que le
-/// `.mca` est relu à chaque appel. Un test qui chronomètre dirait la même
-/// chose en moins sûr — un compteur ne dépend pas de la charge de la machine.
-struct Comptee {
-    dessous: MemorySource,
-    lectures: AtomicUsize,
-}
-
-impl Comptee {
-    fn neuve() -> Comptee {
-        Comptee {
-            dessous: MemorySource::new(),
-            lectures: AtomicUsize::new(0),
-        }
-    }
-    fn lectures(&self) -> usize {
-        self.lectures.load(Ordering::Relaxed)
-    }
-}
-
-impl RegionSource for Comptee {
-    fn dimensions(&self) -> ResSource<Vec<Dimension>> {
-        self.dessous.dimensions()
-    }
-    fn overview(&self, d: &Dimension, f: Folder) -> ResSource<Overview> {
-        self.dessous.overview(d, f)
-    }
-    fn read_region(&self, d: &Dimension, f: Folder, p: RegionPos) -> ResSource<Vec<u8>> {
-        self.lectures.fetch_add(1, Ordering::Relaxed);
-        self.dessous.read_region(d, f, p)
-    }
-    fn read_external(&self, d: &Dimension, f: Folder, n: &str) -> ResSource<Vec<u8>> {
-        self.dessous.read_external(d, f, n)
-    }
-    fn external_names(&self, d: &Dimension, f: Folder) -> ResSource<Vec<String>> {
-        self.dessous.external_names(d, f)
-    }
-}
-
-/// Une source de `cote × cote` régions de terrain, avec biomes.
-fn monde(cote: i32, chunks: u32) -> Arc<Comptee> {
-    let s = Comptee::neuve();
-    let t = tf_bench::Terrain {
-        side: chunks,
-        biomes: true,
-        ..Default::default()
-    };
-    for x in 0..cote {
-        for z in 0..cote {
-            s.dessous.put_region(
-                Dimension::Overworld,
-                Folder::Region,
-                RegionPos { x, z },
-                tf_bench::region_en(&t, x, z),
-            );
-        }
-    }
-    Arc::new(s)
-}
 
 /// La demande d'une caméra placée à `oeil`, groupée en lectures.
 fn demande(oeil: BlockPos, rayon: u32) -> Vec<Lot> {

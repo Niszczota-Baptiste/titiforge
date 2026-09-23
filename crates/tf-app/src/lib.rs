@@ -8,6 +8,10 @@
 //! - `etat` : ce que l'interface montre et modifie. Pur, testable.
 //! - `interface` : le dessin egui. Il LIT l'état, il ne décide rien.
 //! - `scene` : le montage du monde vers l'arène GPU.
+//! - `chargeur` : le fil qui lit les régions, une réponse par cellule.
+//! - `pilote` : la boucle caméra → demande → fil → scène. Dans la
+//!   bibliothèque et non dans la fenêtre, pour qu'un test puisse faire VOLER
+//!   une caméra et vérifier que le monde arrive.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +19,7 @@ pub mod chargeur;
 pub mod etat;
 pub mod interface;
 pub mod moteur;
+pub mod pilote;
 pub mod scene;
 
 pub use etat::{Etat, Quadrillage, ResumeSelection, SousLeReticule};

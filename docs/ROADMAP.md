@@ -488,9 +488,47 @@ toujours, invisibles puisque l'affichage, lui, aurait été juste. Les adresses
 se déduisent maintenant de la GÉOMÉTRIE de la cellule, ce qui supprime aussi
 un balayage en O(scène × cellules).
 
-**Ce qui reste** : la coque ne pilote toujours pas la demande — la zone reste
-celle de `--zone`, la caméra ne déclenche aucun chargement — et l'arène GPU
-par tranches, qui est la dernière dépense en O(scène) du chemin d'édition.
+✅ **La CAMÉRA pilote** (`tf-app/src/pilote.rs`, `--rayon`). La boucle
+caméra → demande → fil → scène vit dans la BIBLIOTHÈQUE et pas dans le
+gestionnaire d'image : écrite dans la fenêtre, elle aurait été derrière un
+serveur graphique, donc jamais vérifiée. On lui donne un œil et un regard, ce
+qui permet de faire VOLER une caméra dans un test.
+
+Elle a immédiatement montré trois défauts qu'aucune des trois pièces ne
+pouvait voir seule, et qui étaient tous silencieux :
+
+1. **Redemander à chaque image** remplace la file du chargeur soixante fois
+   par seconde, donc annule en boucle la région qu'il est en train de lire.
+   `Suivi` (pur, sept tests) ne redemande qu'en FRANCHISSANT une frontière de
+   cellule, ou quand le fil est au repos — ce second cas étant ce qui rattrape
+   une cellule évincée alors qu'elle est encore dans le champ. Mesuré : **une
+   seule lecture de `.mca` pour 326 images**.
+2. **Un budget plus petit que le champ de vision fait tourner la machine à
+   vide** : le LRU évince une cellule qu'on regarde, la demande la redemande,
+   elle en évince une autre, sans fin. Mesuré **180 évictions en 100 images**
+   sur une scène qui n'avance pas d'un bloc — la fenêtre répond, le fil
+   tourne, le disque chauffe, et rien ne le dit. Ce que la caméra regarde est
+   désormais ÉPINGLÉ : le LRU ne prend que dans la traînée, et si le champ
+   seul ne tient pas, on dépasse le budget en le DISANT (`deborde`). Après :
+   zéro éviction en 100 images. Corollaire mesuré par mutation : le champ
+   épinglé se recalcule à chaque image, pas seulement quand une demande part —
+   sinon voler au-dessus d'un terrain déjà chargé ne l'actualise jamais et la
+   mémoire ne redescend plus.
+3. **Le canal des réponses n'était pas borné.** Le fil lit une région d'un
+   coup et émet ses cellules ; l'hôte n'en intègre que deux par image. Mesuré
+   sur un vol de soixante chunks, il recevait encore des cellules **300 images
+   après s'être arrêté**, et les sections décodées s'empilaient hors de tout
+   budget — la fenêtre de résidence ne compte que ce qui est POSÉ. Le canal
+   est borné à 64 cellules d'avance : le fil attend quand l'hôte est en
+   retard, ce qu'il aurait décodé de plus étant de toute façon périmé au
+   premier mouvement de caméra.
+
+Six tests de vol, six mutations, zéro survivant.
+
+**Ce qui reste** : l'arène GPU par SECTION, dernière dépense en O(scène) du
+chemin d'édition (27 ms pour recopier 276 k instances) — c'est elle qui fixe
+aujourd'hui les deux cellules par image, et la même pièce permettrait de
+lâcher un maillage sans recopier le reste.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.

@@ -479,6 +479,38 @@ pub struct Ouvert {
     /// hôte qui appelle à chaque image converge même quand plus rien
     /// n'arrive.
     a_degager: Vec<tf_world::Cellule>,
+    /// **Les cellules que la caméra REGARDE**, protégées de l'éviction.
+    ///
+    /// Sans elles, un budget plus petit que le champ de vision fait tourner la
+    /// machine à vide pour toujours : le LRU évince une cellule que la caméra
+    /// veut encore, la demande la redemande aussitôt, elle arrive, elle en
+    /// évince une autre du champ, et ainsi de suite. Mesuré sur un budget à la
+    /// moitié du disque : **180 évictions en 100 images**, sans fin, pour une
+    /// scène qui n'avance pas d'un bloc — et rien ne le dit, la fenêtre répond
+    /// et le monde a l'air de charger.
+    ///
+    /// Épinglées, elles ne peuvent plus être évincées : le LRU ne prend que
+    /// dans la TRAÎNÉE, ce qui est exactement ce qu'on veut lâcher. Et si le
+    /// champ à lui seul dépasse le budget, on le DÉPASSE en le disant
+    /// (`deborde`) plutôt que de tourner en rond — « le plafond est une CIBLE,
+    /// pas une limite dure », et montrer ce que l'utilisateur regarde vaut
+    /// mieux que de ne rien montrer.
+    ///
+    /// L'ensemble qu'on a soi-même épinglé, et pas un compteur remis à zéro :
+    /// les épingles se COMPTENT, et une opération en cours peut tenir le même
+    /// chunk.
+    protegees: std::collections::HashSet<Cle>,
+    /// Le budget est-il dépassé faute de candidat évinçable ?
+    deborde: bool,
+    /// **Combien de cellules ont été RETIRÉES de la scène depuis l'ouverture.**
+    ///
+    /// Un compteur, comme `rechargements` et `sections_remaillees`. Et
+    /// distinct de `Residency::evictions` : évincer, c'est sortir de la
+    /// comptabilité ; DÉGAGER, c'est retirer les sections de la grille et
+    /// refaire le maillage. Les deux sont séparés d'un appel (voir
+    /// `a_degager`), et c'est le second qui change ce qui est à l'écran —
+    /// donc le seul qui dise à l'hôte qu'il doit regarnir son GPU.
+    degagees: usize,
 }
 
 impl Ouvert {
@@ -502,6 +534,9 @@ impl Ouvert {
                 // effacerait le seul contenu qu'il y ait à montrer.
                 residence: tf_world::Residency::new(BUDGET_RESIDENCE),
                 a_degager: Vec::new(),
+                protegees: std::collections::HashSet::new(),
+                deborde: false,
+                degagees: 0,
             });
         };
         // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
@@ -538,6 +573,9 @@ impl Ouvert {
             sections_remaillees: 0,
             residence: tf_world::Residency::new(BUDGET_RESIDENCE),
             a_degager: Vec::new(),
+            protegees: std::collections::HashSet::new(),
+            deborde: false,
+            degagees: 0,
         };
         o.inscrire_la_zone();
         Ok(o)
@@ -566,9 +604,59 @@ impl Ouvert {
         self.residence.budget()
     }
 
+    /// **Protège de l'éviction ce que la caméra regarde**, et rend le reste
+    /// évinçable.
+    ///
+    /// À appeler avec la demande du moment. Une cellule pas encore résidente
+    /// est notée quand même : elle sera épinglée à son arrivée, sinon une
+    /// cellule chargée au dernier moment se ferait évincer par la suivante
+    /// alors qu'elle est en plein champ.
+    pub fn proteger(&mut self, voulues: &[tf_world::Cellule]) {
+        let neuf: std::collections::HashSet<Cle> =
+            voulues.iter().map(|c| (c.niveau, c.x, c.z)).collect();
+        // On ne retire QUE ses propres épingles : elles se comptent, et une
+        // opération en cours peut tenir le même chunk.
+        for k in self.protegees.difference(&neuf) {
+            self.residence.unpin(k);
+        }
+        for k in neuf.difference(&self.protegees) {
+            self.residence.pin(k);
+        }
+        self.protegees = neuf;
+    }
+
+    /// **Le budget est-il dépassé faute de candidat évinçable ?**
+    ///
+    /// Vrai quand tout ce qui reste est protégé : le champ de vision à lui
+    /// seul ne tient pas dans le budget. L'hôte doit le DIRE — réduire la
+    /// distance d'affichage ou relever le plafond — plutôt que de laisser
+    /// l'utilisateur deviner pourquoi sa machine rame.
+    pub fn deborde(&self) -> bool {
+        self.deborde
+    }
+
+    /// Combien de cellules ont été retirées de la scène depuis l'ouverture.
+    pub fn degagees(&self) -> usize {
+        self.degagees
+    }
+
     /// Combien de cellules sont résidentes.
     pub fn residentes(&self) -> usize {
         self.residence.len()
+    }
+
+    /// **Les cellules résidentes**, de la plus récemment vue à la plus
+    /// froide, pour les croiser à la demande de la caméra (`Suivi`).
+    ///
+    /// Les cellules et non leurs clés : `planifier` compare des cellules, et
+    /// reconstruire une `Cellule` depuis une clé demanderait de refabriquer
+    /// sa boîte — donc de réécrire, ailleurs, la règle qui la produit.
+    pub fn cellules_residentes(&self) -> Vec<tf_world::Cellule> {
+        self.residence
+            .keys_mru()
+            .into_iter()
+            .filter_map(|k| self.residence.peek(&k).map(|r| r.cellule.clone()))
+            .collect()
     }
 
     /// **Combien de cellules évincées attendent encore d'être retirées.**
@@ -751,8 +839,17 @@ impl Ouvert {
                 },
                 tf_world::State::Clean,
             );
+            self.deborde = ev.over_budget;
             self.a_degager
                 .extend(ev.items.into_iter().map(|(_, r)| r.cellule));
+            // **Une cellule en plein champ arrive épinglée.** Sans ça, la
+            // dernière chargée serait évincée par la suivante avant même
+            // d'être dessinée, et la demande la redemanderait aussitôt.
+            // `insert` ne touche pas aux épingles d'une clé déjà là, d'où la
+            // garde : ré-épingler doublerait le compte à chaque rechargement.
+            if self.protegees.contains(&k) && self.residence.pins(&k) == 0 {
+                self.residence.pin(&k);
+            }
         }
     }
 
@@ -916,9 +1013,11 @@ impl Ouvert {
         // qui sont justes — la correction, elle, n'a lieu qu'après le
         // maillage.
         let coupes = self.residence.trim();
+        self.deborde = coupes.over_budget;
         self.a_degager
             .extend(coupes.items.into_iter().map(|(_, r)| r.cellule));
         for c in std::mem::take(&mut self.a_degager) {
+            self.degagees += 1;
             for a in adresses_de(&c) {
                 self.monde.grille.retirer(a);
             }
@@ -1153,6 +1252,11 @@ impl Ouvert {
         let budget = self.residence.budget();
         self.residence = tf_world::Residency::new(budget);
         self.a_degager.clear();
+        // Les épingles portaient sur des cellules qui n'existent plus. Les
+        // garder ferait épingler, à la prochaine arrivée, des clés que la
+        // caméra ne demande peut-être plus.
+        self.protegees.clear();
+        self.deborde = false;
         self.inscrire_la_zone();
         Ok(())
     }

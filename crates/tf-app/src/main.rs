@@ -22,6 +22,7 @@ fn main() {
         None => {
             eprintln!(
                 "usage : titiforge <assets> [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
+                 \x20       [--rayon <cellules>]\n\
                  \x20       titiforge <assets> --capture sortie.png [--taille 1400x900]\n\n\
                  <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
                  Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
@@ -35,6 +36,12 @@ fn main() {
     let mut capture: Option<String> = None;
     let mut mode = tf_render::controles::Mode::Edition;
     let (mut larg, mut haut) = (1400u32, 900u32);
+    // **La distance d'affichage, en CHUNKS.** Un disque de rayon 8 porte 201
+    // cellules ; sur du bâti, à 182 ko résidents par chunk, ça fait 37 Mo —
+    // très loin du plafond de résidence, donc c'est la vitesse de chargement
+    // qui décide et non la mémoire. `--zone` reste ce qu'on montre à
+    // l'ouverture ; le rayon, ce que la caméra fait venir ensuite.
+    let mut rayon = 8u32;
     while let Some(o) = args.next() {
         match o.as_str() {
             "--monde" => monde = args.next(),
@@ -61,6 +68,11 @@ fn main() {
                         v[0].max(v[2]),
                         v[1].max(v[3]),
                     ];
+                }
+            }
+            "--rayon" => {
+                if let Some(r) = args.next().and_then(|r| r.parse::<u32>().ok()) {
+                    rayon = r.min(tf_world::RAYON_MAX);
                 }
             }
             "--taille" => {
@@ -97,7 +109,7 @@ fn main() {
 
     match capture {
         Some(png) => capturer(&ouvert.monde, &png, larg, haut, mode, ouvert.editable()),
-        None => fenetre(ouvert, larg, haut),
+        None => fenetre(ouvert, larg, haut, rayon),
     }
 }
 
@@ -318,14 +330,14 @@ fn ecrire_png(chemin: &str, larg: u32, haut: u32, pixels: &[u8]) {
 }
 
 #[cfg(not(feature = "fenetre"))]
-fn fenetre(_m: scene::Ouvert, _l: u32, _h: u32) {
+fn fenetre(_m: scene::Ouvert, _l: u32, _h: u32, _r: u32) {
     eprintln!("compilé sans la fenêtre — utiliser --capture");
     std::process::exit(2);
 }
 
 #[cfg(feature = "fenetre")]
-fn fenetre(o: scene::Ouvert, larg: u32, haut: u32) {
-    crate::coque::lancer(o, larg, haut);
+fn fenetre(o: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
+    crate::coque::lancer(o, larg, haut, rayon);
 }
 
 #[cfg(feature = "fenetre")]

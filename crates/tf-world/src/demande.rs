@@ -325,3 +325,105 @@ pub fn par_region(voulues: &[Voulue]) -> Vec<Lot> {
     lots.sort_by(|a, b| a.urgence().total_cmp(&b.urgence()));
     lots
 }
+
+/// **Ce qui décide QUAND redemander**, entre la caméra et le chargeur.
+///
+/// Sans lui, chaque hôte réécrirait la même règle — et se tromperait au même
+/// endroit : redemander à chaque image ferait REMPLACER la file du chargeur
+/// soixante fois par seconde, donc annuler en boucle la région qu'il est en
+/// train de lire. Le monde ne se chargerait jamais, et rien ne le dirait : la
+/// machine a l'air occupée.
+///
+/// La règle tient en deux lignes, et elles viennent de ce que `voulues` décide
+/// déjà :
+///
+/// 1. **L'ensemble demandé ne change qu'en FRANCHISSANT une frontière de
+///    cellule** — l'appartenance se décide sur la grille, pas sur la position
+///    réelle. Marcher à l'intérieur d'une cellule ne change rien à ce qu'on
+///    veut ; seul l'ORDRE dépend du regard, et réordonner une file pour un
+///    coup d'œil coûterait plus que de la laisser.
+/// 2. **Un chargeur au repos peut être réinterrogé sans rien coûter.** S'il
+///    ne manque rien, `planifier` rend une liste vide et l'on n'envoie pas.
+///    C'est ce qui rattrape une cellule que la fenêtre de résidence a
+///    évincée alors qu'elle est encore dans le champ — sans ça, elle
+///    resterait un trou jusqu'au prochain franchissement.
+///
+/// Et rien de plus : les cellules EN VOL ne sont pas résidentes, donc un
+/// franchissement pendant une lecture les redemande. C'est voulu — le
+/// chargeur est fait pour qu'une demande neuve remplace la périmée — et c'est
+/// borné, puisqu'on ne recroise une frontière que tous les seize blocs.
+#[derive(Debug, Clone)]
+pub struct Suivi {
+    niveau: Niveau,
+    rayon: u32,
+    /// Bornes de hauteur du monde, telles qu'on les lit.
+    y: (i32, i32),
+    /// La cellule où l'œil était à la dernière demande calculée.
+    derniere: Option<(i32, i32)>,
+}
+
+impl Suivi {
+    pub fn neuf(niveau: Niveau, rayon: u32, y: (i32, i32)) -> Suivi {
+        Suivi {
+            niveau,
+            rayon,
+            y,
+            derniere: None,
+        }
+    }
+
+    pub fn niveau(&self) -> Niveau {
+        self.niveau
+    }
+
+    pub fn rayon(&self) -> u32 {
+        self.rayon
+    }
+
+    /// Les bornes de hauteur avec lesquelles il demande.
+    pub fn hauteur(&self) -> (i32, i32) {
+        self.y
+    }
+
+    /// La cellule de la dernière demande calculée. `None` avant la première.
+    pub fn derniere(&self) -> Option<(i32, i32)> {
+        self.derniere
+    }
+
+    /// Change la distance d'affichage. La prochaine image recalcule, quelle
+    /// que soit la position : sinon un réglage tiré ne prendrait effet qu'au
+    /// prochain franchissement, ce qui se lit « le curseur ne fait rien ».
+    pub fn rayon_voulu(&mut self, rayon: u32) {
+        if rayon != self.rayon {
+            self.rayon = rayon;
+            self.derniere = None;
+        }
+    }
+
+    /// **Ce qu'il faut demander au chargeur**, ou `None` s'il n'y a rien à
+    /// changer.
+    ///
+    /// `occupe` est l'état du chargeur : tant qu'il travaille, on ne le
+    /// dérange que si l'on a franchi une frontière.
+    pub fn suivre(
+        &mut self,
+        oeil: BlockPos,
+        regard: [f32; 3],
+        occupe: bool,
+        residentes: &[Cellule],
+    ) -> Option<Vec<Lot>> {
+        let ici = self.niveau.cellule_de(oeil);
+        if self.derniere == Some(ici) && occupe {
+            return None;
+        }
+        let plan = planifier(
+            voulues(oeil, regard, self.rayon, self.niveau, self.y),
+            residentes,
+        );
+        self.derniere = Some(ici);
+        if plan.charger.is_empty() {
+            return None;
+        }
+        Some(par_region(&plan.charger))
+    }
+}

@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (826 tests aujourd’hui)
+cargo test            # tous les crates (839 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -386,7 +386,11 @@ crates/
                  COMPTABLE, pas de magasin — une cellule pèse ses sections,
                  son `Vec<Quad>` et sa copie packée, et ce que la fenêtre
                  compte est ce que la scène porte, à l'octet près
-               · demande pilotée par la caméra et composants à écrire.
+               · CAMÉRA QUI PILOTE ✅ (`pilote.rs`, `--rayon`) : demande,
+                 charge, pose et lâche à chaque image. Dans la bibliothèque
+                 et non dans la fenêtre, pour qu'un test fasse VOLER une
+                 caméra sans serveur graphique
+               · composants et saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -1744,3 +1748,43 @@ propres à ce dépôt.
   aurait été juste. Les adresses se déduisent de la GÉOMÉTRIE de la cellule,
   ce qui supprime au passage un balayage en O(scène × cellules) : la cellule
   sait ce qu'elle couvre, la grille n'a pas à le chercher.
+- **Une boucle écrite dans un gestionnaire d'image n'est jamais vérifiée.** La
+  jonction caméra → demande → fil → scène aurait naturellement vécu dans le
+  `RedrawRequested` de la fenêtre : derrière un serveur graphique, donc jamais
+  en intégration continue. Mise dans la bibliothèque (`tf-app/src/pilote.rs`),
+  elle prend un œil et un regard — pas une caméra — et un test peut donc faire
+  VOLER une caméra. Elle a trouvé trois défauts le jour même, tous silencieux,
+  et qu'aucune des trois pièces ne pouvait voir seule (ci-dessous).
+- **Redemander à chaque image annule le chargement en cours.** Le fil remplace
+  sa file à chaque demande — c'est voulu, une demande neuve chasse la périmée —
+  donc soixante demandes par seconde annulent soixante fois la région qu'il
+  lit. Le monde ne se charge jamais, et le symptôme est le PIRE possible : la
+  fenêtre répond et la machine a l'air occupée. La règle est dans `Suivi`
+  (pur) : on ne redemande qu'en FRANCHISSANT une frontière de cellule, ou
+  quand le fil est au repos. Mesuré par un COMPTEUR de lectures de `.mca` —
+  une seule pour 326 images — et pas par un chronomètre.
+- **Un budget plus petit que le champ de vision fait tourner la machine à
+  vide.** Le LRU évince une cellule que la caméra REGARDE encore, la demande
+  la redemande aussitôt, elle arrive, elle en évince une autre du champ.
+  Mesuré : 180 évictions en 100 images sur une scène qui n'avance pas d'un
+  bloc, sans fin. Ce que la caméra regarde est donc épinglé — le LRU ne prend
+  que dans la traînée — et si le champ seul ne tient pas, on DÉPASSE le
+  budget en le disant (`Ouvert::deborde`) plutôt que de tourner en rond : « le
+  plafond est une CIBLE, pas une limite dure ». Corollaire attrapé par
+  mutation : le champ épinglé se recalcule à CHAQUE image et pas seulement
+  quand une demande part, sinon voler au-dessus d'un terrain déjà chargé ne
+  l'actualise jamais et la mémoire ne redescend plus — un symptôme qui se lit
+  « elle ne rend rien quand je ne charge pas », c'est-à-dire l'inverse de ce à
+  quoi on pense.
+- **Un canal de travail sans borne est une fuite de mémoire.** Le fil lit une
+  région d'un coup et émet ses mille cellules ; l'hôte n'en intègre que deux
+  par image, parce que la recopie d'arène est en O(scène). Mesuré sur un vol
+  de soixante chunks : l'hôte recevait encore des cellules 300 images après
+  s'être ARRÊTÉ, et les sections décodées s'empilaient dans le canal — hors de
+  tout budget, puisque la fenêtre de résidence ne compte que ce qui est POSÉ.
+  Le canal est borné (`sync_channel`) : le fil attend quand l'hôte est en
+  retard, ce qui est exactement ce qu'on veut — ce qu'il aurait décodé en
+  avance serait périmé au premier mouvement de caméra. Corollaire : un canal
+  borné rend l'arrêt délicat, le fil pouvant être bloqué dans un `send`. On
+  LÂCHE le récepteur avant de joindre, ce qui fait échouer son envoi ; sonder
+  avec un délai aurait marché « presque toujours ».

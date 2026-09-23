@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tf_app::etat::Etat;
 use tf_app::etat::Outil;
 use tf_app::moteur::Moteur;
+use tf_app::pilote::{Pilote, CELLULES_PAR_IMAGE};
 use tf_app::{interface, scene};
 use tf_render::controles::Mode;
 use tf_render::{Appareil, AtlasGpu, Scene};
@@ -31,7 +32,10 @@ const SENSIBILITE: f32 = 0.0035;
 /// quand on est contre.
 const PAS_AVANT: f32 = 2.0;
 
-pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32) {
+/// Les bornes de hauteur du monde, telles que la scène les lit.
+const HAUTEUR: (i32, i32) = (-64, 319);
+
+pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
     let boucle = match EventLoop::new() {
         Ok(b) => b,
         Err(e) => {
@@ -52,10 +56,18 @@ pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32) {
             Some(chemin),
         )
     });
+    let pilote = Pilote::pour(
+        &ouvert,
+        tf_world::Dimension::Overworld,
+        tf_world::Niveau::Chunk,
+        rayon,
+        HAUTEUR,
+    );
     let mut app = Coque {
         ouvert,
         moteur,
         remailler: None,
+        pilote,
         taille: (larg, haut),
         fenetre: None,
         gpu: None,
@@ -97,6 +109,9 @@ struct Coque {
     /// elles s'UNISSENT — remailler trois fois coûterait trois fois pour le
     /// même résultat.
     remailler: Option<tf_world::BBox>,
+    /// Caméra → demande → fil → scène. Vit dans la bibliothèque, pour qu'un
+    /// test puisse faire voler une caméra sans serveur graphique.
+    pilote: Pilote,
     taille: (u32, u32),
     fenetre: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -302,6 +317,24 @@ impl ApplicationHandler for Coque {
                         g.etat.message = format!("remaillage : {e}");
                     }
                 }
+                // **Le streaming vient en DERNIER dans l'image.** Ce qu'il
+                // pose ne sera vu qu'à l'image suivante, et c'est le bon
+                // ordre : une édition que l'utilisateur vient de faire passe
+                // avant des chunks qu'il n'a pas demandés.
+                let (cam, _) = vue_courante(g);
+                let (oeil, regard) = ou_regarde(&cam);
+                match self
+                    .pilote
+                    .image(&mut self.ouvert, oeil, regard, CELLULES_PAR_IMAGE)
+                {
+                    Err(e) => g.etat.message = format!("chargement : {e}"),
+                    Ok(f) if f.a_change() => {
+                        if let Err(e) = regarnir(g, &self.ouvert.monde) {
+                            g.etat.message = format!("chargement : {e}");
+                        }
+                    }
+                    Ok(_) => {}
+                }
             }
             _ => {}
         }
@@ -341,6 +374,25 @@ fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> Option<tf_world::BBox> {
         }
     }
     bouge
+}
+
+/// D'où l'on regarde, et vers où — les deux seules choses que le pilote a
+/// besoin de savoir de la caméra.
+///
+/// Le pilote ne connaît pas `tf_render` : lui passer une `Camera` lui ferait
+/// connaître le rendu pour deux vecteurs, et le rendrait intestable sans lui.
+fn ou_regarde(cam: &tf_render::Camera) -> (tf_world::coords::BlockPos, [f32; 3]) {
+    let oeil = tf_world::coords::BlockPos::new(
+        cam.oeil[0].floor() as i32,
+        cam.oeil[1].floor() as i32,
+        cam.oeil[2].floor() as i32,
+    );
+    let regard = [
+        cam.cible[0] - cam.oeil[0],
+        cam.cible[1] - cam.oeil[1],
+        cam.cible[2] - cam.oeil[2],
+    ];
+    (oeil, regard)
 }
 
 /// Envoie ce que l'interface a demandé pendant l'image.

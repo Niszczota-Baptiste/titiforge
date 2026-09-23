@@ -6,7 +6,7 @@
 //! n'ira jamais au bout de la liste. L'ORDRE est la fonctionnalité.
 
 use tf_world::coords::BlockPos;
-use tf_world::demande::{par_region, planifier, voulues, Voulue};
+use tf_world::demande::{par_region, planifier, voulues, Suivi, Voulue};
 use tf_world::{Cellule, Niveau, RAYON_MAX};
 
 /// Regard vers l'est (+X), le repère Minecraft du dépôt.
@@ -456,4 +456,167 @@ fn une_demande_en_desordre_ressort_groupee_dans_le_bon_ordre() {
     for p in par_region(&envers).windows(2) {
         assert!(p[0].urgence() <= p[1].urgence());
     }
+}
+
+// ── quand redemander ────────────────────────────────────────────────────────
+
+/// Les cellules que `voulues` rendrait, sous la forme d'une liste de
+/// résidentes — de quoi simuler « tout est déjà là ».
+fn toutes(oeil: BlockPos, rayon: u32) -> Vec<Cellule> {
+    au_chunk(oeil, EST, rayon)
+        .into_iter()
+        .map(|v| v.cellule)
+        .collect()
+}
+
+fn cellules(lots: &[tf_world::demande::Lot]) -> usize {
+    lots.iter().map(|l| l.cellules.len()).sum()
+}
+
+/// **La première image demande**, forcément : rien n'est résident.
+#[test]
+fn la_premiere_image_demande_tout_le_disque() {
+    let mut s = Suivi::neuf(Niveau::Chunk, 3, HAUTEUR);
+    let lots = s
+        .suivre(BlockPos::new(8, 64, 8), EST, false, &[])
+        .expect("la première image demande");
+    assert_eq!(
+        cellules(&lots),
+        au_chunk(BlockPos::new(8, 64, 8), EST, 3).len()
+    );
+    assert_eq!(s.derniere(), Some((0, 0)));
+}
+
+/// **Marcher DANS une cellule ne redemande rien** tant que le chargeur
+/// travaille.
+///
+/// C'est la règle qui empêche la faute la plus coûteuse : redemander à chaque
+/// image ferait REMPLACER la file du chargeur soixante fois par seconde, donc
+/// annuler en boucle la région qu'il est en train de lire. Le monde ne se
+/// chargerait jamais — et la machine aurait l'air occupée, ce qui est le pire
+/// des symptômes.
+#[test]
+fn marcher_dans_une_cellule_ne_derange_pas_le_chargeur() {
+    let mut s = Suivi::neuf(Niveau::Chunk, 3, HAUTEUR);
+    assert!(s.suivre(BlockPos::new(0, 64, 0), EST, false, &[]).is_some());
+    // Les quinze autres blocs du chunk 0, et un coup d'œil ailleurs.
+    for x in 1..16 {
+        assert!(
+            s.suivre(BlockPos::new(x, 64, 15), [0.0, 0.0, 1.0], true, &[])
+                .is_none(),
+            "bloc {x} : même cellule, chargeur occupé — rien à redemander"
+        );
+    }
+}
+
+/// **Franchir une frontière redemande**, chargeur occupé ou non. Une demande
+/// neuve remplace la périmée : c'est ce pour quoi le chargeur est fait.
+#[test]
+fn franchir_une_frontiere_redemande() {
+    let mut s = Suivi::neuf(Niveau::Chunk, 3, HAUTEUR);
+    assert!(s.suivre(BlockPos::new(8, 64, 8), EST, false, &[]).is_some());
+    assert!(s.suivre(BlockPos::new(15, 64, 8), EST, true, &[]).is_none());
+    assert!(
+        s.suivre(BlockPos::new(16, 64, 8), EST, true, &[]).is_some(),
+        "le bloc 16 est dans le chunk 1 : c'est un franchissement"
+    );
+    assert_eq!(s.derniere(), Some((1, 0)));
+}
+
+/// **Le bloc −1 est dans la cellule −1.** Une division qui tronque vers zéro
+/// ferait de −15..15 une seule cellule : on traverserait l'origine sans
+/// jamais redemander, et le monde du côté négatif ne se chargerait pas.
+#[test]
+fn le_franchissement_se_decide_en_division_plancher() {
+    let mut s = Suivi::neuf(Niveau::Chunk, 2, HAUTEUR);
+    assert!(s.suivre(BlockPos::new(0, 64, 0), EST, false, &[]).is_some());
+    assert_eq!(s.derniere(), Some((0, 0)));
+    assert!(
+        s.suivre(BlockPos::new(-1, 64, 0), EST, true, &[]).is_some(),
+        "−1 est dans le chunk −1, pas le 0"
+    );
+    assert_eq!(s.derniere(), Some((-1, 0)));
+}
+
+/// **Tout résident, rien à demander** — et on ne dérange pas le chargeur pour
+/// le lui dire.
+#[test]
+fn rien_a_demander_quand_tout_est_resident() {
+    let oeil = BlockPos::new(8, 64, 8);
+    let mut s = Suivi::neuf(Niveau::Chunk, 3, HAUTEUR);
+    assert!(s.suivre(oeil, EST, false, &toutes(oeil, 3)).is_none());
+    assert_eq!(
+        s.derniere(),
+        Some((0, 0)),
+        "la position est tout de même prise en compte : on l'a examinée"
+    );
+}
+
+/// **Un chargeur au repos est réinterrogé, et c'est ce qui bouche les trous.**
+///
+/// Une cellule que la fenêtre de résidence a évincée alors qu'elle est encore
+/// dans le champ resterait un trou jusqu'au prochain franchissement — c'est-
+/// à-dire pour toujours si l'on ne bouge plus. Sans cette règle, le défaut ne
+/// se voit que quand la mémoire est serrée, donc chez l'utilisateur et pas
+/// chez nous.
+#[test]
+fn un_chargeur_au_repos_redemande_ce_qui_manque() {
+    let oeil = BlockPos::new(8, 64, 8);
+    let mut s = Suivi::neuf(Niveau::Chunk, 3, HAUTEUR);
+    let mut residentes = toutes(oeil, 3);
+    assert!(s.suivre(oeil, EST, false, &residentes).is_none());
+
+    // La fenêtre évince une cellule du champ. On n'a pas bougé d'un bloc.
+    let perdue = residentes.pop().expect("le disque n'est pas vide");
+    let lots = s
+        .suivre(oeil, EST, false, &residentes)
+        .expect("il manque une cellule : il faut la redemander");
+    assert_eq!(cellules(&lots), 1);
+    assert_eq!(lots[0].cellules[0].cellule, perdue);
+
+    // Mais tant que le chargeur travaille, on le laisse tranquille.
+    assert!(s.suivre(oeil, EST, true, &residentes).is_none());
+}
+
+/// **Changer la distance d'affichage prend effet tout de suite.** Sans la
+/// remise à zéro, le réglage n'agirait qu'au prochain franchissement : le
+/// curseur aurait l'air cassé.
+#[test]
+fn changer_le_rayon_redemande_sans_bouger() {
+    let oeil = BlockPos::new(8, 64, 8);
+    let mut s = Suivi::neuf(Niveau::Chunk, 2, HAUTEUR);
+    let residentes = toutes(oeil, 2);
+    assert!(s.suivre(oeil, EST, false, &residentes).is_none());
+
+    s.rayon_voulu(4);
+    assert_eq!(s.rayon(), 4);
+    let lots = s
+        .suivre(oeil, EST, true, &residentes)
+        .expect("un rayon plus grand demande la couronne qui s'ajoute");
+    assert_eq!(
+        cellules(&lots),
+        au_chunk(oeil, EST, 4).len() - residentes.len()
+    );
+
+    // Le même rayon ne relance rien.
+    s.rayon_voulu(4);
+    assert!(s.suivre(oeil, EST, true, &toutes(oeil, 4)).is_none());
+}
+
+/// Le niveau RÉGION franchit tous les 512 blocs, pas tous les 16 : c'est la
+/// cellule qui décide, jamais une distance en dur.
+#[test]
+fn le_franchissement_suit_le_niveau_demande() {
+    let mut s = Suivi::neuf(Niveau::Region, 1, HAUTEUR);
+    assert!(s.suivre(BlockPos::new(0, 64, 0), EST, false, &[]).is_some());
+    assert!(
+        s.suivre(BlockPos::new(511, 64, 0), EST, true, &[])
+            .is_none(),
+        "511 est encore dans la région 0"
+    );
+    assert!(
+        s.suivre(BlockPos::new(512, 64, 0), EST, true, &[])
+            .is_some(),
+        "512 ouvre la région 1"
+    );
 }
