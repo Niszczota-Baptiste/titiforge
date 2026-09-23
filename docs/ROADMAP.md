@@ -437,9 +437,14 @@ ailleurs : qu'il ne fait jamais attendre l'hôte (fil témoin à attente bornée
 et qu'il ne lit un `.mca` qu'une fois (source qui COMPTE ses lectures, là où
 un chronomètre dépendrait de la machine).
 
-**Ce qui reste** : le BRANCHEMENT — l'hôte doit fusionner les tables d'états
-rendues, poser les sections, mailler et remplacer les tranches, une cellule
-par image — puis le branchement de
+✅ **Le BRANCHEMENT est fait** (`Ouvert::integrer`) : les tables d'états
+rendues sont fusionnées, les sections posées, les tranches remplacées — et la
+scène streamée est identique, quad par quad, à celle qu'un chargement d'un
+bloc donne. Par LOT et non par cellule : la recopie d'arène est en O(scène),
+donc une par une on la paie N fois — mesuré, 4 577 ms contre 826 pour
+197 cellules.
+
+**Ce qui reste** : le branchement de
 `Residency` sur la `Grille` et le `Chantier` — il faut un `Weighed` pour
 chacun, et aucun n'existe —, l'éviction qui retire un maillage de l'arène, et
 l'arène GPU par tranches.

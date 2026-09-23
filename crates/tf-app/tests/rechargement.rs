@@ -186,8 +186,16 @@ fn l_extension_rend_la_meme_scene_qu_un_rechargement() {
 ///
 /// C'est ce qui rend le défaut insidieux : sur la petite zone d'un test il ne
 /// coûte que quelques millisecondes, et chez l'utilisateur qui regarde une
-/// région entière il fige la fenêtre. Le rapport entre deux zones le dit
-/// mieux qu'un chiffre absolu, que la charge de la machine fait dériver.
+/// région entière il fige la fenêtre.
+///
+/// **La propriété se COMPTE, elle ne se chronomètre pas.** Premier jet : un
+/// rapport de TEMPS entre deux tailles de zone, avec un seuil de 3. Il passait
+/// seul (rapport 2,5) et TOMBAIT quand la suite entière tournait en
+/// parallèle — les temps absolus dérivent avec la charge, ce que ce dépôt a
+/// mesuré à un facteur 2,4 à code identique. Un test rouge une fois sur trois
+/// fait douter du code au lieu du test, ce qui est pire que pas de test. Le
+/// nombre de sections REFAITES, lui, ne dépend d'aucune machine — et il dit
+/// exactement la propriété qu'on veut.
 #[test]
 fn le_rechargement_paie_la_zone_pas_l_edition() {
     let j = Jetable::neuf("codex");
@@ -195,7 +203,7 @@ fn le_rechargement_paie_la_zone_pas_l_edition() {
     let m = Jetable::neuf("monde");
     semer(m.chemin(), 1, 16);
 
-    let mesure = |zone: [i32; 4]| -> (f64, f64) {
+    let mesure = |zone: [i32; 4]| -> (usize, usize, f64, f64) {
         let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), zone).expect("monde ouvert");
         let mut moteur = Moteur::lancer(
             o.staging.clone().unwrap(),
@@ -205,44 +213,45 @@ fn le_rechargement_paie_la_zone_pas_l_edition() {
         );
         let sel = BBox::new(BlockPos::new(4, -40, 4), BlockPos::new(6, -40, 6));
         let bornes = poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
-        // Médiane de cinq, alternées : un premier passage à froid suffit à
-        // rendre une mesure unique trompeuse.
-        let (mut inc, mut plein) = (Vec::new(), Vec::new());
-        for _ in 0..5 {
-            let t = Instant::now();
-            o.remailler(Some(bornes)).expect("incrémental");
-            inc.push(t.elapsed().as_secs_f64() * 1e3);
-            let t = Instant::now();
-            o.remailler(None).expect("complet");
-            plein.push(t.elapsed().as_secs_f64() * 1e3);
-        }
+
+        let t = Instant::now();
+        o.remailler(Some(bornes)).expect("incrémental");
+        let t_inc = t.elapsed().as_secs_f64() * 1e3;
+        let inc = o.sections_remaillees;
+
+        let t = Instant::now();
+        o.remailler(None).expect("complet");
+        let t_plein = t.elapsed().as_secs_f64() * 1e3;
+        let plein = o.sections_remaillees;
+
         moteur.arreter();
-        let med = |mut v: Vec<f64>| {
-            v.sort_by(f64::total_cmp);
-            v[v.len() / 2]
-        };
-        (med(inc), med(plein))
+        (inc, plein, t_inc, t_plein)
     };
 
-    let (petit_inc, petit_plein) = mesure([0, 0, 3, 3]);
-    let (grand_inc, grand_plein) = mesure([0, 0, 15, 15]);
+    let (petit_inc, petit_plein, tpi, tpp) = mesure([0, 0, 3, 3]);
+    let (grand_inc, grand_plein, tgi, tgp) = mesure([0, 0, 15, 15]);
     println!(
-        "16 chunks : incrémental {petit_inc:.2} ms · complet {petit_plein:.1} ms\n\
-         256 chunks : incrémental {grand_inc:.2} ms · complet {grand_plein:.1} ms"
+        "16 chunks : {petit_inc} sections refaites ({tpi:.2} ms) contre {petit_plein} \
+au rechargement ({tpp:.1} ms)"
+    );
+    println!(
+        "256 chunks : {grand_inc} sections refaites ({tgi:.2} ms) contre {grand_plein} \
+au rechargement ({tgp:.1} ms)"
     );
 
-    // Seize fois plus de chunks. Le rechargement doit le payer ; l'édition,
-    // non. Le seuil est LARGE — on ne cherche pas à mesurer une pente, mais à
-    // séparer deux régimes que rien d'autre ne distingue.
+    // Seize fois plus de chunks. Le rechargement le paie…
     assert!(
-        grand_plein > petit_plein * 3.0,
-        "un rechargement doit coûter la ZONE : {petit_plein:.1} ms contre {grand_plein:.1} ms \
-         pour seize fois plus de chunks"
+        grand_plein > petit_plein * 8,
+        "un rechargement doit refaire la ZONE : {petit_plein} sections contre \
+         {grand_plein} pour seize fois plus de chunks"
     );
-    assert!(
-        grand_inc < petit_inc * 3.0,
-        "une édition de trois blocs ne doit RIEN devoir à la taille de la zone : \
-         {petit_inc:.2} ms contre {grand_inc:.2} ms"
+    // …et l'édition ne doit RIEN devoir à la taille de la zone. Exactement
+    // rien : les visées sont les sections que l'opération a touchées, plus
+    // leur marge d'une case.
+    assert_eq!(
+        petit_inc, grand_inc,
+        "une édition de trois blocs refait {petit_inc} sections sur une petite \
+         zone et {grand_inc} sur une grande — elle paie donc la zone"
     );
 }
 

@@ -88,6 +88,19 @@ impl Assets {
     }
 }
 
+/// **Une cellule que le fil de chargement vient de rendre.**
+///
+/// Elle porte sa TABLE d'états : les identifiants de ses palettes sont
+/// numérotés dedans et nulle part ailleurs. C'est la même structure que
+/// `chargeur::Reponse::Prete`, mais `scene` ne dépend pas du chargeur — un
+/// hôte qui lirait autrement (un test, un import de schematic) passe par la
+/// même porte.
+pub struct Arrivee {
+    pub cellule: tf_world::Cellule,
+    pub sections: Vec<tf_world::lecture::SectionLue>,
+    pub interner: Interner,
+}
+
 /// D'où viennent les chunks.
 ///
 /// **La copie de travail compte autant que la save.** Après une opération, ce
@@ -350,6 +363,19 @@ pub struct Ouvert {
     /// l'aperçu entier. Un test qui lit ce compteur est le seul moyen de ne
     /// pas le repayer une troisième fois.
     pub rechargements: u32,
+    /// **Combien de sections le dernier remaillage a refaites.**
+    ///
+    /// Un compteur, pas un chronomètre — encore une fois, et pour la raison
+    /// que ce dépôt répète : les temps ABSOLUS dérivent avec la charge de la
+    /// machine (facteur 2,4 mesuré à code identique). Une assertion « une
+    /// édition ne paie pas la zone » écrite en millisecondes passe seule et
+    /// tombe quand la suite entière tourne en parallèle — c'est arrivé, et
+    /// c'est le genre d'échec qui fait douter du code au lieu du test.
+    ///
+    /// Le nombre de sections refaites, lui, ne dépend de rien : il vaut la
+    /// poignée que l'édition a touchée, ou la grille entière quand on
+    /// recharge.
+    pub sections_remaillees: usize,
 }
 
 impl Ouvert {
@@ -365,6 +391,7 @@ impl Ouvert {
                 nom: "fixture".into(),
                 couche: None,
                 rechargements: 0,
+                sections_remaillees: 0,
             });
         };
         // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
@@ -398,6 +425,7 @@ impl Ouvert {
             nom: dir.to_string(),
             couche: Some(couche),
             rechargements: 0,
+            sections_remaillees: 0,
         })
     }
 
@@ -499,6 +527,130 @@ impl Ouvert {
             },
         );
         self.monde.interner = interner;
+        phase("relecture", t0);
+        self.refaire(&visees, connus)
+    }
+
+    /// **Intègre une cellule que le chargeur vient de rendre.**
+    ///
+    /// C'est la jonction entre le fil et la scène, et elle n'existe qu'ici :
+    /// écrite dans chaque appelant, elle se tromperait à trois endroits — la
+    /// fusion des tables d'états, le retrait de ce qui n'existe plus, et la
+    /// marge du remaillage.
+    ///
+    /// **La table d'états d'abord.** Un `StateId` n'a de sens que relativement
+    /// à SON interner : ceux que le fil rend sont numérotés dans sa table à
+    /// lui. On fusionne, on remappe les palettes, et alors seulement les
+    /// identifiants veulent dire quelque chose ici. Sauter ce pas ferait
+    /// prendre à chaque bloc l'état d'un autre, sans la moindre erreur.
+    ///
+    /// **Un LOT de cellules, pas une seule**, et c'est la mesure qui l'impose.
+    ///
+    /// Le remplacement de tranches recopie les deux arènes, donc son coût est
+    /// en O(scène) quel que soit le nombre de cellules intégrées. Mesuré une
+    /// par une sur du bâti : **médiane 23 ms, pire 84** — trois à dix fois le
+    /// budget d'image, et ça EMPIRE à mesure que la scène grandit. Intégrer
+    /// par lot amortit cette recopie sur tout le lot ; l'hôte passe ce que le
+    /// fil lui a rendu dans l'image, et paie une recopie au lieu de N.
+    ///
+    /// C'est la même leçon que l'unité de LECTURE du chargeur, à l'autre bout
+    /// de la chaîne : le coût fixe décide du grain, pas l'envie d'une API
+    /// simple.
+    ///
+    /// Rend le nombre de sections posées.
+    pub fn integrer(&mut self, lot: Vec<Arrivee>) -> Result<usize, String> {
+        if lot.is_empty() {
+            return Ok(0);
+        }
+        let connus = self.monde.interner.len();
+        let mut posees = 0;
+        let mut visees: Vec<tf_mesh::Adresse> = Vec::new();
+        for Arrivee {
+            cellule,
+            mut sections,
+            interner: local,
+        } in lot
+        {
+            // **La table d'états d'abord.** Un `StateId` n'a de sens que
+            // relativement à SON interner : ceux que le fil rend sont
+            // numérotés dans sa table à lui. On fusionne, on remappe, et
+            // alors seulement les identifiants veulent dire quelque chose
+            // ici. Sauter ce pas ferait prendre à chaque bloc l'état d'un
+            // autre, sans la moindre erreur.
+            //
+            // La correspondance se calcule UNE fois par cellule : c'est ce
+            // que `merge_from` est fait pour, mesuré à 1,06 ms par région
+            // pleine, soit 3,9 % du décodage.
+            let corr = self.monde.interner.merge_from(&local);
+            for s in &mut sections {
+                Interner::remap_palette(&corr, &mut s.section.palette);
+                if let Some(b) = s.biomes.as_mut() {
+                    Interner::remap_palette(&corr, b);
+                }
+            }
+
+            // **On retire ce que la cellule portait AVANT de poser.** Une
+            // section que la save n'a plus ne revient pas du chargement :
+            // sans ce retrait son ancien contenu resterait, et les blocs
+            // effacés resteraient à l'écran. Contrairement au cas de
+            // `remailler`, celui-ci est RÉEL — une cellule évincée puis
+            // rechargée peut avoir changé entre-temps.
+            let (cx, cz) = (cellule.x, cellule.z);
+            let anciennes: Vec<tf_mesh::Adresse> = self
+                .monde
+                .grille
+                .adresses()
+                .into_iter()
+                .filter(|a| a.0 == cx && a.1 == cz)
+                .collect();
+            for a in anciennes {
+                self.monde.grille.retirer(a);
+            }
+
+            posees += sections.len();
+            for s in sections {
+                let y = s.section.y;
+                if let Some(b) = s.biomes {
+                    self.monde.grille.poser_biomes(s.chunk.x, s.chunk.z, y, b);
+                }
+                self.monde.grille.poser(s.chunk.x, s.chunk.z, s.section);
+            }
+
+            // **Les visées DÉBORDENT de la cellule d'une case.** Poser une
+            // cellule change les faces visibles de ses VOISINES : sans la
+            // marge, un mur de faces fantômes resterait le long de chaque
+            // frontière, et il faudrait tout remailler pour le faire
+            // disparaître.
+            let b = cellule.boite;
+            visees.extend(Grille::sections_autour(
+                [b.min.x, b.min.y, b.min.z],
+                [b.max.x, b.max.y, b.max.z],
+            ));
+        }
+        // Deux cellules voisines partagent leur marge : sans dédoublonnage, la
+        // section frontière serait maillée deux fois et `Chantier::remplacer`
+        // en garderait deux lots.
+        visees.sort_unstable();
+        visees.dedup();
+        self.refaire(&visees, connus)?;
+        self.monde.quads = self.monde.chantier.quads();
+        self.monde.poses = self.monde.chantier.poses();
+        Ok(posees)
+    }
+
+    /// **Ce qui suit toute arrivée de blocs** : accueillir les états neufs,
+    /// remailler les sections visées, remplacer les tranches d'arène.
+    ///
+    /// Écrite UNE fois et partagée par le remaillage d'édition et
+    /// l'intégration d'une cellule chargée. Ce dépôt a payé quatre fois le
+    /// piège des deux implémentations d'une même règle, et celle-ci en porte
+    /// trois d'un coup — l'extension d'atlas, l'ordre des tranches, la somme
+    /// préfixe des poses.
+    ///
+    /// `connus` est la taille de la table d'états AVANT l'arrivée : ce qui est
+    /// au-delà est neuf et n'a pas encore de texture.
+    fn refaire(&mut self, visees: &[tf_mesh::Adresse], connus: usize) -> Result<(), String> {
+        self.sections_remaillees = visees.len();
         // **Un état jamais vu ÉTEND l'atlas ; il ne recharge pas la zone.**
         //
         // C'était la dernière porte vers le chemin complet, et elle s'ouvrait
@@ -518,10 +670,9 @@ impl Ouvert {
         if self.monde.interner.len() > connus && !self.etendre_atlas(connus) {
             return self.recharger();
         }
-        phase("relecture", t0);
         let t1 = std::time::Instant::now();
-        let neufs = self.monde.grille.mailler_ces(&self.monde.table, &visees);
-        self.monde.chantier.remplacer(&visees, neufs);
+        let neufs = self.monde.grille.mailler_ces(&self.monde.table, visees);
+        self.monde.chantier.remplacer(visees, neufs);
         phase("maillage ", t1);
         let t2 = std::time::Instant::now();
         // **L'arène des quads se REMPLACE tranche par tranche.** La rebâtir
@@ -530,7 +681,7 @@ impl Ouvert {
         // geste en O(édition), la même famille que le rechargement d'atlas.
         self.monde.arene.remplacer(
             &self.monde.chantier,
-            &visees,
+            visees,
             &apparence(
                 &self.monde.habillage,
                 &self.monde.interner,
@@ -542,7 +693,7 @@ impl Ouvert {
         // trois blocs posés sur une région bâtie.
         self.monde.modeles.remplacer(
             &self.monde.chantier,
-            &visees,
+            visees,
             &modele_de(
                 &self.monde.table,
                 &self.monde.habillage,
@@ -617,6 +768,8 @@ impl Ouvert {
             &self.assets,
             Ou::Source(st.as_ref(), self.zone, self.nom.clone()),
         )?;
+        // Un rechargement refait TOUT : c'est ce que le compteur doit dire.
+        self.sections_remaillees = self.monde.grille.len();
         Ok(())
     }
 

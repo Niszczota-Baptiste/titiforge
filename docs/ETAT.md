@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **811**, zéro échec |
+| Tests | **815**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-811 tests, répartis par ce qu'ils PROUVENT :
+815 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -81,6 +81,7 @@ cargo test --workspace
 | `tf-app` rechargement | 7 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement. Tourne sans pack : le codex est écrit à la volée |
 | `tf-render` arene | 6 | le REMPLACEMENT de tranches d'arène : qu'une section qui apparaît ou disparaît décale les lots, et que les instances recopiées suivent — sinon un pan du build se dessine ailleurs ; et pour les MODÈLES, que la somme préfixe `debut_face` se recalcule — un seul rang faux fait dessiner les faces d'une pose pour une autre |
 | `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
+| `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
 

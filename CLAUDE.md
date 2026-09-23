@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (811 tests aujourd'hui)
+cargo test            # tous les crates (815 tests aujourd'hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -379,6 +379,9 @@ crates/
                  édition ne recharge la zone — un COMPTEUR le tient
                · FIL DE CHARGEMENT ✅ (`chargeur.rs`) : une lecture par
                  RÉGION, une réponse par CELLULE, la plus urgente d'abord
+               · INTÉGRATION ✅ (`Ouvert::integrer`) : par LOT, tables d'états
+                 fusionnées, et la scène streamée est identique à celle qu'un
+                 chargement d'un bloc donne
                · résidence pilotée par la caméra et composants à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -1552,6 +1555,28 @@ propres à ce dépôt.
   produira à chaque pas de caméra dès que la résidence sera pilotée — et il se
   teste au niveau où il existe (`tf-render/tests/arene.rs`), pas au niveau où
   on aimerait qu'il existe.
+- **Une assertion de performance écrite en TEMPS tombe quand la suite tourne.**
+  « Une édition ne paie pas la zone » était un rapport de durées entre deux
+  tailles de zone, seuil 3. Seul, le test passait (rapport 2,5) ; dans la suite
+  complète, en parallèle, il tombait — les temps absolus dérivent avec la
+  charge, ce que ce dépôt a mesuré à un facteur **2,4 à code identique**. Un
+  test rouge une fois sur trois fait douter du CODE au lieu du test, ce qui est
+  pire que pas de test du tout. La propriété se COMPTE : `sections_remaillees`
+  vaut **1 sur une zone de 16 chunks comme sur une de 256**, contre 384 et 6 144
+  au rechargement. Exact, machine-indépendant, et ça dit la chose même qu'on
+  veut. Troisième compteur de la séance après `rechargements` et les lectures
+  du chargeur — à ce stade c'est une règle : *ce qui doit rester vrai se
+  compte.*
+- **Le grain d'intégration est décidé par le COÛT FIXE, pas par l'API.**
+  `Ouvert::integrer` prend un LOT de cellules, pas une. Le remplacement de
+  tranches recopie les deux arènes, donc son coût est en O(scène) QUEL QUE SOIT
+  le nombre de cellules intégrées : une par une, on paie cette recopie N fois.
+  Mesuré en streamant 197 cellules sur du bâti (805 k quads) : **4 577 ms une
+  par une contre 826 par lot, × 5,5** — et pire, le coût unitaire EMPIRE à
+  mesure que la scène grandit (médiane 23 ms, pire 84). C'est la même leçon que
+  l'unité de LECTURE du chargeur, à l'autre bout de la chaîne. Ce qui reste
+  sous-jacent est toujours la recopie O(scène), que seuls des tampons GPU par
+  SECTION élimineront.
 - **Une source qui COMPTE ses lectures dit ce qu'un chronomètre ne sait pas.**
   « Un `.mca` n'est lu qu'une fois par lot » est la conclusion qui a décidé
   l'unité de lecture du chargeur (× 10 entre un chunk seul et un chunk amorti,

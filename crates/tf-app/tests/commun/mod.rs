@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+// chaque test compile SA copie de ce module : ce qu'un
+// fichier n'emploie pas n'est pas mort pour autant.
+
 //! **Un codex MINIMAL, écrit à la volée** — et ce qu'il débloque.
 //!
 //! Neuf tests de la coque ne tournaient que si on leur donnait un vrai pack
