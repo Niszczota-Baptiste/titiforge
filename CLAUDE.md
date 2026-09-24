@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (842 tests aujourd’hui)
+cargo test            # tous les crates (845 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1840,3 +1840,15 @@ propres à ce dépôt.
   dans un `Vec<u8>` alloué. La dynamique vérifiée — trous, découpes,
   recollements, réemplois — ne dépend pas du volume : des sections creuses et
   une clé sans allocation, 446 s → 8 s, et les six mutations meurent pareil.
+- **Une marge « d'une case » élargie sur les trois axes remaille les
+  diagonales pour rien.** Le mailleur ne lit que les six voisins par face ;
+  une colonne qui arrive ne change donc que ses quatre voisines par face, et
+  la boîte élargie en remaillait neuf. `sections_touchees` rend la CROIX :
+  5 colonnes au lieu de 9, et 214 → 68 images sur 400 au-delà du budget. Les
+  lectures de peau d'arête et de coin existent (`Opacite::vide`, `bouchee`),
+  mais ce sont des sorties anticipées qui ne changent pas le résultat. **Le
+  contrat est celui du mailleur d'aujourd'hui** : l'occlusion ambiante lira
+  les diagonales, et le test qui croise la croix avec un remaillage complet —
+  éditions tirées aux arêtes et aux coins, là seulement où croix et boîte
+  diffèrent — rougira ce jour-là. Le remède sera `sections_autour`, pas un
+  test qu'on fait taire.

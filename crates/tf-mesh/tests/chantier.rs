@@ -268,6 +268,56 @@ fn le_chantier_parallele_rend_exactement_le_meme_resultat() {
     }
 }
 
+/// **Le remaillage PARTIEL en parallèle rend les mêmes lots, dans le même
+/// ORDRE, que le séquentiel.** L'ordre compte ici plus que pour le chantier
+/// complet : les lots partiels vont droit aux arènes, dont les places se
+/// décident dans l'ordre d'arrivée — un ordre qui dépendrait du nombre de
+/// cœurs donnerait deux dispositions différentes de la même scène.
+#[cfg(feature = "parallele")]
+#[test]
+fn le_remaillage_partiel_parallele_rend_la_meme_chose_dans_le_meme_ordre() {
+    let t = table();
+    let mut g = Grille::new();
+    let mut n = 7u32;
+    for cz in 0..5i32 {
+        for cx in 0..5i32 {
+            for sy in 0..3i8 {
+                g.poser(
+                    cx,
+                    cz,
+                    section(sy, |_, _, _| {
+                        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        match n % 4 {
+                            0 => PIERRE,
+                            1 => DALLE,
+                            _ => AIR,
+                        }
+                    }),
+                );
+            }
+        }
+    }
+    // Plus de seize visées, donc plusieurs paquets pour rayon, plus des
+    // adresses sans rien — sautées des deux côtés.
+    let mut visees = Grille::sections_autour([16, 0, 16], [47, 47, 47]);
+    visees.push((40, 40, 0));
+    visees.sort_unstable();
+    assert!(visees.len() > 32, "la prémisse : plusieurs paquets");
+
+    let seq = g.mailler_ces(&t, &visees);
+    let par = g.mailler_ces_parallele(&t, &visees);
+    assert_eq!(seq.sautees, par.sautees);
+    assert_eq!(
+        seq.lots.iter().map(|l| l.adresse).collect::<Vec<_>>(),
+        par.lots.iter().map(|l| l.adresse).collect::<Vec<_>>(),
+        "les lots doivent sortir dans l'ordre des visées"
+    );
+    for (a, b) in seq.lots.iter().zip(par.lots.iter()) {
+        assert_eq!(a.quads.quads, b.quads.quads, "section {:?}", a.adresse);
+        assert_eq!(a.poses.poses, b.poses.poses, "section {:?}", a.adresse);
+    }
+}
+
 #[test]
 fn un_indice_hors_palette_ne_tue_pas_le_mailleur() {
     // `bits` se déduit de la longueur de palette : deux entrées se lisent sur
@@ -511,4 +561,108 @@ fn retirer_enleve_la_section_et_ses_biomes() {
 
     assert!(!g.retirer((0, 0, 0)), "deux fois ne fait rien");
     assert!(!g.retirer((42, 42, 0)), "et ce qui n'existe pas non plus");
+}
+
+// ── la marge de remaillage : une CROIX, pas une boîte ─────────────────────
+
+/// **Une colonne qui arrive en fait remailler CINQ, pas neuf.** C'est tout
+/// le gain, et il se compte : les colonnes diagonales n'ont aucune face
+/// commune avec celle qui arrive.
+#[test]
+fn une_colonne_touche_cinq_colonnes_pas_neuf() {
+    let (min, max) = ([32, -64, 48], [47, 319, 63]);
+    let colonnes = |v: &[(i32, i32, i8)]| {
+        let mut c: Vec<(i32, i32)> = v.iter().map(|a| (a.0, a.1)).collect();
+        c.sort_unstable();
+        c.dedup();
+        c
+    };
+    assert_eq!(colonnes(&Grille::sections_autour(min, max)).len(), 9);
+    assert_eq!(
+        colonnes(&Grille::sections_touchees(min, max)),
+        vec![(1, 3), (2, 2), (2, 3), (2, 4), (3, 3)],
+        "la colonne et ses quatre voisines par face"
+    );
+}
+
+/// **Remailler la croix donne EXACTEMENT le maillage complet**, après des
+/// éditions tirées au hasard — et surtout aux ARÊTES et aux COINS des
+/// sections, le seul endroit où la croix et la boîte diffèrent.
+///
+/// C'est le test qui tombera le jour où le mailleur lira ses voisins d'arête
+/// ou de coin — l'occlusion ambiante le fera. Ce jour-là il faut revenir à
+/// `sections_autour`, pas faire taire le test.
+#[test]
+fn remailler_la_croix_donne_le_maillage_complet() {
+    let t = table();
+    let mut g = Grille::new();
+    let mut n = 1234u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..3i32 {
+        for cx in 0..3i32 {
+            for sy in 0..3i8 {
+                g.poser(cx, cz, pleine(sy, PIERRE));
+            }
+        }
+    }
+    let mut courant = g.mailler(&t);
+    for pas in 0..400 {
+        // Une coordonnée par axe, tirée aux bords d'une section plus souvent
+        // qu'au milieu : 0 et 15 sont là où la croix et la boîte divergent.
+        let mut axe = |nb: i32| {
+            let s = tirer(nb as u32) as i32;
+            let l = match tirer(4) {
+                0 => 0,
+                1 => 15,
+                _ => tirer(16) as i32,
+            };
+            s * 16 + l
+        };
+        let (x, y, z) = (axe(3), axe(3), axe(3));
+        let (cx, cz, sy) = (x.div_euclid(16), z.div_euclid(16), y.div_euclid(16) as i8);
+        // On réécrit la section avec le bloc changé.
+        let id = [AIR, PIERRE, DALLE][tirer(3) as usize];
+        let ancienne = g.section((cx, cz, sy)).cloned();
+        let (lx, ly, lz) = (x.rem_euclid(16), y.rem_euclid(16), z.rem_euclid(16));
+        g.poser(
+            cx,
+            cz,
+            section(sy, |bx, by, bz| {
+                if (bx, by, bz) == (lx, ly, lz) {
+                    id
+                } else {
+                    ancienne
+                        .as_ref()
+                        .and_then(|s| s.get(bx as usize, by as usize, bz as usize))
+                        .unwrap_or(AIR)
+                }
+            }),
+        );
+        let vise = Grille::sections_touchees([x, y, z], [x, y, z]);
+        courant.remplacer(&vise, g.mailler_ces(&t, &vise));
+        let mut complet = g.mailler(&t);
+        complet.trier();
+        assert_eq!(
+            courant.lots.len(),
+            complet.lots.len(),
+            "pas {pas} : nombre de lots"
+        );
+        for (a, b) in courant.lots.iter().zip(complet.lots.iter()) {
+            assert_eq!(a.adresse, b.adresse, "pas {pas}");
+            assert_eq!(
+                a.quads.quads, b.quads.quads,
+                "pas {pas}, bloc ({x}, {y}, {z}) : la section {:?} garde des faces \
+                 d'avant — elle n'était pas dans la croix",
+                a.adresse
+            );
+            assert_eq!(
+                a.poses.poses, b.poses.poses,
+                "pas {pas} : poses de {:?}",
+                a.adresse
+            );
+        }
+    }
 }

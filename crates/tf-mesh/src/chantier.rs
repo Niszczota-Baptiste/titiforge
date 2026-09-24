@@ -295,6 +295,61 @@ impl Grille {
         out
     }
 
+    /// **Les sections dont le maillage PEUT changer** quand les blocs de la
+    /// boîte changent — une CROIX autour d'elle, pas une boîte.
+    ///
+    /// Le mailleur ne lit que les SIX voisins par face d'une case : la passe
+    /// gloutonne compare une rangée à ses voisines parallèles, la passe de
+    /// modèles relève `voisins_opaques` sur les six faces. Un bloc qui change
+    /// ne touche donc que les sections de ses voisins par face, jamais celles
+    /// d'arête ni de coin. `sections_autour` élargit la boîte des trois axes à
+    /// la fois et remaille aussi les diagonales : pour une colonne qui arrive
+    /// en vol, neuf colonnes remaillées quand cinq suffisent. Mesuré en vol sur
+    /// du bâti, le maillage était le poste dominant une fois les arènes
+    /// réglées.
+    ///
+    /// **Les lectures de la peau d'arête et de coin ne comptent pas**, et
+    /// c'est vérifié : `Opacite::vide` et `bouchee` les lisent, mais ce sont
+    /// des SORTIES ANTICIPÉES qui ne peuvent pas changer le résultat — une
+    /// face visible ne se décide jamais que contre son voisin par face.
+    ///
+    /// **Le contrat est celui du mailleur d'AUJOURD'HUI.** L'occlusion
+    /// ambiante lira les voisins d'arête et de coin ; ce jour-là cette croix
+    /// devient fausse, et le test qui la croise avec un remaillage complet
+    /// après des éditions tirées au hasard rougira — c'est pour ça qu'il
+    /// existe, et qu'il faut revenir à `sections_autour` au lieu de le faire
+    /// taire.
+    ///
+    /// Comme `sections_autour` : les adresses VISÉES, qu'elles aient du
+    /// contenu ou non, triées, bornes incluses.
+    pub fn sections_touchees(min: [i32; 3], max: [i32; 3]) -> Vec<Adresse> {
+        let cell = |v: i32, marge: i32| -> i32 {
+            ((v as i64 + marge as i64).div_euclid(16)).clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32
+        };
+        let mut out = Vec::new();
+        // Trois dalles : la boîte élargie d'une case le long d'UN axe à la
+        // fois. Leur union est la croix.
+        for axe in 0..3 {
+            let m = |k: usize| if k == axe { 1 } else { 0 };
+            let (x0, x1) = (cell(min[0], -m(0)), cell(max[0], m(0)));
+            let (y0, y1) = (cell(min[1], -m(1)), cell(max[1], m(1)));
+            let (z0, z1) = (cell(min[2], -m(2)), cell(max[2], m(2)));
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    for cy in y0..=y1 {
+                        if let Ok(y) = i8::try_from(cy) {
+                            out.push((cx, cz, y));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Maille SEULEMENT ces adresses.
     ///
     /// Le voisinage est lu dans la grille ENTIÈRE — c'est ce qui rend le
@@ -481,7 +536,25 @@ mod parallele {
         where
             F: Formes + Sync + ?Sized,
         {
-            let adresses = self.adresses();
+            self.mailler_ces_parallele(f, &self.adresses())
+        }
+
+        /// **Les sections VISÉES, sur tous les cœurs** — le remaillage d'une
+        /// édition ou d'une cellule qui arrive.
+        ///
+        /// Le même code que le chantier complet, sur une liste : écrit deux
+        /// fois, le partage du travail finirait par ne plus rendre les mêmes
+        /// lots. L'ordre de sortie est celui de l'entrée — `par_chunks` puis
+        /// `collect` le gardent — donc le résultat ne dépend pas du nombre de
+        /// cœurs, et un test le croise avec `mailler_ces`.
+        ///
+        /// Mesuré en vol sur du bâti : le remaillage séquentiel de deux
+        /// cellules et de leur marge coûtait **12,5 ms** par image, le poste
+        /// dominant une fois les arènes réglées.
+        pub fn mailler_ces_parallele<F>(&self, f: &F, adresses: &[Adresse]) -> Chantier
+        where
+            F: Formes + Sync + ?Sized,
+        {
             let (lots, sautees): (Vec<Vec<Lot>>, Vec<usize>) = adresses
                 .par_chunks(16)
                 .map(|paquet| {

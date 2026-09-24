@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **842**, zéro échec |
+| Tests | **845**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-842 tests, répartis par ce qu'ils PROUVENT :
+845 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -64,7 +64,7 @@ cargo test --workspace
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 33 | glouton contre naïf, case par case ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage |
+| `tf-mesh` mailler/chantier | 36 | glouton contre naïf, case par case ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
 | `tf-render` rendu | 27 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -673,11 +673,24 @@ rendent dégénéré. Même vol, même machine :
 | image entière | 35,1 ms | **15,6 ms** |
 | images > 8 ms | 396 / 400 | 285 / 400 |
 
-**Ce qui domine maintenant est le MAILLAGE**, 12,5 ms en médiane et 56 au
-pire : il se fait en séquence, là où le chargement complet maille déjà sur
-tous les cœurs. C'est le chantier suivant. Les pires cas des deux arènes
-(17 et 18 ms) ne sont pas élucidés : un agrandissement du tableau recopie
-tout ce qu'il porte, et le tassement aussi — à mesurer avant d'y toucher.
+**Ce qui domine ensuite est le MAILLAGE**, 12,5 ms en médiane et 56 au
+pire. Deux leviers, mesurés séparément :
+
+| `Build` | maillage, médiane | image, médiane | p95 | images > 8 ms |
+|---|---:|---:|---:|---:|
+| places stables | 12,5 ms | 15,6 ms | 25,2 ms | 285 / 400 |
+| + maillage partiel en PARALLÈLE | 4,7 ms | 8,3 ms | 13,5 ms | 214 / 400 |
+| + marge en CROIX au lieu d'une boîte | **3,5 ms** | **6,3 ms** | **9,6 ms** | **68 / 400** |
+
+La croix : le mailleur ne lit que les six voisins par face, donc une colonne
+qui arrive ne change le maillage que de ses quatre voisines par face — cinq
+colonnes remaillées au lieu des neuf de la boîte élargie. `Terrain` passe
+entièrement sous le budget : 1,5 ms en médiane, 5,0 au pire, zéro image au-delà.
+
+**La médiane sur du bâti est passée sous les 8 ms ; la queue, pas encore** :
+68 images sur 400 au-delà, 21 ms au pire. Les pires cas de l'arène des
+quads (16 ms) ne sont pas élucidés — un agrandissement du tableau recopie tout
+ce qu'il porte, et le tassement aussi. À mesurer avant d'y toucher.
 
 ---
 
@@ -691,7 +704,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **Une image de vol sur du bâti coûte encore 15,6 ms** | médiane, 285 images sur 400 au-delà de 8 ms (`--example vol`). Les arènes sont réglées (35 → 2 ms) ; c'est le maillage, séquentiel, qui domine : 12,5 ms pour deux cellules et leur marge |
+| **La queue des images de vol sur du bâti** | médiane 6,3 ms, mais 68 images sur 400 au-delà de 8 ms et 21 ms au pire (`--example vol`). Les pics de l'arène des quads (16 ms) ne sont pas encore expliqués |
 | **Le GPU reçoit encore la scène ENTIÈRE à chaque changement** | `regarnir` rebâtit les tampons, les pipelines et l'atlas. Les arènes savent maintenant dire ce qui a changé (`prendre_sales`), mais rien ne s'en sert encore — et ce coût-là ne se mesure pas sur un rastériseur logiciel |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |

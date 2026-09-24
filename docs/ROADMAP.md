@@ -542,11 +542,19 @@ les tests vérifient en REJOUANT la dichotomie sur le processeur. Mesuré en
 vol : **35 → 2 ms** pour les deux arènes, **35 → 15,6 ms** par image sur du
 bâti.
 
+✅ **Le remaillage partiel se fait en PARALLÈLE, sur une CROIX.** Le même
+code que le chantier complet, sur une liste (× 2,7 sur quatre cœurs) ; et la
+marge n'est plus une boîte élargie sur les trois axes mais une croix, parce
+que le mailleur ne lit que les six voisins par face — une colonne qui arrive
+en fait remailler cinq au lieu de neuf. Mesuré en vol sur du bâti : **6,3 ms
+par image en médiane**, 68 images sur 400 au-delà de 8 ms. Le contrat de la
+croix est celui du mailleur d'aujourd'hui : l'occlusion ambiante le cassera,
+et un test croisé avec le maillage complet le dira.
+
 **Ce qui reste, dans cet ordre** :
 
-1. **Le maillage incrémental en parallèle** : 12,5 ms pour deux cellules et
-   leur marge, en séquence, là où le chargement complet maille déjà sur tous
-   les cœurs. C'est lui qui domine maintenant.
+1. **La queue** : 68 images sur 400 au-delà de 8 ms, 21 ms au pire. Les pics
+   de l'arène des quads (16 ms) sont à mesurer avant d'y toucher.
 2. **L'envoi GPU partiel** : les arènes disent ce qui a changé
    (`prendre_sales`), mais `regarnir` rebâtit encore tampons, pipelines et
    atlas à chaque changement.

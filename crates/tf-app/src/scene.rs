@@ -875,7 +875,7 @@ impl Ouvert {
             return self.recharger();
         };
         let visees =
-            Grille::sections_autour([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
+            Grille::sections_touchees([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
         if visees.is_empty() {
             return Ok(());
         }
@@ -1022,7 +1022,7 @@ impl Ouvert {
                 self.monde.grille.retirer(a);
             }
             let b = &c.boite;
-            visees.extend(Grille::sections_autour(
+            visees.extend(Grille::sections_touchees(
                 [b.min.x, b.min.y, b.min.z],
                 [b.max.x, b.max.y, b.max.z],
             ));
@@ -1081,9 +1081,11 @@ impl Ouvert {
             // cellule change les faces visibles de ses VOISINES : sans la
             // marge, un mur de faces fantômes resterait le long de chaque
             // frontière, et il faudrait tout remailler pour le faire
-            // disparaître.
+            // disparaître. La marge est une CROIX — les voisines par face,
+            // jamais les diagonales, que le mailleur ne lit pas : cinq
+            // colonnes remaillées au lieu de neuf (`sections_touchees`).
             let b = cellule.boite;
-            visees.extend(Grille::sections_autour(
+            visees.extend(Grille::sections_touchees(
                 [b.min.x, b.min.y, b.min.z],
                 [b.max.x, b.max.y, b.max.z],
             ));
@@ -1148,7 +1150,13 @@ impl Ouvert {
             return self.recharger();
         }
         let t1 = std::time::Instant::now();
-        let neufs = self.monde.grille.mailler_ces(&self.monde.table, visees);
+        // Sur tous les cœurs : le chargement complet le faisait déjà, et le
+        // remaillage séquentiel d'une arrivée coûtait 12,5 ms par image de vol
+        // sur du bâti, le poste dominant une fois les arènes réglées.
+        let neufs = self
+            .monde
+            .grille
+            .mailler_ces_parallele(&self.monde.table, visees);
         phase("mailler  ", t1);
         let t2 = std::time::Instant::now();
         // **Les arènes reçoivent les lots NEUFS, pas le chantier.** Elles
