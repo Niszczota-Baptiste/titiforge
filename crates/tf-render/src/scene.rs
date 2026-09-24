@@ -69,6 +69,8 @@ pub struct Scene {
     envoyes: u64,
     /// Combien de fois un tampon a dû grandir.
     agrandissements: u32,
+    /// Écritures envoyées depuis la création — une par plage contiguë.
+    ecritures: u64,
 }
 
 /// Ce que le quadrillage tient au GPU.
@@ -408,6 +410,7 @@ impl Scene {
             format,
             envoyes: 0,
             agrandissements: 0,
+            ecritures: 0,
         }
     }
 
@@ -497,6 +500,10 @@ impl Scene {
                 liaison_origines(&device, &self.disposition_origines, &self.origines);
         }
 
+        self.ecritures += (s.instances.len()
+            + s.origines.len()
+            + s.poses.len()
+            + usize::from(s.faces_depuis < f)) as u64;
         let mut envoyes = 0u64;
         for &(d, k) in &s.instances {
             let fin = (d as usize + k as usize).min(n);
@@ -557,6 +564,11 @@ impl Scene {
     /// Combien de fois un tampon a grandi.
     pub fn agrandissements(&self) -> u32 {
         self.agrandissements
+    }
+
+    /// Plages envoyées depuis la création : autant d'écritures dans la file.
+    pub fn ecritures(&self) -> u64 {
+        self.ecritures
     }
 
     /// Capacités en octets : instances, origines, faces, poses. Pour les

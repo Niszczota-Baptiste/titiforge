@@ -2060,6 +2060,7 @@ dependencies = [
  "egui-winit",
  "png",
  "pollster",
+ "rayon",
  "tf-anvil",
  "tf-assets",
  "tf-bench",

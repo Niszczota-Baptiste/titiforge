@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (866 tests aujourd’hui)
+cargo test            # tous les crates (870 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1963,3 +1963,25 @@ propres à ce dépôt.
   le compteur d'en-vol décomptait toute réponse, donc un message d'échec
   aurait fait croire le fil libre une cellule trop tôt, et la demande serait
   repartie chercher celle qui était encore en route.
+- **Un maillage hors du fil s'applique dans l'ordre de DÉPART.** Chaque
+  travail emporte un extrait de la grille telle qu'elle était à son départ ;
+  appliqués dans l'ordre de retour, un vieux maillage revenu tard repasserait
+  par-dessus un neuf — une cellule vidée se redessinerait pleine. Même
+  raison, deux corollaires : une édition VIDE l'atelier avant de se mailler
+  sur place, et un rechargement OUBLIE ce qui était en route. Aucun vol ne
+  le vérifie sinon par chance : `retarder_le_prochain_maillage` force le
+  retour tardif, `maillage_juste` compare la scène à un maillage complet de
+  sa grille.
+- **Une édition enfouie ne prouve rien.** La mutation « l'édition ne vide pas
+  l'atelier » passait : le test posait de l'émeraude à y = −40, dans la
+  pierre, et un bloc caché ne change aucune face visible — le vieux maillage
+  posé par-dessus était identique au neuf. En plein ciel, elle meurt. Un test
+  de maillage doit changer ce qui SE VOIT.
+- **La réserve globale de `rayon` prend tous les cœurs.** Le maillage parti
+  hors du fil principal y tournait sur quatre fils, plus le fil de
+  chargement, plus le fil qui dessine : six pour quatre cœurs, et le fil
+  principal perdait la main au hasard, au milieu de n'importe quelle phase —
+  une synchronisation GPU de 0,4 ms en prenait 5,6 sans rien envoyer de plus.
+  Mesuré avant d'écrire : `RAYON_NUM_THREADS=3` ramenait la médiane de 3,3 à
+  2,7 ms et le p95 de ~9 à 5,4, pour le même nombre de cellules. La réserve
+  du maillage (`reserve_de_maillage`) garde un cœur libre.

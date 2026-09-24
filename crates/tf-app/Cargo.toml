@@ -16,6 +16,7 @@ tf-mesh.workspace = true
 tf-ops.workspace = true
 tf-render.workspace = true
 tf-world.workspace = true
+rayon.workspace = true
 egui = "0.29"
 # La MÊME version de wgpu que `tf-render` (22). Une majeure d'écart rend deux
 # types `Device` incompatibles, et le message du compilateur ne dit pas que

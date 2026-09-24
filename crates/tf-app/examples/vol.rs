@@ -228,9 +228,16 @@ fn voler(
             let grandi = c.scene.agrandissements();
             if f.a_change() {
                 let g = Instant::now();
-                envoyes += c.regarnir(mode, &mut o);
+                let ecritures = c.scene.ecritures();
+                let octets = c.regarnir(mode, &mut o);
+                envoyes += octets;
                 temps_gpu.push(ms(g.elapsed()));
                 tf_app::scene::phase("gpu", g);
+                tf_app::scene::phase_texte(&format!(
+                    "écritures : {} · {} ko",
+                    c.scene.ecritures().saturating_sub(ecritures),
+                    octets / 1000
+                ));
             }
             // Une soumission par image, comme la fenêtre : c'est elle qui
             // vide les écritures en attente. Sans elle, elles
@@ -271,6 +278,9 @@ fn voler(
         }
     }
     p.arreter();
+    // Le maillage part hors du fil principal : ce qui est encore en route
+    // compte dans ce que la scène portera.
+    let _ = o.attendre_maillage();
     let resident = o.octets_residents();
     Vol {
         images: profil(temps, 8.0),

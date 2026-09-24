@@ -15,6 +15,7 @@
 //! après l'avoir parcourue. Mesuré, une section d'air coûte 17 µs au mailleur.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use tf_anvil::{Section, StateId};
 
@@ -41,9 +42,16 @@ pub type Adresse = (i32, i32, i8);
 pub const ABSENT: StateId = StateId::MAX;
 
 /// Les sections décodées d'une zone, adressables par leurs coordonnées.
-#[derive(Default)]
+///
+/// **Partagées** (`Arc`) : un maillage qui part hors du fil principal emporte
+/// un EXTRAIT de la grille (`Grille::extrait`) — les sections visées et leur
+/// voisinage — et l'extrait coûte des compteurs, pas des copies de sections.
+/// Poser ou retirer une section la remplace ; on n'en modifie jamais une en
+/// place, donc un maillage en cours voit la grille telle qu'elle était à son
+/// départ, et rien d'autre.
+#[derive(Default, Clone)]
 pub struct Grille {
-    sections: HashMap<Adresse, Section>,
+    sections: HashMap<Adresse, Arc<Section>>,
     /// Les 64 cellules de biome d'une section, quand on les a.
     ///
     /// Une table à part plutôt qu'un champ de `Section` : les biomes sont une
@@ -59,7 +67,38 @@ impl Grille {
     }
 
     pub fn poser(&mut self, chunk_x: i32, chunk_z: i32, s: Section) {
-        self.sections.insert((chunk_x, chunk_z, s.y), s);
+        self.sections.insert((chunk_x, chunk_z, s.y), Arc::new(s));
+    }
+
+    /// **Ce qu'un maillage de ces adresses doit emporter** : leurs sections,
+    /// celles de leurs vingt-six voisines — le voisinage les relève toutes —
+    /// et leurs biomes. Rien d'autre : c'est l'extrait qui voyage vers un fil
+    /// de maillage, pendant que la grille continue de changer sur le fil
+    /// principal.
+    ///
+    /// Mailler ces adresses dans l'extrait rend EXACTEMENT ce qu'on obtient
+    /// dans la grille entière ; un test le croise.
+    pub fn extrait(&self, adresses: &[Adresse]) -> Grille {
+        let mut g = Grille::default();
+        for &(cx, cz, sy) in adresses {
+            for dy in -1..=1i32 {
+                let Ok(y) = i8::try_from(sy as i32 + dy) else {
+                    continue;
+                };
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        let n = (cx + dx, cz + dz, y);
+                        if let Some(s) = self.sections.get(&n) {
+                            g.sections.entry(n).or_insert_with(|| Arc::clone(s));
+                        }
+                    }
+                }
+            }
+            if let Some(b) = self.biomes.get(&(cx, cz, sy)) {
+                g.biomes.insert((cx, cz, sy), b.clone());
+            }
+        }
+        g
     }
 
     /// Pose les 64 cellules de biome d'une section. Une longueur inattendue
@@ -98,7 +137,7 @@ impl Grille {
     }
 
     pub fn section(&self, a: Adresse) -> Option<&Section> {
-        self.sections.get(&a)
+        self.sections.get(&a).map(|s| &**s)
     }
 
     /// Ce qu'UNE section coûte : sa palette, ses indices packés, et ses
@@ -181,7 +220,7 @@ impl Grille {
             for dz in -1..=1i32 {
                 for dx in -1..=1i32 {
                     autour[((dy + 1) * 9 + (dz + 1) * 3 + (dx + 1)) as usize] =
-                        self.sections.get(&(cx + dx, cz + dz, ny));
+                        self.sections.get(&(cx + dx, cz + dz, ny)).map(|s| &**s);
                 }
             }
         }

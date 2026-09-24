@@ -1040,3 +1040,67 @@ fn des_maillages_tenus_valent_le_chantier_retrie_et_ses_totaux() {
         "remettre le même lot sans le viser ne doit rien compter deux fois"
     );
 }
+
+#[test]
+fn mailler_dans_un_extrait_rend_ce_que_rend_la_grille_entiere() {
+    // Le maillage part hors du fil principal avec un EXTRAIT de la grille :
+    // les sections visées, leurs vingt-six voisines, leurs biomes. Il doit
+    // rendre exactement ce que la grille entière rendrait — une voisine
+    // oubliée, et un mur de faces fantômes apparaît au bord de l'extrait.
+    let mut t = table();
+    t.marquer_teinte(PIERRE);
+    let mut g = Grille::new();
+    let mut n = 7u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..4i32 {
+        for cx in 0..4i32 {
+            for sy in 0..3i8 {
+                let graine = tirer(1 << 16);
+                let mut m = graine;
+                g.poser(
+                    cx,
+                    cz,
+                    section(sy, |_, _, _| {
+                        m = m.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        [AIR, AIR, PIERRE, DALLE][((m >> 16) % 4) as usize]
+                    }),
+                );
+                // Deux biomes en damier : la teinte coupe les quads, donc un
+                // biome perdu en route se verrait.
+                let biomes: Vec<StateId> = (0..64u32).map(|i| 10 + (i + graine) % 2).collect();
+                assert!(g.poser_biomes(cx, cz, sy, biomes));
+            }
+        }
+    }
+    for essai in 0..20 {
+        let k = 1 + tirer(6) as usize;
+        let mut visees: Vec<(i32, i32, i8)> = (0..k)
+            .map(|_| (tirer(4) as i32, tirer(4) as i32, tirer(3) as i8))
+            .collect();
+        visees.sort_unstable();
+        visees.dedup();
+        let dans_la_grille = g.mailler_ces(&t, &visees);
+        let dans_l_extrait = g.extrait(&visees).mailler_ces(&t, &visees);
+        assert_eq!(
+            dans_l_extrait.lots.len(),
+            dans_la_grille.lots.len(),
+            "essai {essai} : nombre de lots"
+        );
+        for (a, b) in dans_l_extrait.lots.iter().zip(dans_la_grille.lots.iter()) {
+            assert_eq!(a.adresse, b.adresse, "essai {essai}");
+            assert_eq!(
+                a.quads.quads, b.quads.quads,
+                "essai {essai} : quads de {:?}",
+                a.adresse
+            );
+            assert_eq!(
+                a.poses.poses, b.poses.poses,
+                "essai {essai} : poses de {:?}",
+                a.adresse
+            );
+        }
+    }
+}

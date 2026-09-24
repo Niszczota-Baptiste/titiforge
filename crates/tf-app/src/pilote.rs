@@ -53,19 +53,26 @@ pub struct Fait {
     pub demande: bool,
     /// Cellules évincées RETIRÉES de la scène pendant cette image.
     pub degagees: usize,
+    /// Travaux de maillage APPLIQUÉS pendant cette image : c'est là, et
+    /// seulement là, que les arènes changent.
+    pub appliques: u64,
 }
 
 impl Fait {
     /// **Faut-il regarnir le GPU ?**
     ///
-    /// Sur les ARRIVÉES et non sur `posees` : une cellule qui revient vide
-    /// pose zéro section et efface pourtant ce qu'elle portait. Et sur le
-    /// dégagement, où rien n'arrive mais où des sections partent — ne
-    /// regarder que ce qui entre laisserait à l'écran le maillage de ce qu'on
-    /// vient d'évincer, ce qui est le piège « un chunk qui se VIDE ne figure
-    /// plus dans la liste des chunks », payé dans `ExeWorldEdit`.
+    /// Quand un maillage a été APPLIQUÉ — pas quand une cellule arrive. Le
+    /// maillage part hors du fil principal (`Ouvert::integrer`) : une arrivée
+    /// ne change les arènes qu'une ou deux images plus tard, et un dégagement
+    /// de même. Regarnir sur les arrivées enverrait au GPU des arènes qui
+    /// n'ont pas encore bougé, et ne le ferait plus au moment où elles
+    /// bougent.
+    ///
+    /// C'est aussi ce qui couvre les deux pièges d'avant : une cellule qui
+    /// revient vide efface ce qu'elle portait, et un dégagement retire des
+    /// sections — dans les deux cas un travail part, revient, et s'applique.
     pub fn a_change(&self) -> bool {
-        self.arrivees > 0 || self.degagees > 0
+        self.appliques > 0
     }
 }
 
@@ -206,9 +213,10 @@ impl Pilote {
         // évince ET dégage — ce qui arrive dès qu'on resserre le budget : la
         // scène perdrait des sections en annonçant qu'elle n'a pas changé, et
         // leur maillage resterait à l'écran.
-        let avant = o.degagees();
+        let (avant, appliques) = (o.degagees(), o.maillages_appliques());
         fait.posees = o.integrer(arrivees)?;
         fait.degagees = o.degagees() - avant;
+        fait.appliques = o.maillages_appliques() - appliques;
         match echec {
             Some(e) => Err(e),
             None => Ok(fait),

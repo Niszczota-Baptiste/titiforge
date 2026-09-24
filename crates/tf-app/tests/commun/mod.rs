@@ -432,6 +432,9 @@ pub fn streamer(o: &mut Ouvert, c: &mut Chargeur, n: usize) -> usize {
         faites += arrivees.len();
         o.integrer(arrivees).expect("intégration");
     }
+    // Le maillage part hors du fil principal : on attend qu'il soit revenu
+    // avant de rendre la main à un test qui va regarder la scène.
+    o.attendre_maillage().expect("maillage");
     faites
 }
 

@@ -51,6 +51,9 @@ fn degager(o: &mut Ouvert) {
             return;
         }
         o.integrer(Vec::new()).expect("dégagement");
+        // Le retrait se maille hors du fil principal : il ne compte qu'une
+        // fois revenu.
+        o.attendre_maillage().expect("maillage");
     }
     panic!(
         "le dégagement ne converge pas : {} en attente, {} octets comptés",

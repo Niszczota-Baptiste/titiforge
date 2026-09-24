@@ -234,6 +234,9 @@ fn integrer_par_lot_amortit_la_recopie_des_arenes() {
             faites += arrivees.len();
             let t = Instant::now();
             o.integrer(arrivees).expect("intégration");
+            // Le coût d'une intégration COMPLÈTE, maillage et arènes compris :
+            // c'est lui que le lot amortit, qu'il se fasse sur ce fil ou non.
+            o.attendre_maillage().expect("maillage");
             total += t.elapsed().as_secs_f64() * 1e3;
         }
         (total, faites)
@@ -340,6 +343,7 @@ fn une_cellule_qui_revient_vide_efface_ce_qu_elle_portait() {
         interner: tf_anvil::Interner::new(),
     }])
     .expect("intégration du vide");
+    o.attendre_maillage().expect("maillage");
 
     assert_eq!(
         dans_la_cellule(&o),

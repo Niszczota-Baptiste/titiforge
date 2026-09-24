@@ -63,6 +63,106 @@ impl tf_world::Weighed for Resident {
 /// confondrait ferait évincer 512 × 512 blocs en croyant en lâcher 16 × 16.
 type Cle = (Niveau, i32, i32);
 
+/// Un maillage parti hors du fil principal, et revenu.
+struct Fini {
+    id: u64,
+    visees: Vec<tf_mesh::Adresse>,
+    chantier: tf_mesh::Chantier,
+    /// Ce que le maillage a coûté au fil qui l'a fait — pour la découpe.
+    duree: std::time::Duration,
+    /// Le mailleur a paniqué : le chantier est vide, et on le DIT.
+    panique: bool,
+}
+
+/// **Le maillage, hors du fil principal.**
+///
+/// Mesuré en vol sur du bâti, le maillage prenait 3,5 ms par image en
+/// médiane et jusqu'à 7 — l'essentiel de la queue au-delà de 8 ms — pour un
+/// travail que rien n'oblige à faire sur le fil qui dessine. Il part donc
+/// avec un EXTRAIT de la grille (`Grille::extrait`) sur la réserve de fils,
+/// et revient plus tard.
+///
+/// **Les résultats s'appliquent dans l'ORDRE où les travaux sont partis**,
+/// jamais dans celui où ils reviennent. Chaque extrait est la grille à son
+/// départ ; appliqués dans l'ordre, ils rendent exactement la scène qu'un
+/// maillage synchrone aurait rendue — une section refaite par deux travaux
+/// finit avec le plus récent. Dans le désordre, un vieux maillage pourrait
+/// écraser un neuf.
+struct Atelier {
+    envoi: std::sync::mpsc::Sender<Fini>,
+    retour: std::sync::mpsc::Receiver<Fini>,
+    /// Numéro du prochain travail soumis.
+    prochain: u64,
+    /// Numéro du prochain travail à APPLIQUER.
+    attendu: u64,
+    /// Travaux revenus avant leur tour.
+    prets: std::collections::BTreeMap<u64, Fini>,
+    /// Travaux appliqués depuis l'ouverture : ce qui dit à l'hôte que les
+    /// arènes ont changé.
+    appliques: u64,
+    /// Un retard imposé au PROCHAIN travail — pour les tests, qui doivent
+    /// pouvoir faire revenir un travail après un plus récent. Sans lui,
+    /// l'ordre d'application ne se vérifierait que par chance.
+    retard: Option<std::time::Duration>,
+}
+
+/// **La réserve de fils du maillage hors fil** — un cœur de moins que la
+/// machine.
+///
+/// La réserve globale de `rayon` prend TOUS les cœurs : le fil principal s'y
+/// retrouvait à six fils pour quatre cœurs avec le fil de chargement, et
+/// perdait la main au hasard, au milieu de n'importe quelle phase. Mesuré en
+/// vol sur du bâti : médiane 3,3 à 4,5 ms et p95 7 à 10 ms avec quatre fils
+/// de maillage, 2,7 et 5,4 avec trois — pour le même nombre de cellules
+/// posées. Le cœur laissé libre est celui du fil qui dessine.
+///
+/// Une par processus, pas une par monde ouvert : le compte des cœurs est une
+/// affaire de machine.
+fn reserve_de_maillage() -> &'static rayon::ThreadPool {
+    static RESERVE: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    RESERVE.get_or_init(|| {
+        let coeurs = std::thread::available_parallelism().map_or(2, |n| n.get());
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(coeurs.saturating_sub(1).max(1))
+            .thread_name(|i| format!("titiforge-maillage-{i}"))
+            .build()
+            .expect("la réserve de fils du maillage")
+    })
+}
+
+impl Atelier {
+    fn neuf() -> Atelier {
+        let (envoi, retour) = std::sync::mpsc::channel();
+        Atelier {
+            envoi,
+            retour,
+            prochain: 0,
+            attendu: 0,
+            prets: std::collections::BTreeMap::new(),
+            appliques: 0,
+            retard: None,
+        }
+    }
+
+    fn en_vol(&self) -> usize {
+        (self.prochain - self.attendu) as usize
+    }
+
+    /// Range ce qui est revenu. Un travail d'avant un rechargement est JETÉ :
+    /// il maillait un monde qui n'est plus.
+    fn ranger(&mut self, f: Fini) {
+        if f.id >= self.attendu {
+            self.prets.insert(f.id, f);
+        }
+    }
+
+    /// Oublie ce qui est en vol : un rechargement remplace le monde entier.
+    fn oublier(&mut self) {
+        self.attendu = self.prochain;
+        self.prets.clear();
+    }
+}
+
 /// **Les adresses de section qu'une cellule couvre**, déduites de sa
 /// géométrie.
 ///
@@ -91,7 +191,10 @@ fn adresses_de(c: &tf_world::Cellule) -> Vec<tf_mesh::Adresse> {
 /// Tout ce qu'une scène chargée porte.
 pub struct Monde {
     pub grille: Grille,
-    pub table: TableFormes,
+    /// Partagée avec le fil de maillage : l'étendre la recopie si un travail
+    /// en cours la tient encore (`Arc::make_mut`), ce qui n'arrive qu'à
+    /// l'arrivée d'un état jamais vu.
+    pub table: std::sync::Arc<TableFormes>,
     pub arene: Arene,
     pub modeles: AreneModeles,
     pub atlas: tf_assets::Atlas,
@@ -134,7 +237,7 @@ impl Monde {
     pub fn solide(&self) -> impl Fn([i32; 3]) -> bool + '_ {
         move |c| {
             let id = self.grille.bloc(c[0], c[1], c[2]);
-            !tf_mesh::forme::Formes::est_air(&self.table, id)
+            !tf_mesh::forme::Formes::est_air(&*self.table, id)
         }
     }
 }
@@ -297,7 +400,7 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
         maillages: tf_mesh::Maillages::depuis(chantier),
         quoi,
         grille,
-        table,
+        table: std::sync::Arc::new(table),
         arene,
         modeles,
         atlas,
@@ -524,6 +627,8 @@ pub struct Ouvert {
     /// `a_degager`), et c'est le second qui change ce qui est à l'écran —
     /// donc le seul qui dise à l'hôte qu'il doit regarnir son GPU.
     degagees: usize,
+    /// Le maillage hors du fil principal.
+    atelier: Atelier,
 }
 
 impl Ouvert {
@@ -550,6 +655,7 @@ impl Ouvert {
                 protegees: std::collections::HashSet::new(),
                 deborde: false,
                 degagees: 0,
+                atelier: Atelier::neuf(),
             });
         };
         // Le ménage d'abord : une séance qui s'est mal terminée a laissé sa
@@ -589,6 +695,7 @@ impl Ouvert {
             protegees: std::collections::HashSet::new(),
             deborde: false,
             degagees: 0,
+            atelier: Atelier::neuf(),
         };
         o.inscrire_la_zone();
         Ok(o)
@@ -739,118 +846,31 @@ impl Ouvert {
         // les cellules touchées revient à peser les cellules posées. On passe
         // leurs adresses telles quelles.
         let visees: Vec<tf_mesh::Adresse> = cs.iter().flat_map(adresses_de).collect();
-        self.peser(cs, &visees);
+        self.inscrire(&cs);
+        self.repeser(&visees);
     }
 
-    /// **Pèse et inscrit**, une fois le maillage fait.
+    /// **Inscrit les cellules qui arrivent**, avec le poids de leurs seules
+    /// sections : leur maillage n'existe pas encore, il est parti au fil de
+    /// maillage (`Atelier`). [`Ouvert::repeser`] corrige quand il revient.
     ///
-    /// Le poids exact ne se connaît qu'ICI : le maillage d'une région bâtie
-    /// pèse 168 fois celui d'une région de terrain (101 Mo contre 0,6),
-    /// l'estimer avant reviendrait à inventer un facteur que la mesure dément.
+    /// Inscrites DÈS leur arrivée, et pas au retour du maillage : c'est ce qui
+    /// empêche la demande de les redemander pendant qu'elles se maillent — et
+    /// ce qui les fait compter tout de suite dans le budget.
     ///
-    /// **Les arrivées ne sont pas les seules à repeser.** Une cellule maigrit
-    /// quand sa voisine arrive — les faces de son bord, jusque-là exposées à
-    /// du vide, se retrouvent masquées — et regrossit quand cette voisine est
-    /// évincée. Un chunk bâti porte environ 6 800 quads ; ses quatre murs de
-    /// bord en valent plusieurs fois autant. Ne repeser que les arrivées
-    /// laisserait donc chaque cellule inscrite au poids qu'elle avait SEULE,
-    /// soit un surcompte durable — et une fenêtre qui tient la moitié de ce
-    /// qu'elle pourrait, en croyant tenir le compte.
-    ///
-    /// On repèse donc toute cellule résidente qui possède une section VISÉE :
-    /// ce sont exactement celles que le remaillage vient de changer.
-    ///
-    /// Les arrivées passent par `insert` — elles viennent d'être demandées,
-    /// leur récence est juste. Les autres par `update`, qui corrige le poids
-    /// SANS toucher à la récence : les faire remonter ferait garder au LRU
-    /// exactement ce qu'il faudrait lâcher.
-    ///
-    /// **Une seule passe sur le chantier.** Demander à chaque cellule ce que
-    /// ses lots pèsent coûterait O(scène × cellules) — la faute exacte que ce
-    /// dépôt a payée trois fois sous le nom de « chauffer le build entier
-    /// pour écrire trois blocs ».
-    fn peser(&mut self, arrivees: Vec<tf_world::Cellule>, visees: &[tf_mesh::Adresse]) {
-        // 1. Les cellules à repeser : les arrivées, plus les résidentes qui
-        //    possèdent une section visée.
-        let mut cles: std::collections::HashSet<Cle> =
-            arrivees.iter().map(|c| (c.niveau, c.x, c.z)).collect();
-        let mut touchees: Vec<tf_world::Cellule> = Vec::new();
-        for a in visees {
-            // Les deux niveaux, plutôt qu'un champ qui dirait lequel la scène
-            // emploie : deux constantes pour une même vérité finissent par
-            // diverger, et celle-ci ne coûte qu'une recherche de plus.
-            for n in [Niveau::Chunk, Niveau::Region] {
-                let k = (n, n.cellule_axe(a.0 * 16), n.cellule_axe(a.1 * 16));
-                if cles.contains(&k) {
-                    continue;
-                }
-                if let Some(r) = self.residence.peek(&k) {
-                    touchees.push(r.cellule.clone());
-                    cles.insert(k);
-                }
-            }
-        }
-
-        if cles.is_empty() {
-            return;
-        }
-
-        // 2. Le poids de chaque cellule, en UNE passe sur les lots.
-        let mut octets: std::collections::HashMap<Cle, usize> =
-            std::collections::HashMap::with_capacity(cles.len());
-        let mut ou: std::collections::HashMap<tf_mesh::Adresse, Cle> =
-            std::collections::HashMap::new();
-        for c in arrivees.iter().chain(touchees.iter()) {
-            let k = (c.niveau, c.x, c.z);
-            for a in adresses_de(c) {
-                ou.insert(a, k);
-            }
-            octets.insert(k, 0);
-        }
-        // **Une section ne compte que pour UNE cellule.** Sommer les adresses
-        // cellule par cellule compterait deux fois ce que deux cellules
-        // couvrent toutes les deux — ce qui arrive dès qu'un hôte mêle les
-        // niveaux, une cellule de RÉGION contenant 32 × 32 cellules de chunk.
-        // La table d'appartenance tranche : un propriétaire par adresse.
-        for (a, k) in &ou {
-            *octets.get_mut(k).expect("clé posée juste au-dessus") +=
-                self.monde.grille.octets_de(*a);
-        }
-        // Par RECHERCHE, pas par parcours : les lots de la scène entière
-        // étaient visités pour en trouver quelques dizaines, à chaque image —
-        // 0,4 ms à 264 Mo résidents, et ça grandissait avec elle.
-        for (a, k) in &ou {
-            if let Some(l) = self.monde.maillages.lot(a) {
-                // Les DEUX formes : le `Vec<Quad>` en mémoire vive et sa copie
-                // packée dans l'arène. Ne compter que l'une sous-compterait le
-                // maillage d'un tiers, sur la moitié la plus lourde d'une
-                // région bâtie.
-                *octets.get_mut(k).expect("clé posée juste au-dessus") +=
-                    l.octets() + l.octets_vive();
-            }
-        }
-
-        // 3. Les corrections d'abord, les arrivées ensuite — c'est l'ordre qui
-        //    compte. Évincer sur des poids encore faux ferait lâcher la
-        //    mauvaise cellule.
-        for c in touchees {
-            let k = (c.niveau, c.x, c.z);
-            let n = octets.get(&k).copied().unwrap_or(0);
-            self.residence.update(
-                &k,
-                Resident {
-                    cellule: c,
-                    octets: n,
-                },
-            );
-        }
+    /// `insert` pour elles — elles viennent d'être demandées, leur récence est
+    /// juste. L'éviction qu'il déclenche part à l'appel SUIVANT (`a_degager`).
+    fn inscrire(&mut self, arrivees: &[tf_world::Cellule]) {
         for c in arrivees {
             let k = (c.niveau, c.x, c.z);
-            let n = octets.get(&k).copied().unwrap_or(0);
+            let n: usize = adresses_de(c)
+                .into_iter()
+                .map(|a| self.monde.grille.octets_de(a))
+                .sum();
             let ev = self.residence.insert(
                 k,
                 Resident {
-                    cellule: c,
+                    cellule: c.clone(),
                     octets: n,
                 },
                 tf_world::State::Clean,
@@ -869,6 +889,90 @@ impl Ouvert {
         }
     }
 
+    /// **Repèse les cellules résidentes qui possèdent une section VISÉE** :
+    /// ce sont exactement celles dont un remaillage vient de changer le poids
+    /// — sections et maillage.
+    ///
+    /// Par `update`, qui corrige le poids SANS toucher à la récence : les
+    /// faire remonter ferait garder au LRU exactement ce qu'il faudrait lâcher.
+    /// Les cellules qui viennent d'arriver sont déjà inscrites
+    /// ([`Ouvert::inscrire`]) : elles sont repesées comme les autres.
+    ///
+    /// **Une seule passe sur les visées.** Demander à chaque cellule ce que
+    /// ses lots pèsent coûterait O(scène × cellules) — la faute exacte que ce
+    /// dépôt a payée trois fois sous le nom de « chauffer le build entier
+    /// pour écrire trois blocs ».
+    fn repeser(&mut self, visees: &[tf_mesh::Adresse]) {
+        // 1. Les cellules à repeser : les résidentes qui possèdent une section
+        //    visée.
+        let mut cles: std::collections::HashSet<Cle> = std::collections::HashSet::new();
+        let mut touchees: Vec<tf_world::Cellule> = Vec::new();
+        for a in visees {
+            // Les deux niveaux, plutôt qu'un champ qui dirait lequel la scène
+            // emploie : deux constantes pour une même vérité finissent par
+            // diverger, et celle-ci ne coûte qu'une recherche de plus.
+            for n in [Niveau::Chunk, Niveau::Region] {
+                let k = (n, n.cellule_axe(a.0 * 16), n.cellule_axe(a.1 * 16));
+                if cles.contains(&k) {
+                    continue;
+                }
+                if let Some(r) = self.residence.peek(&k) {
+                    touchees.push(r.cellule.clone());
+                    cles.insert(k);
+                }
+            }
+        }
+        if cles.is_empty() {
+            return;
+        }
+
+        // 2. Le poids de chaque cellule.
+        let mut octets: std::collections::HashMap<Cle, usize> =
+            std::collections::HashMap::with_capacity(cles.len());
+        let mut ou: std::collections::HashMap<tf_mesh::Adresse, Cle> =
+            std::collections::HashMap::new();
+        for c in &touchees {
+            let k = (c.niveau, c.x, c.z);
+            for a in adresses_de(c) {
+                ou.insert(a, k);
+            }
+            octets.insert(k, 0);
+        }
+        // **Une section ne compte que pour UNE cellule.** Sommer les adresses
+        // cellule par cellule compterait deux fois ce que deux cellules
+        // couvrent toutes les deux — ce qui arrive dès qu'un hôte mêle les
+        // niveaux, une cellule de RÉGION contenant 32 × 32 cellules de chunk.
+        // La table d'appartenance tranche : un propriétaire par adresse.
+        for (a, k) in &ou {
+            *octets.get_mut(k).expect("clé posée juste au-dessus") +=
+                self.monde.grille.octets_de(*a);
+            // Par RECHERCHE, pas par parcours : les lots de la scène entière
+            // étaient visités pour en trouver quelques dizaines, à chaque
+            // image — 0,4 ms à 264 Mo résidents, et ça grandissait avec elle.
+            if let Some(l) = self.monde.maillages.lot(a) {
+                // Les DEUX formes : le `Vec<Quad>` en mémoire vive et sa copie
+                // packée dans l'arène. Ne compter que l'une sous-compterait le
+                // maillage d'un tiers, sur la moitié la plus lourde d'une
+                // région bâtie.
+                *octets.get_mut(k).expect("clé posée juste au-dessus") +=
+                    l.octets() + l.octets_vive();
+            }
+        }
+
+        // 3. Les corrections, sans toucher à la récence.
+        for c in touchees {
+            let k = (c.niveau, c.x, c.z);
+            let n = octets.get(&k).copied().unwrap_or(0);
+            self.residence.update(
+                &k,
+                Resident {
+                    cellule: c,
+                    octets: n,
+                },
+            );
+        }
+    }
+
     /// Relit et remaille. **Depuis la copie de travail**, pas la source :
     /// c'est elle qui porte ce qu'on vient d'écrire.
     ///
@@ -884,12 +988,17 @@ impl Ouvert {
     /// table voisine. Ça arrive une fois par type de bloc et par séance, et
     /// c'est le seul moment où l'on paie le prix fort.
     pub fn remailler(&mut self, bornes: Option<tf_world::coords::BBox>) -> Result<(), String> {
-        let Some(st) = &self.staging else {
+        if self.staging.is_none() {
             return Err("la fixture n'a pas de save derrière elle".into());
-        };
+        }
         let Some(b) = bornes else {
             return self.recharger();
         };
+        // **Ce qui est parti au mailleur revient D'ABORD.** L'édition se
+        // maille ici, sur ce fil ; un travail plus ancien appliqué après elle
+        // remettrait l'ancien maillage par-dessus le neuf.
+        self.attendre_maillage()?;
+        let st = self.staging.as_ref().expect("vérifié juste au-dessus");
         let visees =
             Grille::sections_touchees([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
         if visees.is_empty() {
@@ -959,11 +1068,10 @@ impl Ouvert {
         );
         self.monde.interner = interner;
         phase("relecture", t0);
-        self.refaire(&visees, connus)?;
-        // **Le poids des cellules éditées a changé** — leurs sections comme
-        // leur maillage. Sans cette repesée, la fenêtre de résidence dériverait
-        // à chaque geste d'édition : elle ne se compare plus à rien.
-        self.peser(Vec::new(), &visees);
+        // Le poids des cellules éditées change — leurs sections comme leur
+        // maillage : `appliquer` les repèse. Sans cette repesée, la fenêtre
+        // de résidence dériverait à chaque geste d'édition.
+        self.refaire(&visees, connus);
         Ok(())
     }
 
@@ -1005,13 +1113,28 @@ impl Ouvert {
     ///
     /// Rend le nombre de sections posées.
     pub fn integrer(&mut self, lot: Vec<Arrivee>) -> Result<usize, String> {
+        // **Ce que le mailleur a rendu passe d'abord**, dans l'ordre où c'est
+        // parti : les arènes rattrapent ce que la grille porte depuis les
+        // images précédentes.
+        let echec = self.recolter();
+        let posees = self.poser_et_mailler(lot);
+        match echec {
+            Some(e) => Err(e),
+            None => Ok(posees),
+        }
+    }
+
+    /// Pose les arrivées dans la grille, retire ce qui a été évincé, et
+    /// envoie le remaillage au fil de maillage. Rend le nombre de sections
+    /// posées.
+    fn poser_et_mailler(&mut self, lot: Vec<Arrivee>) -> usize {
         // Rien à poser, rien à dégager, et rien au-dessus du budget : il n'y a
-        // pas de raison de recopier les arènes.
+        // rien à remailler.
         if lot.is_empty()
             && self.a_degager.is_empty()
             && self.residence.used() <= self.residence.budget()
         {
-            return Ok(0);
+            return 0;
         }
         let connus = self.monde.interner.len();
         let mut posees = 0;
@@ -1115,12 +1238,9 @@ impl Ouvert {
         // Les états neufs entrent dans la table AVANT ce relevé : un état
         // qu'elle ne connaît pas se lit « pas opaque », et la voisine qu'il
         // bouche garderait son mur de faces.
-        let connus = if self.monde.interner.len() > connus {
+        if self.monde.interner.len() > connus {
             self.etendre_atlas(connus);
-            self.monde.interner.len()
-        } else {
-            connus
-        };
+        }
         for b in &boites {
             visees.extend(self.touchees(b));
         }
@@ -1130,39 +1250,25 @@ impl Ouvert {
         visees.sort_unstable();
         visees.dedup();
         phase("poser    ", t0);
-        let avant = self.rechargements;
-        self.refaire(&visees, connus)?;
-        // **Une arrivée ne recharge JAMAIS la zone.** Elle le faisait quand
-        // une texture neuve dépassait le côté de l'atlas, et sous le streaming
-        // ça bouclait : la zone rechargée ne contenait plus la cellule, la
-        // caméra la redemandait, et tout recommençait. L'atlas grandit
-        // maintenant sur place ; ce qui reste ici garde la porte fermée.
-        debug_assert_eq!(
-            self.rechargements, avant,
-            "une intégration ne recharge jamais la zone"
-        );
-        // **La pesée vient APRÈS le maillage**, et l'éviction qu'elle
-        // déclenche part au prochain appel : voir `a_degager`.
-        let t = std::time::Instant::now();
-        self.peser(arrivees, &visees);
-        phase("peser    ", t);
-        self.monde.quads = self.monde.maillages.quads();
-        self.monde.poses = self.monde.maillages.poses();
-        Ok(posees)
+        // **Inscrites maintenant, repesées au retour du maillage.** La
+        // demande ne doit pas redemander ce qui se maille, et le budget doit
+        // compter ce qui est déjà dans la grille.
+        self.inscrire(&arrivees);
+        self.soumettre(visees);
+        posees
     }
 
-    /// **Ce qui suit toute arrivée de blocs** : accueillir les états neufs,
-    /// remailler les sections visées, remplacer les tranches d'arène.
+    /// **Le remaillage SYNCHRONE d'une édition** : accueillir les états
+    /// neufs, remailler les visées sur ce fil, et appliquer.
     ///
-    /// Écrite UNE fois et partagée par le remaillage d'édition et
-    /// l'intégration d'une cellule chargée. Ce dépôt a payé quatre fois le
-    /// piège des deux implémentations d'une même règle, et celle-ci en porte
-    /// trois d'un coup — l'extension d'atlas, l'ordre des tranches, la somme
-    /// préfixe des poses.
+    /// Une édition attend son résultat — on la voit tout de suite, et elle ne
+    /// porte que quelques sections. C'est l'hôte qui a d'abord vidé l'atelier
+    /// (`attendre_maillage`) : un vieux travail appliqué APRÈS l'édition
+    /// remettrait l'ancien maillage par-dessus.
     ///
     /// `connus` est la taille de la table d'états AVANT l'arrivée : ce qui est
     /// au-delà est neuf et n'a pas encore de texture.
-    fn refaire(&mut self, visees: &[tf_mesh::Adresse], connus: usize) -> Result<(), String> {
+    fn refaire(&mut self, visees: &[tf_mesh::Adresse], connus: usize) {
         self.sections_remaillees = visees.len();
         // **Un état jamais vu ÉTEND l'atlas ; il ne recharge pas la zone.**
         //
@@ -1170,40 +1276,173 @@ impl Ouvert {
         // au geste le plus banal d'un éditeur : prendre un bloc dans la
         // palette et le poser. Mesuré sur une zone de 64 chunks, poser un bloc
         // connu coûtait 0,7 ms et poser un bloc NEUF 22,3 — × 33 — et ce coût
-        // est en O(zone), donc 867 ms sur une région bâtie : une seconde de
-        // fenêtre figée pour un bloc. C'est le `warmup(extent)`
-        // d'`ExeWorldEdit` (5,2 s pour une sphère de 62 blocs), qui a coûté
-        // cher deux applications de suite.
-        //
-        // L'extension est sûre parce que les indices de couche déjà attribués
-        // ne bougent pas, et que `TableFormes` comme l'habillage sont indexés
-        // par `StateId` dans l'ORDRE d'internement : les états neufs portent
-        // les identifiants suivants, donc s'ajoutent à la fin. Rien de ce qui
-        // est déjà maillé ne change de sens.
+        // est en O(zone), donc 867 ms sur une région bâtie.
         if self.monde.interner.len() > connus {
             self.etendre_atlas(connus);
         }
         let t1 = std::time::Instant::now();
-        // Sur tous les cœurs : le chargement complet le faisait déjà, et le
-        // remaillage séquentiel d'une arrivée coûtait 12,5 ms par image de vol
-        // sur du bâti, le poste dominant une fois les arènes réglées.
         let neufs = self
             .monde
             .grille
-            .mailler_ces_parallele(&self.monde.table, visees);
+            .mailler_ces_parallele(&*self.monde.table, visees);
         phase("mailler  ", t1);
+        self.appliquer(visees.to_vec(), neufs);
+    }
+
+    /// **Envoie le remaillage des visées au fil de maillage**, avec un
+    /// extrait de la grille telle qu'elle est maintenant.
+    fn soumettre(&mut self, visees: Vec<tf_mesh::Adresse>) {
+        self.sections_remaillees = visees.len();
+        let id = self.atelier.prochain;
+        self.atelier.prochain += 1;
+        let t = std::time::Instant::now();
+        let extrait = self.monde.grille.extrait(&visees);
+        phase("extraire ", t);
+        let table = std::sync::Arc::clone(&self.monde.table);
+        let envoi = self.atelier.envoi.clone();
+        let retard = self.atelier.retard.take();
+        reserve_de_maillage().spawn(move || {
+            if let Some(d) = retard {
+                std::thread::sleep(d);
+            }
+            let t = std::time::Instant::now();
+            // Un mailleur qui panique ne doit pas bloquer l'ordre : le
+            // travail revient VIDE, et l'hôte le dit.
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                extrait.mailler_ces_parallele(&*table, &visees)
+            }));
+            let (chantier, panique) = match r {
+                Ok(c) => (c, false),
+                Err(_) => (tf_mesh::Chantier::default(), true),
+            };
+            // L'hôte a pu fermer entre-temps : personne n'attend plus.
+            let _ = envoi.send(Fini {
+                id,
+                visees,
+                chantier,
+                duree: t.elapsed(),
+                panique,
+            });
+        });
+    }
+
+    /// **Applique ce que le mailleur a rendu**, dans l'ordre de départ, sans
+    /// attendre ce qui n'est pas revenu. Rend l'échec d'un travail, s'il y en
+    /// a eu un.
+    fn recolter(&mut self) -> Option<String> {
+        while let Ok(f) = self.atelier.retour.try_recv() {
+            self.atelier.ranger(f);
+        }
+        self.appliquer_dans_l_ordre()
+    }
+
+    fn appliquer_dans_l_ordre(&mut self) -> Option<String> {
+        let mut echec = None;
+        while let Some(f) = self.atelier.prets.remove(&self.atelier.attendu) {
+            self.atelier.attendu += 1;
+            phase_texte(&format!(
+                "mailler (fil) : {:.1} ms",
+                f.duree.as_secs_f64() * 1000.0
+            ));
+            if f.panique {
+                echec = Some(format!(
+                    "le maillage de {} section(s) a échoué : elles ne sont pas dessinées",
+                    f.visees.len()
+                ));
+            }
+            self.appliquer(f.visees, f.chantier);
+        }
+        echec
+    }
+
+    /// **Attend que tout ce qui est parti au mailleur soit revenu**, et
+    /// l'applique. Pour ce qui doit voir la scène À JOUR : une édition, qui
+    /// passerait sinon sous un vieux travail, et les tests.
+    pub fn attendre_maillage(&mut self) -> Result<(), String> {
+        let mut echec = self.recolter();
+        while self.atelier.en_vol() > 0 {
+            // Un délai, pas une attente sans fin : un fil de maillage perdu
+            // ne doit pas figer l'éditeur sans rien dire.
+            match self
+                .atelier
+                .retour
+                .recv_timeout(std::time::Duration::from_secs(120))
+            {
+                Ok(f) => self.atelier.ranger(f),
+                Err(_) => return Err("le maillage ne revient pas".into()),
+            }
+            if let Some(e) = self.appliquer_dans_l_ordre() {
+                echec = Some(e);
+            }
+        }
+        match echec {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Travaux partis au mailleur et pas encore appliqués.
+    pub fn maillages_en_vol(&self) -> usize {
+        self.atelier.en_vol()
+    }
+
+    /// Fait attendre le PROCHAIN travail de maillage avant de commencer.
+    /// Pour les tests : c'est ce qui fait revenir un travail après un plus
+    /// récent, donc ce qui rend l'ordre d'application vérifiable.
+    #[doc(hidden)]
+    pub fn retarder_le_prochain_maillage(&mut self, d: std::time::Duration) {
+        self.atelier.retard = Some(d);
+    }
+
+    /// **Le maillage de la scène est-il celui de sa grille ?** Remaille
+    /// tout et compare, lot par lot. Coûteux — pour les tests, qui ne peuvent
+    /// pas deviner quel travail aurait dû gagner.
+    #[doc(hidden)]
+    pub fn maillage_juste(&self) -> Result<(), String> {
+        let mut complet = self.monde.grille.mailler(&*self.monde.table);
+        complet.trier();
+        let tenus: Vec<&tf_mesh::Lot> = self.monde.maillages.lots().collect();
+        if tenus.len() != complet.lots.len() {
+            return Err(format!(
+                "{} lots tenus pour {} dans la grille",
+                tenus.len(),
+                complet.lots.len()
+            ));
+        }
+        for (a, b) in tenus.iter().zip(complet.lots.iter()) {
+            if a.adresse != b.adresse
+                || a.quads.quads != b.quads.quads
+                || a.poses.poses != b.poses.poses
+            {
+                return Err(format!(
+                    "la section {:?} ne porte pas le maillage de son contenu",
+                    b.adresse
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Travaux de maillage appliqués depuis l'ouverture. Quand il bouge, les
+    /// arènes ont changé : c'est ce qui dit à l'hôte de regarnir son GPU.
+    pub fn maillages_appliques(&self) -> u64 {
+        self.atelier.appliques
+    }
+
+    /// **Remplace les tranches des visées** dans les deux arènes et dans le
+    /// maillage de la scène, puis repèse ce qui a changé.
+    ///
+    /// Écrite UNE fois et partagée par le maillage hors fil et celui d'une
+    /// édition. Ce dépôt a payé quatre fois le piège des deux implémentations
+    /// d'une même règle, et celle-ci en porte trois d'un coup — l'ordre des
+    /// tranches, la somme préfixe des poses, la pesée.
+    fn appliquer(&mut self, visees: Vec<tf_mesh::Adresse>, neufs: tf_mesh::Chantier) {
         let t2 = std::time::Instant::now();
         // **Les arènes reçoivent les lots NEUFS, pas le chantier.** Elles
         // rangent chaque section à une place stable et ne réécrivent que les
-        // visées : 19 et 16 ms par image de vol sur du bâti quand elles
-        // recopiaient la scène entière (`--example vol`), et ce coût grandissait
-        // avec elle. Ne pas leur donner le chantier rend l'ancienne faute
-        // impossible à refaire par inadvertance.
-        //
-        // Les quads D'ABORD : c'est leur remplacement qui attribue et rend les
-        // emplacements des deux passes.
+        // visées.
         self.monde.arene.remplacer(
-            visees,
+            &visees,
             &neufs.lots,
             &apparence(
                 &self.monde.habillage,
@@ -1215,7 +1454,7 @@ impl Ouvert {
         let t3 = std::time::Instant::now();
         self.monde.modeles.remplacer(
             self.monde.arene.emplacements(),
-            visees,
+            &visees,
             &neufs.lots,
             &modele_de(
                 &self.monde.table,
@@ -1226,11 +1465,17 @@ impl Ouvert {
         );
         phase("modèles  ", t3);
         let t1b = std::time::Instant::now();
-        self.monde.maillages.remplacer(visees, neufs);
+        self.monde.maillages.remplacer(&visees, neufs);
         phase("chantier ", t1b);
         self.monde.quads = self.monde.maillages.quads();
         self.monde.poses = self.monde.maillages.poses();
-        Ok(())
+        // **La pesée vient APRÈS le maillage** — le poids ne se connaît
+        // qu'alors — et l'éviction qu'elle déclenche part au prochain appel :
+        // voir `a_degager`.
+        let t = std::time::Instant::now();
+        self.repeser(&visees);
+        phase("peser    ", t);
+        self.atelier.appliques += 1;
     }
 
     /// Ce qu'un changement du contenu de la boîte oblige à remailler, d'après
@@ -1240,7 +1485,7 @@ impl Ouvert {
         self.monde.grille.touchees_par_le_contenu(
             [b.min.x, b.min.y, b.min.z],
             [b.max.x, b.max.y, b.max.z],
-            &self.monde.table,
+            &*self.monde.table,
         )
     }
 
@@ -1276,7 +1521,8 @@ impl Ouvert {
             &self.assets.teintes,
             neuves.into_iter(),
             &|n| self.assets.translucides.contains(n),
-            &mut self.monde.table,
+            // Recopiée seulement si un travail de maillage la tient encore.
+            std::sync::Arc::make_mut(&mut self.monde.table),
             &mut self.monde.habillage,
         );
         debug_assert_eq!(
@@ -1294,6 +1540,9 @@ impl Ouvert {
     /// après une édition ordinaire est un bug, et un test le vérifie.
     fn recharger(&mut self) -> Result<(), String> {
         self.rechargements += 1;
+        // Ce qui est parti au mailleur maillait le monde qu'on remplace : il
+        // est oublié, et jeté à son retour.
+        self.atelier.oublier();
         let st = self
             .staging
             .as_ref()

@@ -576,13 +576,25 @@ réticule. Éditer une cellule streamée la retirait de la scène pour toujours
 (lecture serrée sur la zone d'ouverture). Et les voisines d'une cellule ne se
 remaillent plus que si son contenu les touche (− 23 % de sections sur `Build`).
 
+✅ **Le maillage quitte le fil principal**, et les parcours de la scène par
+image aussi (`Maillages`). Les résultats s'appliquent dans l'ordre de départ,
+une édition vide l'atelier d'abord, un rechargement oublie ce qui était en
+route ; la réserve de maillage laisse un cœur au fil qui dessine. Vol sur du
+bâti : **6,4 → 2,6 ms** par image en médiane, 6 à 10 images sur 400 au-delà
+de 8 ms — des agrandissements de tampon que llvmpipe copie sur le processeur.
+
 **Ce qui reste, dans cet ordre** :
 
-1. **La queue** : une image sur dix environ au-delà de 8 ms, 20 ms au pire.
-   Les pics des arènes étaient des doublements de `Vec` — réglés par un
-   tableau par PAGES ; ceux du GPU, la reconstruction de la scène — réglés ;
-   ce qui reste vient du MAILLAGE, et se découpe avant de s'attaquer.
-2. Remesurer, et seulement alors décider si les deux cellules par image
+1. **Mesurer sur un VRAI GPU.** Tout ce qui est au-delà de 8 ms aujourd'hui
+   est une copie que llvmpipe exécute sur le processeur ; sur une carte, elle
+   est asynchrone. La promesse se tranche là, pas ici.
+2. **Le monde de 800 régions.** Le vol mesuré traverse deux régions et ne
+   remplit que 178 Mo : il faut un monde qui dépasse le budget de 1,5 Go,
+   survolé assez longtemps pour que l'éviction tourne en continu.
+3. **Les cellules de RÉGION au loin.** Le découpage à deux niveaux existe,
+   rien ne s'en sert encore : sans lui, le rayon d'affichage reste celui que
+   la mémoire permet au niveau chunk.
+4. Remesurer, et seulement alors décider si les deux cellules par image
    peuvent monter.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,

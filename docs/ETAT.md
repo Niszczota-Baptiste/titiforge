@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **866**, zéro échec |
+| Tests | **870**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-866 tests, répartis par ce qu'ils PROUVENT :
+870 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -64,7 +64,7 @@ cargo test --workspace
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 67 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 41 | glouton contre naïf, case par case ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
+| `tf-mesh` mailler/chantier | 42 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
 | `tf-render` rendu | 30 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -85,6 +85,7 @@ cargo test --workspace
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
 | `tf-app` pilote | 7 | la caméra qui PILOTE : qu'une région ILLISIBLE n'est lue qu'une fois sur six cents images immobiles, et que l'échec se dit ; que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
 | `tf-app` residence | 5 | que la MÉMOIRE est bornée : que ce que la fenêtre compte est ce que la scène porte À L'OCTET PRÈS, qu'un vol continu tient sous son budget sans jamais recharger la zone, que ce qui survit à l'éviction est quad pour quad ce qu'un chargement direct donnerait (la marge du dégagement, que rien d'autre ne voit), que corriger le poids d'une voisine n'en fait pas la plus récente, et qu'une cellule de RÉGION est pesée sur ses 32 × 32 colonnes |
+| `tf-app` atelier | 3 | le maillage HORS DU FIL PRINCIPAL et son ordre : qu'un vieux travail revenu le dernier ne passe pas par-dessus un neuf, qu'un rechargement oublie ce qui était en route, et qu'une édition passe après ce qui était en route — chaque fois en forçant le retour tardif (`retarder_le_prochain_maillage`) et en comparant la scène à un maillage complet de sa grille |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 13 | l'échantillon reste représentatif du pack |
 
@@ -785,6 +786,42 @@ Chercher à réduire le maillage a fait trouver autre chose :
 La queue de `Build` reste celle du maillage sur le fil principal, et elle ne
 descendra pas sous 8 ms tant qu'il y restera : c'est la prochaine pièce.
 
+#### Le maillage quitte le fil principal
+
+Une fois les arènes, le GPU et les parcours réglés, la queue de `Build` était
+le MAILLAGE : 3,5 ms par image en médiane, jusqu'à 7, sur le fil qui
+dessine. Il part maintenant sur une réserve de fils avec un EXTRAIT de la
+grille (`Grille::extrait` : les sections visées, leurs vingt-six voisines,
+leurs biomes — des `Arc`, pas des copies), et revient plus tard. Les cellules
+sont inscrites à la résidence dès leur arrivée — la demande ne redemande pas
+ce qui se maille — et repesées au retour de leur maillage.
+
+**Les résultats s'appliquent dans l'ordre de DÉPART**, jamais dans celui de
+retour : chaque extrait est la grille à son départ, et un vieux maillage
+appliqué après un neuf remettrait à l'écran ce qui n'est plus. Une édition
+vide d'abord l'atelier puis se maille sur place ; un rechargement oublie ce
+qui était en route. Les trois se vérifient en forçant un retour tardif
+(`tests/atelier.rs`) et en comparant la scène à un maillage complet de sa
+grille (`maillage_juste`) ; trois mutations, zéro survivant — la troisième
+passait tant que l'édition du test posait un bloc ENFOUI, qui ne change
+aucune face visible.
+
+Puis la contention : la réserve globale prend tous les cœurs, et le fil
+principal se retrouvait à six fils pour quatre cœurs avec le fil de
+chargement. La réserve du maillage garde un cœur libre.
+
+| `Build`, médiane de trois | image, médiane | p95 | images > 8 ms |
+|---|---:|---:|---:|
+| maillage sur le fil principal | 6,4 ms | ~9,5 ms | 50 à 74 / 400 |
+| hors du fil, réserve globale (4 fils) | 3,3 ms | 7,0 à 10,3 ms | 9 à 40 / 400 |
+| hors du fil, un cœur laissé libre (3 fils) | **2,6 ms** | **5,8 à 6,5 ms** | **6 à 10 / 400** |
+
+`Terrain` : 0,85 ms en médiane, 0 à 2 images au-delà de 8 ms. Les images qui
+restent au-delà sont les AGRANDISSEMENTS de tampon GPU — 33 à 39 ms quand
+llvmpipe exécute sur le processeur la copie de 35 Mo d'un ancien tampon vers
+le neuf. Sur un vrai GPU cette copie est asynchrone : c'est là, et pas ici,
+que la promesse « aucune pause > 8 ms » se vérifiera.
+
 #### Trois parcours de la scène par image, qui grandissaient avec elle
 
 Le vol par défaut ne remplit que 178 Mo ; le budget déclaré est de 1,5 Go.
@@ -831,7 +868,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **La queue des images de vol sur du bâti** | médiane ~6 ms, mais une image sur dix environ au-delà de 8 ms et jusqu'à 20 ms au pire (`--example vol`). Les pics viennent du maillage, et ne sont pas encore découpés |
+| **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |

@@ -59,6 +59,9 @@ where
     let mut vol = Vol::default();
     for i in 0..n {
         if fini(o) {
+            // Le maillage part hors du fil principal : un test qui regarde la
+            // scène doit la voir une fois revenue.
+            o.attendre_maillage().expect("maillage");
             return vol;
         }
         if debut.elapsed() > Duration::from_secs(120) {
@@ -77,6 +80,7 @@ where
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+    o.attendre_maillage().expect("maillage");
     vol
 }
 
@@ -254,7 +258,7 @@ fn un_vol_continu_charge_et_lache() {
     for _ in 0..600 {
         let f = p.image(&mut o, fin, EST, 2).expect("image à l'arrêt");
         images_a_l_arret += 1;
-        calme = if f.a_change() || o.en_attente() > 0 {
+        calme = if f.a_change() || o.en_attente() > 0 || o.maillages_en_vol() > 0 {
             0
         } else {
             calme + 1
@@ -300,6 +304,12 @@ fn un_vol_continu_charge_et_lache() {
     // seules ARRIVÉES laisserait à l'écran — le maillage de ce qu'il vient
     // d'évincer, le piège « un chunk qui se VIDE ne figure plus dans la liste
     // des chunks », payé dans `ExeWorldEdit`.
+    //
+    // Le retrait se maille hors du fil principal : les arènes changent quand
+    // son travail REVIENT, une ou deux images plus tard. C'est cette image-là
+    // qui doit le dire — et le maillage retiré doit alors avoir quitté la
+    // scène.
+    let quads_avant = o.monde.quads;
     o.budget_residence(o.octets_residents() / 2);
     let f = p
         .image(&mut o, fin, EST, 2)
@@ -309,10 +319,25 @@ fn un_vol_continu_charge_et_lache() {
         f.degagees > 0,
         "resserrer le budget doit RETIRER des cellules dans le même appel"
     );
+    let mut dit = f.a_change();
+    for _ in 0..500 {
+        if dit {
+            break;
+        }
+        dit = p.image(&mut o, fin, EST, 2).expect("image").a_change();
+        std::thread::sleep(Duration::from_millis(2));
+    }
     assert!(
-        f.a_change(),
-        "et l'image doit le DIRE, sinon le GPU garde le maillage d'avant"
+        dit,
+        "une image doit DIRE que le retrait a atteint les arènes, sinon le GPU \
+         garde le maillage d'avant"
     );
+    assert!(
+        o.monde.quads < quads_avant,
+        "et quand elle le dit, le maillage retiré est parti : {} quads, {quads_avant} avant",
+        o.monde.quads
+    );
+    o.attendre_maillage().expect("maillage");
     assert!(o.evictions() > 0, "et vraiment lâcher");
     assert_eq!(o.rechargements, 0, "sans jamais recharger la zone");
     assert!(
