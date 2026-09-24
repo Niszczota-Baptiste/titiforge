@@ -332,10 +332,12 @@ impl Libres {
 pub const TASSER_AU_DELA: u64 = 1 << 16;
 
 /// Les instances de tout un chantier, chaque section à sa PLACE.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Arene {
-    /// Le tableau que le GPU dessine d'un seul appel — trous compris.
-    pub instances: Vec<InstanceQuad>,
+    /// Le tableau que le GPU dessine d'un seul appel — trous compris. Par
+    /// PAGES : un `Vec` qui double recopiait toute la scène, 16 ms d'une image
+    /// de vol à 2,4 millions d'instances (`crate::pages`).
+    pub instances: crate::pages::Pages<InstanceQuad>,
     emplacements: Emplacements,
     places: HashMap<Adresse, Tranche>,
     libres: Libres,
@@ -346,6 +348,20 @@ pub struct Arene {
     /// dirait la même chose en dépendant de la machine.
     ecrites: u64,
     tassements: u32,
+}
+
+impl Default for Arene {
+    fn default() -> Arene {
+        Arene {
+            instances: crate::pages::Pages::new(InstanceQuad::VIDE),
+            emplacements: Emplacements::default(),
+            places: HashMap::new(),
+            libres: Libres::default(),
+            sales: Vec::new(),
+            ecrites: 0,
+            tassements: 0,
+        }
+    }
 }
 
 impl Arene {
@@ -482,8 +498,7 @@ impl Arene {
             return d;
         }
         let d = self.instances.len() as u32;
-        self.instances
-            .resize(self.instances.len() + n as usize, InstanceQuad::VIDE);
+        self.instances.resize(self.instances.len() + n as usize);
         d
     }
 
@@ -493,7 +508,8 @@ impl Arene {
         if n == 0 {
             return;
         }
-        self.instances[debut as usize..(debut + n) as usize].fill(InstanceQuad::VIDE);
+        self.instances
+            .fill(debut as usize, (debut + n) as usize, InstanceQuad::VIDE);
         self.sales.push((debut, n));
         self.libres.rendre(debut, n);
         if let Some(d) = self.libres.couper_fin(self.instances.len() as u32) {
@@ -508,15 +524,24 @@ impl Arene {
     fn tasser(&mut self) {
         let mut places: Vec<Tranche> = self.places.values().copied().collect();
         places.sort_unstable_by_key(|t| t.debut);
-        let mut neuves = Vec::with_capacity(self.instances.len() - self.libres.total() as usize);
+        let mut neuves = crate::pages::Pages::new(InstanceQuad::VIDE);
+        neuves.resize(self.instances.len() - self.libres.total() as usize);
+        let mut d = 0usize;
         for t in &mut places {
-            let d = neuves.len() as u32;
-            neuves.extend_from_slice(
-                &self.instances[t.debut as usize..(t.debut + t.nombre) as usize],
-            );
-            t.debut = d;
+            let debut = d;
+            for (_, morceau) in self
+                .instances
+                .plage(t.debut as usize, (t.debut + t.nombre) as usize)
+            {
+                for &i in morceau {
+                    neuves[d] = i;
+                    d += 1;
+                }
+            }
+            t.debut = debut as u32;
             self.places.insert(t.adresse, *t);
         }
+        neuves.truncate(d);
         self.instances = neuves;
         self.libres.vider();
         self.sales.clear();
@@ -599,7 +624,7 @@ impl Arene {
     }
 
     pub fn octets(&self) -> usize {
-        std::mem::size_of_val(&self.instances[..])
+        self.instances.len() * std::mem::size_of::<InstanceQuad>()
     }
 
     /// Bornes du contenu, en blocs monde. `None` si l'arène est vide.

@@ -5,9 +5,16 @@
 //! la source rendrait le monde d'AVANT — ce qui se lit « le bouton ne fait
 //! rien », et ne désigne pas la cause.
 //!
-//! Le test demande un pack (`TF_PACK`), comme les autres tests qui touchent à
-//! de vrais assets : un test qu'on ne peut pas jouer sans une donnée qu'on n'a
-//! pas ne doit pas casser la suite de quelqu'un, mais il doit EXISTER.
+//! **Ces tests tournent PARTOUT.** Ils demandaient un vrai pack (`TF_PACK`)
+//! et se sautaient sans lui — donc jamais en intégration continue, jamais chez
+//! quelqu'un qui n'a pas le serveur, et c'étaient justement ceux qui croisent
+//! le remaillage incrémental avec le rechargement complet. Sans `TF_PACK`, le
+//! codex minimal des tests est écrit à la volée (`commun::codex`) ; avec, ils
+//! se rejouent sur le vrai pack. Un test qui ne tourne pas ne dit rien.
+
+mod commun;
+
+use commun::Jetable;
 
 use std::time::{Duration, Instant};
 
@@ -28,35 +35,21 @@ fn semer(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// **Un dossier d'essai qui s'efface QUOI QU'IL ARRIVE.**
+/// **Un monde d'essai qui s'efface quoi qu'il arrive** — celui de `commun`,
+/// semé de terrain.
 ///
-/// Un `remove_dir_all` en fin de test ne s'exécute pas quand le test panique
-/// ou sort tôt — et un test qui échoue est justement celui qu'on relance dix
-/// fois. Mesuré après une séance : dix-sept mégaoctets de dossiers d'essai
-/// oubliés dans le temporaire. `Drop` n'a pas ce défaut.
-struct Jetable(std::path::PathBuf);
-
-impl Jetable {
-    fn neuf(etiquette: &str) -> Jetable {
-        let d = std::env::temp_dir().join(format!("tf-essai-{}-{etiquette}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        semer(&d).expect("monde jetable");
-        Jetable(d)
-    }
-
-    fn chemin(&self) -> &std::path::Path {
-        &self.0
-    }
-
-    fn texte(&self) -> &str {
-        self.0.to_str().expect("chemin lisible")
-    }
-}
-
-impl Drop for Jetable {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+/// Ce fichier avait SON `Jetable`, nommé par le seul numéro de processus et
+/// l'étiquette. Tant que chaque test prenait une étiquette à lui, ça tenait ;
+/// le jour où deux tests en parallèle ont demandé « codex », ils ont partagé
+/// le même dossier, et le premier qui finissait effaçait le pack de l'autre —
+/// deux à quatre tests rouges sur neuf, au hasard. C'est le piège des deux
+/// mondes qui partageaient une copie de travail, une fois de plus : un nom
+/// « unique » à l'échelle du processus ne l'est pas. Celui de `commun` porte un
+/// compteur, et il n'en existe plus qu'un.
+fn monde(etiquette: &str) -> Jetable {
+    let j = Jetable::neuf(etiquette);
+    semer(j.chemin()).expect("monde jetable");
+    j
 }
 
 fn attendre(m: &mut Moteur) -> Reponse {
@@ -70,13 +63,22 @@ fn attendre(m: &mut Moteur) -> Reponse {
     }
 }
 
+/// Le pack de ces tests : `TF_PACK` s'il est donné, le codex minimal écrit à
+/// la volée sinon. Le `Jetable` rendu doit vivre autant que le test : il
+/// efface le codex en partant.
+fn pack() -> (String, Option<Jetable>) {
+    if let Ok(p) = std::env::var("TF_PACK") {
+        return (p, None);
+    }
+    let j = Jetable::neuf("codex");
+    let p = commun::codex(j.chemin(), &["glowstone"]);
+    (p, Some(j))
+}
+
 #[test]
 fn ce_que_le_fil_ecrit_la_coque_le_relit() {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — test sauté (il a besoin d'un vrai pack)");
-        return;
-    };
-    let jetable = Jetable::neuf("relit");
+    let (pack, _codex) = pack();
+    let jetable = monde("relit");
     let dir = jetable.chemin().to_path_buf();
 
     let mut ouvert = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1])
@@ -134,11 +136,8 @@ fn ce_que_le_fil_ecrit_la_coque_le_relit() {
 /// genre de faute qu'on ne découvre que le jour où on en a besoin.
 #[test]
 fn ecrire_sauvegarde_avant_d_ecrire() {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — test sauté");
-        return;
-    };
-    let jetable = Jetable::neuf("ecrire");
+    let (pack, _codex) = pack();
+    let jetable = monde("ecrire");
     let dir = jetable.chemin().to_path_buf();
     let avant = std::fs::read(dir.join("region/r.0.0.mca")).unwrap();
 
@@ -213,11 +212,8 @@ fn ecrire_sauvegarde_avant_d_ecrire() {
 /// faisait ça, et le test accusait le remaillage d'une différence qui venait
 /// du témoin.
 fn croiser_les_deux_chemins(bloc: &str, sel: BBox, etiquette: &str) {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — test sauté");
-        return;
-    };
-    let jetable = Jetable::neuf(etiquette);
+    let (pack, _codex) = pack();
+    let jetable = monde(etiquette);
     let dir = jetable.chemin().to_path_buf();
 
     let mut vite = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 1, 1]).unwrap();
@@ -243,10 +239,17 @@ fn croiser_les_deux_chemins(bloc: &str, sel: BBox, etiquette: &str) {
 
     vite.remailler(Some(bornes))
         .expect("remaillage incrémental");
+    // Ce qui est DESSINÉ, pas la disposition : les arènes rangent chaque
+    // section à une place stable et laissent des trous, donc un remplacement
+    // et un rechargement ne produisent pas les mêmes tableaux — et c'est
+    // voulu. Couches ramenées à un dictionnaire commun, par NOM.
+    let mut mots = Vec::new();
+    let c = commun::canon(&vite, &mut mots);
     let rapide = (
         vite.monde.quads,
         vite.monde.poses,
-        vite.monde.arene.instances.clone(),
+        commun::montre(&vite, &c),
+        commun::montre_modeles(&vite, &c),
     );
 
     vite.remailler(None).expect("rechargement complet");
@@ -258,11 +261,16 @@ fn croiser_les_deux_chemins(bloc: &str, sel: BBox, etiquette: &str) {
         rapide.1, vite.monde.poses,
         "{etiquette} : pas les mêmes poses"
     );
-    // Sur les INSTANCES, pas sur un compte : deux maillages du même nombre de
-    // quads peuvent décrire deux images différentes.
-    assert_eq!(
-        rapide.2, vite.monde.arene.instances,
+    // Sur ce qui est DESSINÉ, pas sur un compte : deux maillages du même
+    // nombre de quads peuvent décrire deux images différentes.
+    let c = commun::canon(&vite, &mut mots);
+    assert!(
+        rapide.2 == commun::montre(&vite, &c),
         "{etiquette} : pas la même géométrie"
+    );
+    assert!(
+        rapide.3 == commun::montre_modeles(&vite, &c),
+        "{etiquette} : pas les mêmes faces de modèles"
     );
 
     moteur.arreter();
@@ -339,11 +347,8 @@ fn deux_emprises_s_unissent() {
 /// mesure a déjà échoué dans ce dépôt sur du code intact.
 #[test]
 fn mesurer_les_deux_chemins() {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — mesure sautée");
-        return;
-    };
-    let jetable = Jetable::neuf("mesure");
+    let (pack, _codex) = pack();
+    let jetable = monde("mesure");
     let dir = jetable.chemin().to_path_buf();
 
     // Une zone plus large que 2 × 2 : c'est là que la différence se voit, le
@@ -405,11 +410,8 @@ fn mesurer_les_deux_chemins() {
 /// 18 ms sur 18,3 partent dans la relecture, 0,2 dans le maillage.
 #[test]
 fn mesurer_la_relecture() {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — mesure sautée");
-        return;
-    };
-    let jetable = Jetable::neuf("relire");
+    let (pack, _codex) = pack();
+    let jetable = monde("relire");
     let o = Ouvert::ouvrir(&pack, Some(jetable.texte()), [0, 0, 1, 1]).unwrap();
     let st = o.staging.clone().unwrap();
 
@@ -460,11 +462,8 @@ fn mesurer_la_relecture() {
 /// inconnu déclenche, une fois par type de bloc et par séance.
 #[test]
 fn mesurer_le_rechargement() {
-    let Ok(pack) = std::env::var("TF_PACK") else {
-        eprintln!("TF_PACK absent — mesure sautée");
-        return;
-    };
-    let jetable = Jetable::neuf("recharge");
+    let (pack, _codex) = pack();
+    let jetable = monde("recharge");
 
     let t = std::time::Instant::now();
     let assets = tf_app::scene::Assets::charger(&pack).unwrap();

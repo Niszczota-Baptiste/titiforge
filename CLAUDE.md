@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (845 tests aujourd’hui)
+cargo test            # tous les crates (850 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1852,3 +1852,19 @@ propres à ce dépôt.
   éditions tirées aux arêtes et aux coins, là seulement où croix et boîte
   diffèrent — rougira ce jour-là. Le remède sera `sections_autour`, pas un
   test qu'on fait taire.
+- **L'O(1) amorti d'un `Vec` est un pic en O(scène).** Chaque pic de plus de
+  quatre millisecondes des deux arènes était un doublement de capacité — 16 ms
+  pour recopier 2,4 millions d'instances — et aucun n'était le tassement qu'on
+  soupçonnait. Mesuré en instrumentant l'agrandissement, pas deviné. Une scène
+  qui remplit son budget aurait figé l'image plus d'un dixième de seconde au
+  doublement suivant. Les arènes sont rangées par PAGES (`tf_render::Pages`) :
+  grandir ajoute une page, rien ne bouge, et le GPU se remplit page par page
+  sans recoller un tableau contigu — ce qui referait exactement la recopie.
+- **Un test sauté faute de donnée cachait une course.** Les tests de
+  `chantier.rs` exigeaient `TF_PACK` et ne tournaient donc jamais ; branchés
+  sur le codex écrit à la volée, deux à quatre sur neuf tombaient au hasard.
+  Le fichier avait SON `Jetable`, nommé par le seul numéro de processus et
+  l'étiquette : deux tests qui demandaient « codex » partageaient le dossier,
+  et le premier qui finissait effaçait le pack de l'autre. Troisième fois du
+  même piège — un nom unique à l'échelle du processus ne l'est pas. Il n'y a
+  plus qu'un `Jetable`, celui de `commun`, et il porte un compteur.

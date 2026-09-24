@@ -547,14 +547,17 @@ code que le chantier complet, sur une liste (× 2,7 sur quatre cœurs) ; et la
 marge n'est plus une boîte élargie sur les trois axes mais une croix, parce
 que le mailleur ne lit que les six voisins par face — une colonne qui arrive
 en fait remailler cinq au lieu de neuf. Mesuré en vol sur du bâti : **6,3 ms
-par image en médiane**, 68 images sur 400 au-delà de 8 ms. Le contrat de la
+par image en médiane**, 68 images sur 400 au-delà de 8 ms — puis **5,9 ms et
+42** une fois les arènes rangées par pages. Le contrat de la
 croix est celui du mailleur d'aujourd'hui : l'occlusion ambiante le cassera,
 et un test croisé avec le maillage complet le dira.
 
 **Ce qui reste, dans cet ordre** :
 
-1. **La queue** : 68 images sur 400 au-delà de 8 ms, 21 ms au pire. Les pics
-   de l'arène des quads (16 ms) sont à mesurer avant d'y toucher.
+1. **La queue** : une image sur dix au-delà de 8 ms, 25 ms au pire. Les pics
+   des arènes étaient des doublements de `Vec` — réglés par un tableau par
+   PAGES, qui grandit sans recopier ; ce qui reste vient du MAILLAGE, et se
+   découpe avant de s'attaquer.
 2. **L'envoi GPU partiel** : les arènes disent ce qui a changé
    (`prendre_sales`), mais `regarnir` rebâtit encore tampons, pipelines et
    atlas à chaque changement.

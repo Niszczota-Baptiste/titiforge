@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **845**, zéro échec |
+| Tests | **850**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-845 tests, répartis par ce qu'ils PROUVENT :
+850 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -72,13 +72,14 @@ cargo test --workspace
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
-| `tf-app` chantier | 9 | la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
+| `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
 | `tf-app` moteur | 9 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 25 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
 | `tf-app` rechargement | 8 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement ; et qu'un repli PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
+| `tf-render` pages | 5 | le tableau par PAGES : que grandir ne déplace aucune page existante, qu'il se comporte comme un `Vec` sur une suite tirée d'une graine, qu'une case recréée vaut `vide` et pas son ancien contenu, et qu'une plage se découpe aux frontières de page |
 | `tf-render` arene | 7 | les PLACES STABLES : que ce qui est dessiné — la passe de modèles rejouée comme le shader la dichotomise — est ce qu'une arène rebâtie dessinerait, après des milliers d'arrivées, de départs et d'éditions tirés d'une graine ; qu'un remplacement COMPTE ce qu'il écrit et paie ce qu'il change, pas la scène ; qu'un trou se réemploie ; qu'il y a un emplacement par lot et pas un de plus ; et que tasser ne change rien à l'image |
 | `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
@@ -687,10 +688,23 @@ qui arrive ne change le maillage que de ses quatre voisines par face — cinq
 colonnes remaillées au lieu des neuf de la boîte élargie. `Terrain` passe
 entièrement sous le budget : 1,5 ms en médiane, 5,0 au pire, zéro image au-delà.
 
-**La médiane sur du bâti est passée sous les 8 ms ; la queue, pas encore** :
-68 images sur 400 au-delà, 21 ms au pire. Les pires cas de l'arène des
-quads (16 ms) ne sont pas élucidés — un agrandissement du tableau recopie tout
-ce qu'il porte, et le tassement aussi. À mesurer avant d'y toucher.
+**Les pics des arènes étaient des agrandissements de `Vec`**, et rien
+d'autre : mesuré, chaque pic de plus de quatre millisecondes coïncidait avec
+un doublement de capacité — 16 ms pour passer de 1,2 à 2,4 millions
+d'instances, 6,6 ms pour les poses — et aucun tassement n'a eu lieu. Un
+doublement recopie tout ce que le tableau porte : une scène qui remplit son
+budget aurait figé l'image plus d'un dixième de seconde. Les deux arènes sont
+maintenant rangées par PAGES de 65 536 éléments (`tf_render::Pages`) ; grandir
+ajoute une page et ne déplace rien, et le GPU se remplit page par page.
+Médiane de trois vols :
+
+| `Build` | arène des quads, pire | modèles, pire | image, médiane | p95 | images > 8 ms |
+|---|---:|---:|---:|---:|---:|
+| `Vec` | 16,3 ms | 7,2 ms | 6,3 ms | 9,6 ms | 68 / 400 |
+| pages | **2,1 à 4,4 ms** | **1,8 à 3,0 ms** | **5,9 ms** | 8,9 ms | **42 / 400** (28 à 47) |
+
+Ce qui reste dans la queue est le MAILLAGE : 8 à 20 ms au pire, selon la
+passe.
 
 ---
 
@@ -704,7 +718,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **La queue des images de vol sur du bâti** | médiane 6,3 ms, mais 68 images sur 400 au-delà de 8 ms et 21 ms au pire (`--example vol`). Les pics de l'arène des quads (16 ms) ne sont pas encore expliqués |
+| **La queue des images de vol sur du bâti** | médiane 5,9 ms, mais une image sur dix au-delà de 8 ms et jusqu'à 25 ms au pire (`--example vol`, médiane de trois). Les pics viennent du maillage, et ne sont pas encore découpés |
 | **Le GPU reçoit encore la scène ENTIÈRE à chaque changement** | `regarnir` rebâtit les tampons, les pipelines et l'atlas. Les arènes savent maintenant dire ce qui a changé (`prendre_sales`), mais rien ne s'en sert encore — et ce coût-là ne se mesure pas sur un rastériseur logiciel |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |

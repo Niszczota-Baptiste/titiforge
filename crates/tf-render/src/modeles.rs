@@ -166,10 +166,13 @@ pub struct Origine {
 /// faces de CETTE pose, et toute autre face tombe sur une pose vide, donc ne
 /// dessine rien. Recoller deux trous ne demande alors aucune réécriture ; en
 /// couper un n'en demande qu'une, courte, là où la croissance serait rompue.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AreneModeles {
     pub faces: Vec<FaceModele>,
-    pub poses: Vec<Pose>,
+    /// Par PAGES, pour la même raison que l'arène des quads : un `Vec` qui
+    /// double recopiait toutes les poses, 6,6 ms d'une image de vol à un
+    /// million de poses.
+    pub poses: crate::pages::Pages<Pose>,
     /// Toutes les places, occupées et trous, par première pose. Elles pavent
     /// les deux espaces sans jour ni recouvrement, dans le même ordre.
     blocs: BTreeMap<u32, Bloc>,
@@ -204,6 +207,26 @@ pub struct AreneModeles {
     ///
     /// [`remplacer`]: AreneModeles::remplacer
     connus: HashMap<(StateId, StateId), (u32, u32)>,
+}
+
+impl Default for AreneModeles {
+    fn default() -> AreneModeles {
+        AreneModeles {
+            faces: Vec::new(),
+            poses: crate::pages::Pages::new(Pose::vide(0)),
+            blocs: BTreeMap::new(),
+            occupes: HashMap::new(),
+            trous: BTreeSet::new(),
+            faces_a_dessiner: 0,
+            sales: Vec::new(),
+            faces_envoyees: 0,
+            trous_poses: 0,
+            trous_faces: 0,
+            ecrites: 0,
+            tassements: 0,
+            connus: HashMap::new(),
+        }
+    }
 }
 
 impl AreneModeles {
@@ -390,8 +413,10 @@ impl AreneModeles {
         let Some((_, _, pd)) = trouve else {
             let pd = self.poses.len() as u32;
             let fd = self.faces_a_dessiner;
+            let debut = self.poses.len();
+            self.poses.resize(debut + pcap as usize);
             self.poses
-                .resize(self.poses.len() + pcap as usize, Pose::vide(fd));
+                .fill(debut, debut + pcap as usize, Pose::vide(fd));
             self.faces_a_dessiner += fcap;
             self.blocs.insert(
                 pd,
@@ -447,8 +472,8 @@ impl AreneModeles {
         let b = self.blocs[&pd];
         // Les poses deviennent VIDES en gardant leur rang : la croissance tient
         // sans rien recalculer.
-        for q in &mut self.poses[pd as usize..(pd + b.pcap) as usize] {
-            q.section = Pose::SANS_SECTION;
+        for i in pd as usize..(pd + b.pcap) as usize {
+            self.poses[i].section = Pose::SANS_SECTION;
         }
         self.sales.push((pd, b.pcap));
         self.ajouter_trou(Bloc { qui: None, ..b });
@@ -530,23 +555,28 @@ impl AreneModeles {
             .filter(|b| b.qui.is_some())
             .copied()
             .collect();
-        let mut poses = Vec::with_capacity(self.poses.len());
+        let mut poses = crate::pages::Pages::new(Pose::vide(0));
+        poses.resize(self.poses.len() - self.trous_poses as usize);
+        let mut n = 0usize;
         let mut blocs = BTreeMap::new();
         let mut rang = 0u32;
         for b in occupes {
-            let pd = poses.len() as u32;
+            let pd = n as u32;
             let decalage = rang as i64 - b.fd as i64;
-            for q in &self.poses[b.pd as usize..(b.pd + b.pcap) as usize] {
-                poses.push(Pose {
+            for i in b.pd as usize..(b.pd + b.pcap) as usize {
+                let q = self.poses[i];
+                poses[n] = Pose {
                     debut_face: (q.debut_face as i64 + decalage) as u32,
-                    ..*q
-                });
+                    ..q
+                };
+                n += 1;
             }
             let nb = Bloc { pd, fd: rang, ..b };
             blocs.insert(pd, nb);
             self.occupes.insert(b.qui.expect("filtré"), pd);
             rang += b.fcap;
         }
+        poses.truncate(n);
         self.poses = poses;
         self.blocs = blocs;
         self.trous.clear();
@@ -588,9 +618,10 @@ impl AreneModeles {
                     hi = mid;
                 }
             }
-            let Some(p) = self.poses.get(lo) else {
+            if lo >= self.poses.len() {
                 continue;
-            };
+            }
+            let p = self.poses[lo];
             if p.est_vide() {
                 continue;
             }
@@ -644,7 +675,9 @@ impl AreneModeles {
                 (pd, fd),
                 "jour ou recouvrement avant la place {k}"
             );
-            let poses = &self.poses[b.pd as usize..(b.pd + b.pcap) as usize];
+            let poses: Vec<Pose> = (b.pd as usize..(b.pd + b.pcap) as usize)
+                .map(|i| self.poses[i])
+                .collect();
             match b.qui {
                 None => assert!(
                     poses.iter().all(Pose::est_vide),
@@ -684,10 +717,10 @@ impl AreneModeles {
             fd, self.faces_a_dessiner,
             "les fenêtres ne couvrent pas l'appel de dessin"
         );
-        for w in self.poses.windows(2) {
+        for i in 1..self.poses.len() {
             assert!(
-                w[0].debut_face <= w[1].debut_face,
-                "la somme préfixe décroît"
+                self.poses[i - 1].debut_face <= self.poses[i].debut_face,
+                "la somme préfixe décroît au rang {i}"
             );
         }
         let (tp, tf) = self

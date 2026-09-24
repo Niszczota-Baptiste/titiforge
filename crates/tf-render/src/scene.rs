@@ -109,11 +109,12 @@ impl Scene {
             mapped_at_creation: false,
         });
 
-        let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("arène"),
-            contents: bytemuck::cast_slice(&arene.instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let instances = tampon_pages(
+            &device,
+            "arène",
+            wgpu::BufferUsages::VERTEX,
+            &arene.instances,
+        );
 
         // UNE table d'origines pour les deux passes. Deux se décaleraient le
         // jour où l'une saute une section vide, et tout un pan du build se
@@ -438,7 +439,7 @@ impl PasseModeles {
             })
         };
         let faces = tampon("faces de modèle", bytemuck::cast_slice(&a.faces));
-        let poses = tampon("poses", bytemuck::cast_slice(&a.poses));
+        let poses = tampon_pages(device, "poses", wgpu::BufferUsages::STORAGE, &a.poses);
         let lecture = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX,
@@ -523,6 +524,42 @@ impl PasseModeles {
             faces: a.faces_a_dessiner,
         }
     }
+}
+
+/// **Un tampon GPU rempli page par page** depuis un tableau par pages.
+///
+/// Sans copie intermédiaire : recoller les pages dans un `Vec` contigu pour
+/// le seul plaisir de `create_buffer_init` referait exactement la recopie de
+/// toute la scène que les pages existent pour éviter. Le tampon est projeté
+/// en mémoire à la création, chaque page y est écrite à son décalage.
+///
+/// Seize octets au moins : wgpu refuse un tampon de taille nulle, et une
+/// scène vide est un cas de test légitime.
+fn tampon_pages<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    nom: &str,
+    usage: wgpu::BufferUsages,
+    p: &crate::pages::Pages<T>,
+) -> wgpu::Buffer {
+    let octets = p.len() * std::mem::size_of::<T>();
+    let taille = (octets.max(16) as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+    let tampon = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(nom),
+        size: taille,
+        usage,
+        mapped_at_creation: true,
+    });
+    {
+        let mut vue = tampon.slice(..).get_mapped_range_mut();
+        let mut o = 0;
+        for page in p.pages() {
+            let b: &[u8] = bytemuck::cast_slice(page);
+            vue[o..o + b.len()].copy_from_slice(b);
+            o += b.len();
+        }
+    }
+    tampon.unmap();
+    tampon
 }
 
 /// L'atlas, monté au GPU en texture-TABLEAU.
