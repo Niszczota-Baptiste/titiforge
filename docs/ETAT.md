@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **856**, zéro échec |
+| Tests | **862**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-856 tests, répartis par ce qu'ils PROUVENT :
+862 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -64,7 +64,7 @@ cargo test --workspace
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 67 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 36 | glouton contre naïf, case par case ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
+| `tf-mesh` mailler/chantier | 40 | glouton contre naïf, case par case ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
 | `tf-render` rendu | 30 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -78,7 +78,7 @@ cargo test --workspace
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 25 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
-| `tf-app` rechargement | 9 | qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
+| `tf-app` rechargement | 11 | qu'éditer une cellule STREAMÉE ne la retire pas de la scène ni n'y fait naître ce qui n'est pas chargé ; qu'un état jamais vu au bord d'une cellule qui arrive cache bien la face de sa voisine ; qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
 | `tf-render` pages | 5 | le tableau par PAGES : que grandir ne déplace aucune page existante, qu'il se comporte comme un `Vec` sur une suite tirée d'une graine, qu'une case recréée vaut `vide` et pas son ancien contenu, et qu'une plage se découpe aux frontières de page |
 | `tf-render` arene | 7 | les PLACES STABLES : que ce qui est dessiné — la passe de modèles rejouée comme le shader la dichotomise — est ce qu'une arène rebâtie dessinerait, après des milliers d'arrivées, de départs et d'éditions tirés d'une graine ; qu'un remplacement COMPTE ce qu'il écrit et paie ce qu'il change, pas la scène ; qu'un trou se réemploie ; qu'il y a un emplacement par lot et pas un de plus ; et que tasser ne change rien à l'image |
 | `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
@@ -746,6 +746,44 @@ dichotomie du shader va jusqu'à `arrayLength` — et reliées dès que ce nombr
 change. Trois tests au pixel et à l'octet, onze mutations, zéro survivant ;
 deux d'entre elles passaient tant que les tampons grandissaient pile à la
 taille demandée.
+
+#### Trois défauts de justesse, trouvés en découpant la queue
+
+La découpe par image (`TF_PHASES`, une ligne `IMAGE` par image dans `--example
+vol`) a d'abord attribué la queue : sur les images au-delà de 8 ms, le
+MAILLAGE domine, sauf pour cinq pics de 8 à 31 ms qui tombent tous dans la
+soumission — et coïncident exactement avec un agrandissement des tampons
+d'instances ou de poses, dont llvmpipe exécute la copie sur le processeur
+(13,9 ms pour 35 Mo). Sur un vrai GPU cette copie est asynchrone : à
+remesurer là, pas à optimiser ici.
+
+Chercher à réduire le maillage a fait trouver autre chose :
+
+1. **L'identifiant 0 n'était pas l'air.** Le mailleur remplissait ce qui
+   manque avec `0` ; or 0 est le premier état DÉCODÉ — `minecraft:deepslate`
+   ici. Un chunk non chargé était un mur de deepslate invisible : faces de
+   bord effacées, et `Monde::solide` répondait vrai dans le vide, donc le
+   réticule s'y arrêtait. Ce qui manque vaut maintenant `tf_mesh::ABSENT`.
+   La scène montre désormais sa coupe au bord de ce qui est chargé, et ça se
+   paie : `Terrain` passe de 18,5 à 23,4 Mo résidents et de 1,6 à 2,2 ms
+   par image en médiane — le prix d'une image juste, pas une régression.
+2. **Éditer une cellule streamée la trouait.** `remailler` relisait en
+   serrant sur la zone d'ouverture, règle d'avant le streaming : la section
+   éditée disparaissait de la scène, pour toujours. Il relit maintenant les
+   visées dont la cellule est résidente, et repèse ce qu'il a touché.
+3. **Une voisine n'est remaillée que si le contenu la touche.** Son maillage
+   ne dépend d'une section que par l'opacité de la couche qui la borde :
+   `Build` remaille 23 % de sections en moins (95 016 → 73 276 sur le vol),
+   9 % de maillage. Modeste sur ce bâti, qui touche ses bords partout ; un
+   build entouré d'air n'en remaille plus aucune.
+
+| médiane de trois, `--gpu synchro` | image, médiane | images > 8 ms |
+|---|---:|---:|
+| `Terrain` | 2,2 ms | 0 à 3 / 400 |
+| `Build` | 6,4 ms | 50 à 74 / 400 |
+
+La queue de `Build` reste celle du maillage sur le fil principal, et elle ne
+descendra pas sous 8 ms tant qu'il y restera : c'est la prochaine pièce.
 
 #### Une arrivée rechargeait la zone — en boucle
 

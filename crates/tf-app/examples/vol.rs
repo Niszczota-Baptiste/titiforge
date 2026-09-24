@@ -225,18 +225,43 @@ fn voler(
             .image(&mut o, oeil, EST, CELLULES_PAR_IMAGE)
             .expect("une image");
         if let Some(c) = &mut cote {
+            let grandi = c.scene.agrandissements();
             if f.a_change() {
                 let g = Instant::now();
                 envoyes += c.regarnir(mode, &mut o);
                 temps_gpu.push(ms(g.elapsed()));
+                tf_app::scene::phase("gpu", g);
             }
             // Une soumission par image, comme la fenêtre : c'est elle qui
             // vide les écritures en attente. Sans elle, elles
             // s'accumuleraient et la mesure les paierait toutes à la fin.
+            let g = Instant::now();
             c.app.queue.submit([]);
             c.app.device.poll(wgpu::Maintain::Poll);
+            tf_app::scene::phase("soumettre", g);
+            if c.scene.agrandissements() > grandi {
+                tf_app::scene::phase_texte(&format!(
+                    "tampons agrandis : {:?}",
+                    c.scene.capacites()
+                ));
+            }
         }
         let d = t.elapsed();
+        // Sous `TF_PHASES`, une ligne par IMAGE après ses phases : ce qui
+        // s'imprime entre deux de ces lignes appartient à la seconde, et
+        // c'est ce qui permet d'attribuer un pic à ce qui l'a causé.
+        tf_app::scene::phase_texte(&format!(
+            "IMAGE {i} {:.2} ms · {} arrivées · {} dégagées · {} sections remaillées · {} posées",
+            ms(d),
+            f.arrivees,
+            f.degagees,
+            if f.a_change() {
+                o.sections_remaillees
+            } else {
+                0
+            },
+            f.posees
+        ));
         temps.push(ms(d));
         arrivees += f.arrivees;
         // Le reste de l'image : ce que la fenêtre passerait à attendre la

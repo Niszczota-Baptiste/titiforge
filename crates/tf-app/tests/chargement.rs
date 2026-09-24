@@ -307,8 +307,23 @@ fn une_cellule_qui_revient_vide_efface_ce_qu_elle_portait() {
         .collect();
     c.demander(lots);
     assert_eq!(streamer(&mut o, &mut c, n), n);
+    // Ce que la scène DESSINE encore depuis la cellule (1, 1) : les quads dont
+    // l'origine de section est dans son chunk.
+    let dans_la_cellule = |o: &Ouvert| {
+        let org = o.monde.arene.origines();
+        let chunk = 16.0 * tf_render::SEIZIEMES_PAR_BLOC;
+        o.monde
+            .arene
+            .visibles()
+            .filter(|i| {
+                let p = org[i.section as usize].position;
+                p[0] == chunk && p[2] == chunk
+            })
+            .count()
+    };
+    let avant = dans_la_cellule(&o);
+    assert!(avant > 0, "la prémisse : la cellule dessine quelque chose");
     let plein = o.monde.quads;
-    assert!(plein > 0, "la prémisse : la scène doit porter des quads");
     c.arreter();
 
     // La cellule du milieu revient SANS contenu, comme si la save ne portait
@@ -326,9 +341,19 @@ fn une_cellule_qui_revient_vide_efface_ce_qu_elle_portait() {
     }])
     .expect("intégration du vide");
 
+    assert_eq!(
+        dans_la_cellule(&o),
+        0,
+        "la cellule vidée dessine encore {} de ses {avant} quads",
+        dans_la_cellule(&o)
+    );
+    // Le TOTAL, lui, peut monter : un trou au milieu du terrain découvre les
+    // parois de ses quatre voisines. Ce test exigeait qu'il baisse — il
+    // baissait parce qu'une cellule vide se lisait comme un bloc plein
+    // (l'état n° 0 de la table, du deepslate), et c'était le défaut.
     assert!(
-        o.monde.quads < plein,
-        "la cellule vidée doit avoir retiré des quads : {} contre {plein}",
+        o.monde.quads > plein - avant,
+        "les voisines montrent leurs parois dans le trou : {} quads, {plein} avant",
         o.monde.quads
     );
     assert_eq!(o.rechargements, 0);

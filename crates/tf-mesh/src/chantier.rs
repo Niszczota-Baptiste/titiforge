@@ -18,13 +18,27 @@ use std::collections::HashMap;
 
 use tf_anvil::{Section, StateId};
 
-use crate::forme::Formes;
+use crate::forme::{Face, Formes, FACES};
 use crate::maillage::{Instances, Maillage};
 use crate::opacite::Opacite;
 use crate::voisinage::{Voisinage, COTE};
 
 /// Où vit une section : coordonnées de chunk MONDE, et hauteur de section.
 pub type Adresse = (i32, i32, i8);
+
+/// **Ce que vaut une case que la grille ne porte pas** : une section absente,
+/// un chunk non chargé, un indice de palette corrompu.
+///
+/// Pas `0`. L'identifiant 0 est le premier état que la table de la scène a
+/// rencontré en décodant — `minecraft:deepslate` sur un monde 1.18, le fond
+/// de la première section lue — et non l'air. Le remplissage à zéro faisait
+/// d'un chunk non chargé un mur de deepslate INVISIBLE : ses voisines
+/// perdaient leurs faces de bord, et le réticule s'y arrêtait. Les tests ne
+/// le voyaient pas, parce que leurs tables posent toutes l'air en 0.
+///
+/// Hors de toute table, donc lu comme de l'air par `Formes` : ni opaque, ni
+/// modèle, `est_air`.
+pub const ABSENT: StateId = StateId::MAX;
 
 /// Les sections décodées d'une zone, adressables par leurs coordonnées.
 #[derive(Default)]
@@ -118,7 +132,7 @@ impl Grille {
             .sum::<usize>()
     }
 
-    /// Un bloc, en coordonnées MONDE. `0` — l'air — pour ce qui n'est pas là.
+    /// Un bloc, en coordonnées MONDE. [`ABSENT`] pour ce qui n'est pas là.
     ///
     /// Ce qui manque vaut de l'air et non « opaque » : au bord d'une zone
     /// chargée, supposer opaque effacerait des faces réelles. Entre deux
@@ -133,8 +147,8 @@ impl Grille {
                     y.rem_euclid(16) as usize,
                     z.rem_euclid(16) as usize,
                 )
-                .unwrap_or(0),
-            None => 0,
+                .unwrap_or(ABSENT),
+            None => ABSENT,
         }
     }
 
@@ -200,7 +214,7 @@ impl Grille {
                         x,
                         y,
                         z,
-                        s.palette.get(idx[i] as usize).copied().unwrap_or(0),
+                        s.palette.get(idx[i] as usize).copied().unwrap_or(ABSENT),
                     );
                 }
             }
@@ -208,7 +222,7 @@ impl Grille {
                 for y in 0..n {
                     for z in 0..n {
                         for x in 0..n {
-                            v.set(x, y, z, 0);
+                            v.set(x, y, z, ABSENT);
                         }
                     }
                 }
@@ -241,8 +255,8 @@ impl Grille {
                                 y.rem_euclid(16) as usize,
                                 z.rem_euclid(16) as usize,
                             )
-                            .unwrap_or(0),
-                        None => 0,
+                            .unwrap_or(ABSENT),
+                        None => ABSENT,
                     };
                     v.set(x, y, z, id);
                 }
@@ -340,6 +354,124 @@ impl Grille {
                     for cy in y0..=y1 {
                         if let Ok(y) = i8::try_from(cy) {
                             out.push((cx, cz, y));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// **Quelles faces de la section ont au moins une case OPAQUE dans leur
+    /// couche de bord** : un bit par `Face` (`Face::bit`).
+    ///
+    /// C'est tout ce qu'une voisine lit d'elle. Le mailleur ne demande à la
+    /// peau que l'OPACITÉ des cases voisines par face (`Opacite`), et une
+    /// section ne touche sa voisine que par la couche de seize sur seize qui
+    /// la borde. Une couche sans rien d'opaque vaut, pour la voisine, une
+    /// section absente — donc de l'air.
+    ///
+    /// Une section absente, ou dont aucune entrée de palette n'est opaque,
+    /// rend zéro sans rien dépaqueter ; une palette entièrement opaque rend
+    /// les six faces de même.
+    pub fn bords_opaques<F: Formes + ?Sized>(&self, a: Adresse, f: &F) -> u8 {
+        let Some(s) = self.sections.get(&a) else {
+            return 0;
+        };
+        let opaques: Vec<bool> = s.palette.iter().map(|id| f.opaque(*id)).collect();
+        if !opaques.iter().any(|&o| o) {
+            return 0;
+        }
+        if opaques.iter().all(|&o| o) {
+            return 0x3F;
+        }
+        let idx = s.unpack();
+        // Un indice hors palette vient d'un `.mca` corrompu : le mailleur le
+        // rend en air, on fait de même.
+        let op = |x: usize, y: usize, z: usize| {
+            opaques
+                .get(idx[y * 256 + z * 16 + x] as usize)
+                .copied()
+                .unwrap_or(false)
+        };
+        let couche = |face: Face| -> bool {
+            (0..16).any(|u| {
+                (0..16).any(|v| match face {
+                    Face::MoinsX => op(0, u, v),
+                    Face::PlusX => op(15, u, v),
+                    Face::MoinsY => op(u, 0, v),
+                    Face::PlusY => op(u, 15, v),
+                    Face::MoinsZ => op(u, v, 0),
+                    Face::PlusZ => op(u, v, 15),
+                })
+            })
+        };
+        FACES
+            .iter()
+            .filter(|&&face| couche(face))
+            .fold(0, |m, face| m | face.bit())
+    }
+
+    /// **Ce qu'un changement du CONTENU d'une boîte oblige à remailler**,
+    /// d'après ce que la grille porte maintenant : les sections de la boîte,
+    /// et celles de ses voisines par face — présentes — dont la couche qui
+    /// les touche a quelque chose d'opaque.
+    ///
+    /// À appeler AVANT et APRÈS le changement, et à unir les deux : une
+    /// voisine dont la couche bordière était opaque avant ou l'est après a pu
+    /// changer de faces ; une voisine dont la couche est vide des deux côtés
+    /// n'a rien vu. C'est la croix de [`Grille::sections_touchees`] moins ce
+    /// que la mesure dit inutile : une cellule qui arrive en vol remaillait
+    /// ses quatre colonnes voisines en entier, quoi qu'elle porte à leur
+    /// contact.
+    ///
+    /// Les sections de la boîte sont rendues qu'elles existent ou non, comme
+    /// par `sections_touchees` : une section qui vient de partir doit être
+    /// VISÉE pour que son maillage parte avec elle. Même contrat, aussi, face
+    /// à l'occlusion ambiante : elle lira les voisines d'arête et de coin, et
+    /// le test qui croise ce remaillage avec un remaillage complet rougira.
+    pub fn touchees_par_le_contenu<F: Formes + ?Sized>(
+        &self,
+        min: [i32; 3],
+        max: [i32; 3],
+        f: &F,
+    ) -> Vec<Adresse> {
+        let sec = |v: i32| (v as i64).div_euclid(16) as i32;
+        let (x0, x1) = (sec(min[0]), sec(max[0]));
+        let (y0, y1) = (sec(min[1]), sec(max[1]));
+        let (z0, z1) = (sec(min[2]), sec(max[2]));
+        let dedans = |x: i32, y: i32, z: i32| {
+            (x0..=x1).contains(&x) && (y0..=y1).contains(&y) && (z0..=z1).contains(&z)
+        };
+        let mut out = Vec::new();
+        for cz in z0..=z1 {
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    let Ok(y) = i8::try_from(cy) else {
+                        continue;
+                    };
+                    out.push((cx, cz, y));
+                    // Seules les faces qui donnent HORS de la boîte comptent :
+                    // l'intérieur est remaillé de toute façon.
+                    let bords = self.bords_opaques((cx, cz, y), f);
+                    for face in FACES {
+                        if bords & face.bit() == 0 {
+                            continue;
+                        }
+                        let n = face.pas();
+                        let (nx, ny, nz) = (cx + n[0], cy + n[1], cz + n[2]);
+                        if dedans(nx, ny, nz) {
+                            continue;
+                        }
+                        // Une voisine ABSENTE n'a pas de maillage à refaire :
+                        // hors de la boîte, ce changement ne la fait pas
+                        // naître.
+                        if let Ok(ny) = i8::try_from(ny) {
+                            if self.sections.contains_key(&(nx, nz, ny)) {
+                                out.push((nx, nz, ny));
+                            }
                         }
                     }
                 }

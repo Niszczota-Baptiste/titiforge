@@ -175,6 +175,7 @@ impl Pilote {
             fait.demande = c.demander(lots).is_some();
         }
         crate::scene::phase("champ+suivi", t);
+        let t = std::time::Instant::now();
         let mut arrivees = Vec::new();
         let mut echec = None;
         for r in c.recevoir(budget) {
@@ -192,6 +193,7 @@ impl Pilote {
             }
         }
         fait.arrivees = arrivees.len();
+        crate::scene::phase("recevoir", t);
         // **On appelle `integrer` même sans arrivée**, et c'est ce qui rend
         // une caméra IMMOBILE bornée : c'est lui qui retire de la scène ce que
         // la fenêtre de résidence a évincé à l'appel précédent. Sans cet

@@ -213,7 +213,11 @@ fn les_coordonnees_negatives_tombent_dans_le_bon_chunk() {
     g.poser(-1, -1, pleine(-1, PIERRE));
     assert_eq!(g.bloc(-1, -1, -1), PIERRE);
     assert_eq!(g.bloc(-16, -16, -16), PIERRE);
-    assert_eq!(g.bloc(0, 0, 0), AIR, "le chunk 0 n'a rien");
+    assert_eq!(g.bloc(0, 0, 0), tf_mesh::ABSENT, "le chunk 0 n'a rien");
+    assert!(
+        tf_mesh::Formes::est_air(&t, g.bloc(0, 0, 0)),
+        "et ce rien se lit comme de l'air"
+    );
 
     let mut v = Voisinage::new();
     g.voisinage((0, 0, 0), &mut v);
@@ -665,4 +669,263 @@ fn remailler_la_croix_donne_le_maillage_complet() {
             );
         }
     }
+}
+
+// --- Ce qu'un changement de CONTENU oblige à remailler ----------------------
+
+#[test]
+fn bords_opaques_dit_quelles_couches_touchent_une_voisine() {
+    let t = table();
+    let mut g = Grille::new();
+    let un_bloc = |x: i32, y: i32, z: i32| {
+        section(0, move |bx, by, bz| {
+            if (bx, by, bz) == (x, y, z) {
+                PIERRE
+            } else {
+                AIR
+            }
+        })
+    };
+    let cas: [((i32, i32, i32), u8); 5] = [
+        ((15, 7, 3), Face::PlusX.bit()),
+        (
+            (0, 0, 0),
+            Face::MoinsX.bit() | Face::MoinsY.bit() | Face::MoinsZ.bit(),
+        ),
+        ((4, 15, 9), Face::PlusY.bit()),
+        ((9, 4, 15), Face::PlusZ.bit()),
+        ((7, 7, 7), 0),
+    ];
+    for ((x, y, z), attendu) in cas {
+        g.poser(0, 0, un_bloc(x, y, z));
+        assert_eq!(
+            g.bords_opaques((0, 0, 0), &t),
+            attendu,
+            "une pierre en ({x}, {y}, {z})"
+        );
+    }
+    g.poser(0, 0, pleine(0, PIERRE));
+    assert_eq!(g.bords_opaques((0, 0, 0), &t), 0x3F, "pleine : les six");
+    // Une dalle n'est PAS opaque : elle ne cache rien à sa voisine.
+    g.poser(0, 0, pleine(0, DALLE));
+    assert_eq!(g.bords_opaques((0, 0, 0), &t), 0, "des dalles partout");
+    assert_eq!(g.bords_opaques((5, 5, 0), &t), 0, "absente : de l'air");
+}
+
+#[test]
+fn une_cellule_sans_rien_d_opaque_au_bord_ne_fait_remailler_aucune_voisine() {
+    // La croix remaillait les quatre colonnes voisines quoi que la cellule
+    // porte à leur contact. Une cellule dont les couches bordières n'ont rien
+    // d'opaque ne leur change pourtant rien : pour elles, elle vaut de l'air,
+    // comme avant son arrivée.
+    let t = table();
+    let mut g = Grille::new();
+    for cz in -1..=1 {
+        for cx in -1..=1 {
+            for sy in 0..3i8 {
+                g.poser(cx, cz, pleine(sy, PIERRE));
+            }
+        }
+    }
+    for sy in 0..3i8 {
+        g.poser(
+            0,
+            0,
+            section(sy, |x, y, z| {
+                let dedans = |v: i32| (1..15).contains(&v);
+                if dedans(x) && dedans(z) {
+                    PIERRE
+                } else if y == 3 {
+                    DALLE
+                } else {
+                    AIR
+                }
+            }),
+        );
+    }
+    // La colonne du chunk (0, 0), sections 0 à 2.
+    let touchees = g.touchees_par_le_contenu([0, 0, 0], [15, 47, 15], &t);
+    assert_eq!(
+        touchees,
+        vec![(0, 0, 0), (0, 0, 1), (0, 0, 2)],
+        "rien d'opaque au bord en X ni en Z : aucune voisine — mais le haut et le \
+         bas de la colonne sont de la pierre, et leurs voisines hors de la boîte \
+         n'existent pas"
+    );
+    // La même avec UNE pierre contre le bord −X de la section du milieu :
+    // exactement la voisine qu'elle touche.
+    let milieu = g.section((0, 0, 1)).cloned().expect("posée");
+    g.poser(
+        0,
+        0,
+        section(1, |x, y, z| {
+            if (x, y, z) == (0, 8, 8) {
+                PIERRE
+            } else {
+                milieu
+                    .get(x as usize, y as usize, z as usize)
+                    .unwrap_or(AIR)
+            }
+        }),
+    );
+    let touchees = g.touchees_par_le_contenu([0, 0, 0], [15, 47, 15], &t);
+    assert_eq!(
+        touchees,
+        vec![(-1, 0, 1), (0, 0, 0), (0, 0, 1), (0, 0, 2)],
+        "la seule voisine touchée est celle de −X, à la hauteur de la pierre"
+    );
+}
+
+#[test]
+fn remailler_ce_que_le_contenu_touche_donne_le_maillage_complet() {
+    // Le croisement qui rend la réduction VÉRIFIABLE : des cellules entières
+    // arrivent, partent et changent au hasard, et remailler l'union de ce que
+    // leur contenu touchait avant et touche après doit rendre exactement le
+    // maillage complet. Le jour où l'occlusion ambiante lira les voisines
+    // d'arête et de coin, ce test rougira : c'est pour ça qu'il existe.
+    let t = table();
+    let mut g = Grille::new();
+    let mut n = 4321u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..3i32 {
+        for cx in 0..3i32 {
+            for sy in 0..3i8 {
+                g.poser(cx, cz, pleine(sy, PIERRE));
+            }
+        }
+    }
+    let mut courant = g.mailler(&t);
+    let mut voisines_epargnees = 0usize;
+    for pas in 0..300 {
+        // Une boîte de sections : une section, une colonne, ou deux colonnes.
+        let (cx, cz) = (tirer(3) as i32, tirer(3) as i32);
+        let (min, max) = match tirer(3) {
+            0 => {
+                let sy = tirer(3) as i32;
+                (
+                    [cx * 16, sy * 16, cz * 16],
+                    [cx * 16 + 15, sy * 16 + 15, cz * 16 + 15],
+                )
+            }
+            1 => ([cx * 16, 0, cz * 16], [cx * 16 + 15, 47, cz * 16 + 15]),
+            _ => ([cx * 16, 0, cz * 16], [cx * 16 + 31, 47, cz * 16 + 15]),
+        };
+        let avant = g.touchees_par_le_contenu(min, max, &t);
+        // Le nouveau contenu, section par section : absente, de l'air, un
+        // cœur sans bord, des dalles au bord, ou un tirage qui touche tout.
+        for scz in min[2].div_euclid(16)..=max[2].div_euclid(16) {
+            for scx in min[0].div_euclid(16)..=max[0].div_euclid(16) {
+                for sy in min[1].div_euclid(16)..=max[1].div_euclid(16) {
+                    let sy = sy as i8;
+                    let mode = tirer(6);
+                    let densite = 1 + tirer(8);
+                    let graine = tirer(1 << 20);
+                    if mode == 0 {
+                        g.retirer((scx, scz, sy));
+                        continue;
+                    }
+                    let mut m = graine;
+                    g.poser(
+                        scx,
+                        scz,
+                        section(sy, |x, y, z| {
+                            m = m.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                            let hasard = (m >> 16) % 10;
+                            let bord = [x, y, z].iter().any(|v| *v == 0 || *v == 15);
+                            match mode {
+                                1 => AIR,
+                                2 if bord => AIR,
+                                3 if bord => DALLE,
+                                2 | 3 => [AIR, PIERRE, DALLE][(hasard % 3) as usize],
+                                4 if hasard < densite => PIERRE,
+                                4 => AIR,
+                                _ => [AIR, PIERRE, DALLE][(hasard % 3) as usize],
+                            }
+                        }),
+                    );
+                }
+            }
+        }
+        let apres = g.touchees_par_le_contenu(min, max, &t);
+        let mut vise = avant.clone();
+        vise.extend(apres.iter().copied());
+        vise.sort_unstable();
+        vise.dedup();
+        let croix = Grille::sections_touchees(min, max);
+        voisines_epargnees += croix.len() - vise.len();
+        assert!(
+            vise.iter().all(|a| croix.contains(a)),
+            "pas {pas} : la réduction ne sort jamais de la croix"
+        );
+        courant.remplacer(&vise, g.mailler_ces(&t, &vise));
+        let mut complet = g.mailler(&t);
+        complet.trier();
+        assert_eq!(
+            courant.lots.len(),
+            complet.lots.len(),
+            "pas {pas} : nombre de lots"
+        );
+        for (a, b) in courant.lots.iter().zip(complet.lots.iter()) {
+            assert_eq!(a.adresse, b.adresse, "pas {pas}");
+            assert_eq!(
+                a.quads.quads, b.quads.quads,
+                "pas {pas}, boîte {min:?}..{max:?} : la section {:?} garde des faces \
+                 d'avant — son bord a changé sans qu'on la remaille",
+                a.adresse
+            );
+            assert_eq!(
+                a.poses.poses, b.poses.poses,
+                "pas {pas} : poses de {:?}",
+                a.adresse
+            );
+        }
+    }
+    assert!(
+        voisines_epargnees > 300,
+        "la prémisse : la réduction a vraiment épargné des voisines ({voisines_epargnees})"
+    );
+}
+
+#[test]
+fn ce_qui_manque_vaut_de_l_air_meme_quand_l_etat_zero_est_un_bloc_plein() {
+    // Dans l'application, l'identifiant 0 est le premier état DÉCODÉ — du
+    // deepslate sur un monde 1.18 — et non l'air : toutes les tables de ces
+    // tests posent l'air en 0, et c'est ce qui cachait le défaut. Un
+    // remplissage à zéro faisait d'un chunk non chargé un mur opaque et
+    // invisible : les faces qui le regardent disparaissaient.
+    let mut t = TableFormes::new();
+    t.pousser(false, true, Vec::new()); // 0 : un bloc PLEIN
+    t.pousser(true, false, Vec::new()); // 1 : l'air
+    let mut g = Grille::new();
+    g.poser(
+        0,
+        0,
+        section(0, |x, y, z| if (x, y, z) == (15, 8, 8) { 0 } else { 1 }),
+    );
+    let c = g.mailler(&t);
+    assert_eq!(
+        c.quads(),
+        6,
+        "un bloc seul au bord du chunk, à côté d'un chunk absent : ses SIX faces"
+    );
+    assert!(
+        tf_mesh::Formes::est_air(&t, g.bloc(16, 8, 8)),
+        "une case non chargée n'est pas un bloc plein"
+    );
+    let mut v = Voisinage::new();
+    g.voisinage((0, 0, 0), &mut v);
+    assert!(
+        !tf_mesh::Formes::opaque(&t, v.get(16, 8, 8)),
+        "la peau d'un voisin absent n'est pas opaque"
+    );
+    // Et le voisinage d'une section ABSENTE elle-même : son intérieur est de
+    // l'air, pas un cube plein de l'état 0.
+    g.voisinage((5, 5, 0), &mut v);
+    assert!(
+        tf_mesh::Formes::est_air(&t, v.get(8, 8, 8)),
+        "l'intérieur d'une section absente"
+    );
 }

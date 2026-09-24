@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (856 tests aujourd’hui)
+cargo test            # tous les crates (862 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1906,3 +1906,39 @@ propres à ce dépôt.
   boucle. L'atlas grandit maintenant sur place, et une arrivée ne peut plus
   recharger (`debug_assert` dans `integrer`). Le prix d'un repli se chiffre
   AVANT de le choisir.
+- **L'identifiant 0 n'est pas l'air.** Le mailleur remplissait ce qui manque
+  — section absente, chunk non chargé, indice corrompu — avec `0`, en le
+  croyant l'air. Or `Interner::new()` part VIDE : 0 est le premier état
+  décodé, `minecraft:deepslate` sur un monde 1.18. Un chunk non chargé
+  devenait un mur de deepslate INVISIBLE : ses voisines perdaient leurs
+  faces de bord, une save qui omet ses sections vides aurait perdu le dessus
+  de ses builds, et le réticule s'arrêtait dans le vide au bord de ce qui est
+  chargé. Aucun test ne le voyait : toutes leurs tables posent l'air en 0.
+  Ce qui manque vaut maintenant `tf_mesh::ABSENT` (`StateId::MAX`), hors de
+  toute table donc lu comme de l'air ; un test maille avec une table où 0
+  est un bloc PLEIN. Deux tests en dépendaient sans le savoir — un trou au
+  milieu du terrain devait faire BAISSER le nombre de quads, un petit disque
+  devait peser sa part du grand — et ils avaient raison pour une mauvaise
+  raison : une paroi qui manque allège la scène.
+- **Une règle de lecture d'avant le streaming le trouait.** `remailler`
+  retirait toutes les sections visées par une édition, puis ne relisait que
+  celles de la ZONE d'ouverture — quand la zone était toute la scène, c'était
+  juste. Sous le streaming, éditer là où l'on avait volé effaçait la cellule
+  de la scène, et comme elle restait inscrite à la fenêtre de résidence,
+  personne ne la redemandait : un trou définitif au premier geste d'édition
+  loin du départ. On relit maintenant les visées dont la cellule est
+  RÉSIDENTE, seulement elles — relire le reste ferait naître des sections
+  qu'aucune éviction ne lâcherait — et on repèse ce qu'on vient d'éditer.
+  Attrapé en cherchant pourquoi une mutation survivait : lire un morceau de
+  code pour une raison fait trouver ce qu'il fait pour une autre.
+- **Une voisine ne lit d'une section que l'opacité de la couche qui la
+  touche.** La croix remaillait les quatre colonnes voisines de chaque
+  cellule arrivée ou partie, quoi qu'elle porte à leur contact.
+  `touchees_par_le_contenu` ne garde que les voisines dont la couche bordière
+  a quelque chose d'opaque, relevé AVANT et APRÈS le changement — et après
+  que la table a accueilli les états neufs, sinon un état jamais vu se lit
+  « pas opaque » et la voisine garde sa face. Mesuré sur `Build` : 23 % de
+  sections remaillées en moins, 9 % de maillage — modeste, parce que ce bâti
+  touche ses bords partout ; un build entouré d'air, lui, n'en remaille plus
+  une seule. Le test qui croise ce remaillage avec un maillage complet
+  rougira le jour de l'occlusion ambiante, comme celui de la croix.

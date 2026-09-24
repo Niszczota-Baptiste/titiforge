@@ -118,6 +118,18 @@ impl Monde {
     /// **La couture vers le monde, pour viser.** Un prédicat, comme le
     /// mailleur en prend un : la coque demande « cette case arrête-t-elle le
     /// rayon ? » et ne sait rien d'autre.
+    /// **Le nom de l'état posé en `(x, y, z)`**, tel que la scène le tient —
+    /// `minecraft:air` hors de ce qu'elle porte.
+    ///
+    /// Ce que la pipette de la coque lira, et ce qu'un test peut comparer
+    /// sans connaître la table d'états : un `StateId` n'a de sens que
+    /// relativement à elle.
+    pub fn etat_en(&self, x: i32, y: i32, z: i32) -> &str {
+        self.interner
+            .resolve(self.grille.bloc(x, y, z))
+            .unwrap_or("minecraft:air")
+    }
+
     pub fn solide(&self) -> impl Fn([i32; 3]) -> bool + '_ {
         move |c| {
             let id = self.grille.bloc(c[0], c[1], c[2]);
@@ -879,61 +891,46 @@ impl Ouvert {
         if visees.is_empty() {
             return Ok(());
         }
-        // **On relit les SECTIONS visées, et rien de plus.**
+        // **On relit ce que la scène PORTE, là où l'édition a eu lieu** : les
+        // visées dont la cellule est résidente — la zone d'ouverture l'est
+        // aussi, elle y est inscrite. La lecture était serrée sur la ZONE,
+        // règle d'avant le streaming : toutes les visées étaient retirées,
+        // seules celles de la zone relues, et éditer là où l'on avait volé
+        // effaçait la cellule de la scène — un trou définitif, puisqu'elle
+        // restait inscrite et que personne ne la redemandait.
         //
-        // Premier jet : la boîte allait de y = −64 à 319 « pour être sûr ».
-        // Mesuré, le remaillage incrémental gagnait ×1,1 sur un rechargement
-        // complet — autant dire rien : pour trois blocs je relisais neuf
-        // chunks sur TOUTE la hauteur du monde, là où la zone entière n'en
-        // faisait que quatre. Le chemin rapide lisait plus que le lent.
-        //
-        // La hauteur se borne donc aux sections visées, et le rectangle à
-        // l'intersection avec la ZONE affichée : un remaillage n'a pas à
-        // charger des chunks que la scène ne montre pas.
-        let [zx0, zz0, zx1, zz1] = self.zone;
-        let serre = |v: i32, bas: i32, haut: i32| v.clamp(bas, haut);
-        let x0 = serre(
-            visees.iter().map(|a| a.0).min().unwrap() * 16,
-            zx0 * 16,
-            zx1 * 16 + 15,
-        );
-        let x1 = serre(
-            visees.iter().map(|a| a.0).max().unwrap() * 16 + 15,
-            zx0 * 16,
-            zx1 * 16 + 15,
-        );
-        let z0 = serre(
-            visees.iter().map(|a| a.1).min().unwrap() * 16,
-            zz0 * 16,
-            zz1 * 16 + 15,
-        );
-        let z1 = serre(
-            visees.iter().map(|a| a.1).max().unwrap() * 16 + 15,
-            zz0 * 16,
-            zz1 * 16 + 15,
-        );
-        let y0 = visees.iter().map(|a| a.2 as i32).min().unwrap() * 16;
-        let y1 = visees.iter().map(|a| a.2 as i32).max().unwrap() * 16 + 15;
+        // Ce qui n'est pas résident n'est pas relu : le poser ferait naître
+        // des sections qu'aucune cellule ne porte, donc qu'aucune éviction
+        // ne lâcherait. L'édition est dans la copie de travail ; elle
+        // arrivera avec la cellule, le jour où la caméra la demandera.
+        let presentes: std::collections::HashSet<tf_mesh::Adresse> =
+            visees.iter().copied().filter(|a| self.porte(a)).collect();
+        if presentes.is_empty() {
+            return Ok(());
+        }
+        let x0 = presentes.iter().map(|a| a.0).min().expect("non vide") * 16;
+        let x1 = presentes.iter().map(|a| a.0).max().expect("non vide") * 16 + 15;
+        let z0 = presentes.iter().map(|a| a.1).min().expect("non vide") * 16;
+        let z1 = presentes.iter().map(|a| a.1).max().expect("non vide") * 16 + 15;
+        let y0 = presentes
+            .iter()
+            .map(|a| a.2 as i32)
+            .min()
+            .expect("non vide")
+            * 16;
+        let y1 = presentes
+            .iter()
+            .map(|a| a.2 as i32)
+            .max()
+            .expect("non vide")
+            * 16
+            + 15;
         let lu = tf_world::BBox::new(BlockPos::new(x0, y0, z0), BlockPos::new(x1, y1, z1));
         let t0 = std::time::Instant::now();
         let connus = self.monde.interner.len();
         let mut interner = std::mem::take(&mut self.monde.interner);
         let grille = &mut self.monde.grille;
-        // **Les sections visées sont RETIRÉES d'abord.** Une section que la
-        // save n'a plus ne revient pas de la relecture : sans ce retrait, son
-        // ancien contenu resterait dans la grille et les blocs effacés
-        // resteraient à l'écran.
-        //
-        // **Aujourd'hui, ce retrait n'est pas observable**, et c'est mesuré :
-        // la mutation qui le supprime ne fait rougir aucun test, y compris
-        // celui qui vide une section entière. La raison est que NOTRE écrivain
-        // ne supprime jamais une section — le splice garde la section, avec
-        // une palette d'air. Le jeu, lui, les supprime. Le retrait protège donc
-        // d'un écrivain, pas d'un bug : le jour où l'on laisse tomber les
-        // sections tout-air à l'écriture (ce qui serait légitime), son absence
-        // laisserait de la géométrie fantôme sans qu'aucun test ne le dise.
-        // Il reste, et l'hypothèse qu'il couvre est écrite ici.
-        for a in &visees {
+        for a in &presentes {
             grille.retirer(*a);
         }
         tf_world::sections_de(
@@ -944,6 +941,12 @@ impl Ouvert {
             &mut interner,
             |s| {
                 let y = s.section.y;
+                // La boîte lue peut déborder des présentes — deux cellules
+                // résidentes en diagonale l'étirent sur des colonnes que la
+                // scène ne porte pas.
+                if !presentes.contains(&(s.chunk.x, s.chunk.z, y)) {
+                    return;
+                }
                 if let Some(bi) = s.biomes {
                     grille.poser_biomes(s.chunk.x, s.chunk.z, y, bi);
                 }
@@ -952,7 +955,22 @@ impl Ouvert {
         );
         self.monde.interner = interner;
         phase("relecture", t0);
-        self.refaire(&visees, connus)
+        self.refaire(&visees, connus)?;
+        // **Le poids des cellules éditées a changé** — leurs sections comme
+        // leur maillage. Sans cette repesée, la fenêtre de résidence dériverait
+        // à chaque geste d'édition : elle ne se compare plus à rien.
+        self.peser(Vec::new(), &visees);
+        Ok(())
+    }
+
+    /// La scène porte-t-elle cette section — c'est-à-dire sa cellule est-elle
+    /// RÉSIDENTE, à l'un des deux niveaux ?
+    fn porte(&self, a: &tf_mesh::Adresse) -> bool {
+        [Niveau::Chunk, Niveau::Region].iter().any(|n| {
+            self.residence
+                .peek(&(*n, n.cellule_axe(a.0 * 16), n.cellule_axe(a.1 * 16)))
+                .is_some()
+        })
     }
 
     /// **Intègre une cellule que le chargeur vient de rendre.**
@@ -1012,21 +1030,22 @@ impl Ouvert {
         // vient de lui interdire. Il décide sur les poids du dernier appel,
         // qui sont justes — la correction, elle, n'a lieu qu'après le
         // maillage.
+        let t0 = std::time::Instant::now();
         let coupes = self.residence.trim();
         self.deborde = coupes.over_budget;
         self.a_degager
             .extend(coupes.items.into_iter().map(|(_, r)| r.cellule));
         for c in std::mem::take(&mut self.a_degager) {
             self.degagees += 1;
+            // Ce que la cellule touchait, lu AVANT de la retirer : une
+            // voisine ne change que si la couche qui la bordait avait
+            // quelque chose d'opaque.
+            visees.extend(self.touchees(&c.boite));
             for a in adresses_de(&c) {
                 self.monde.grille.retirer(a);
             }
-            let b = &c.boite;
-            visees.extend(Grille::sections_touchees(
-                [b.min.x, b.min.y, b.min.z],
-                [b.max.x, b.max.y, b.max.z],
-            ));
         }
+        let mut boites = Vec::new();
 
         for Arrivee {
             cellule,
@@ -1064,6 +1083,7 @@ impl Ouvert {
             // intégrée — O(scène × cellules) — et filtrait sur `a.0 ==
             // cellule.x`, ce qui n'est vrai qu'au niveau CHUNK : d'une cellule
             // de RÉGION il n'aurait retiré qu'un millième des sections.
+            visees.extend(self.touchees(&cellule.boite));
             for a in adresses_de(&cellule) {
                 self.monde.grille.retirer(a);
             }
@@ -1077,25 +1097,35 @@ impl Ouvert {
                 self.monde.grille.poser(s.chunk.x, s.chunk.z, s.section);
             }
 
-            // **Les visées DÉBORDENT de la cellule d'une case.** Poser une
-            // cellule change les faces visibles de ses VOISINES : sans la
-            // marge, un mur de faces fantômes resterait le long de chaque
-            // frontière, et il faudrait tout remailler pour le faire
-            // disparaître. La marge est une CROIX — les voisines par face,
-            // jamais les diagonales, que le mailleur ne lit pas : cinq
-            // colonnes remaillées au lieu de neuf (`sections_touchees`).
-            let b = cellule.boite;
-            visees.extend(Grille::sections_touchees(
-                [b.min.x, b.min.y, b.min.z],
-                [b.max.x, b.max.y, b.max.z],
-            ));
+            boites.push(cellule.boite);
             arrivees.push(cellule);
+        }
+        // **Les visées DÉBORDENT de la cellule — là où elle touche.** Poser
+        // une cellule change les faces visibles de ses VOISINES : sans la
+        // marge, un mur de faces fantômes resterait le long de chaque
+        // frontière. Mais une voisine ne lit d'elle que l'opacité de la couche
+        // qui la borde : une couche sans rien d'opaque, avant comme après,
+        // ne lui change rien (`touchees_par_le_contenu`). La croix entière
+        // remaillait quatre colonnes voisines par cellule quoi qu'elle porte.
+        //
+        // Les états neufs entrent dans la table AVANT ce relevé : un état
+        // qu'elle ne connaît pas se lit « pas opaque », et la voisine qu'il
+        // bouche garderait son mur de faces.
+        let connus = if self.monde.interner.len() > connus {
+            self.etendre_atlas(connus);
+            self.monde.interner.len()
+        } else {
+            connus
+        };
+        for b in &boites {
+            visees.extend(self.touchees(b));
         }
         // Deux cellules voisines partagent leur marge : sans dédoublonnage, la
         // section frontière serait maillée deux fois et `Chantier::remplacer`
         // en garderait deux lots.
         visees.sort_unstable();
         visees.dedup();
+        phase("poser    ", t0);
         let avant = self.rechargements;
         self.refaire(&visees, connus)?;
         // **Une arrivée ne recharge JAMAIS la zone.** Elle le faisait quand
@@ -1197,6 +1227,17 @@ impl Ouvert {
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();
         Ok(())
+    }
+
+    /// Ce qu'un changement du contenu de la boîte oblige à remailler, d'après
+    /// ce que la grille porte MAINTENANT — voir
+    /// `Grille::touchees_par_le_contenu`, à appeler avant et après.
+    fn touchees(&self, b: &tf_world::BBox) -> Vec<tf_mesh::Adresse> {
+        self.monde.grille.touchees_par_le_contenu(
+            [b.min.x, b.min.y, b.min.z],
+            [b.max.x, b.max.y, b.max.z],
+            &self.monde.table,
+        )
     }
 
     /// **Accueille les états découverts depuis `connus`**, sans rien rebâtir.

@@ -569,6 +569,13 @@ le défaut même que les deux applications précédentes avaient payé. L'atlas
 grandit maintenant sur place, identique pixel pour pixel à un bâti direct ; un
 test vole jusqu'à la texture et compte zéro rechargement.
 
+✅ **Trois défauts de justesse, trouvés en découpant la queue.** Ce qui
+manque à la grille se lisait comme l'état n° 0 — du deepslate, pas de l'air :
+un chunk non chargé effaçait les faces de ses voisines et arrêtait le
+réticule. Éditer une cellule streamée la retirait de la scène pour toujours
+(lecture serrée sur la zone d'ouverture). Et les voisines d'une cellule ne se
+remaillent plus que si son contenu les touche (− 23 % de sections sur `Build`).
+
 **Ce qui reste, dans cet ordre** :
 
 1. **La queue** : une image sur dix environ au-delà de 8 ms, 20 ms au pire.

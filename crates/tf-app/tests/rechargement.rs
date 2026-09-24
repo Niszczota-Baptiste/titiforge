@@ -535,6 +535,183 @@ fn une_texture_plus_grande_qui_arrive_en_volant_ne_recharge_pas() {
     );
 }
 
+/// **Éditer une cellule STREAMÉE ne la fait pas disparaître.**
+///
+/// Le remaillage d'une édition relisait ses sections en serrant la lecture
+/// sur la ZONE d'ouverture — une règle d'avant le streaming, quand la zone
+/// était toute la scène. Il retirait d'abord toutes les sections visées, puis
+/// ne relisait que ce qui tombait dans la zone : éditer là où l'on avait volé
+/// effaçait la cellule de la scène. Et comme elle restait inscrite à la
+/// fenêtre de résidence, personne ne la redemandait — un trou définitif, au
+/// premier geste d'édition loin du point de départ.
+#[test]
+fn editer_une_cellule_streamee_ne_la_fait_pas_disparaitre() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &["emerald_block"]);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 4);
+
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
+    let mut c = Chargeur::lancer(o.staging.clone().unwrap(), tf_world::Dimension::Overworld);
+    // Trois cellules autour d'une diagonale (1, 1) qui, elle, n'est PAS
+    // chargée : une lecture qui déborderait des résidentes la ferait naître.
+    for (bx, bz) in [(40, 40), (24, 40), (40, 24)] {
+        c.demander(tf_world::demande::par_region(&tf_world::demande::voulues(
+            BlockPos::new(bx, 64, bz),
+            [1.0, 0.0, 0.0],
+            0,
+            tf_world::Niveau::Chunk,
+            (-64, 319),
+        )));
+        assert_eq!(
+            streamer(&mut o, &mut c, 1),
+            1,
+            "la cellule de ({bx}, {bz}) arrive"
+        );
+    }
+    c.arreter();
+    let colonne = |o: &Ouvert| {
+        (-4..20)
+            .filter(|sy| o.monde.grille.section((2, 2, *sy)).is_some())
+            .count()
+    };
+    let avant = colonne(&o);
+    assert!(
+        avant > 0,
+        "la prémisse : la cellule streamée porte des sections"
+    );
+
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(m.chemin().to_path_buf()),
+    );
+    // Au milieu de la cellule, puis dans son COIN : la croix de ce coin
+    // touche (1, 2) et (2, 1), résidentes, et leur boîte couvre (1, 1), qui
+    // ne l'est pas. Puis contre son bord +X, qui donne sur (3, 2), absente.
+    for (x0, z0, x1, z1) in [(36, 36, 38, 38), (32, 32, 32, 32), (47, 40, 47, 40)] {
+        let sel = BBox::new(BlockPos::new(x0, -40, z0), BlockPos::new(x1, -40, z1));
+        let bornes = poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
+        o.remailler(Some(bornes)).expect("remaillage");
+    }
+    moteur.arreter();
+
+    assert_eq!(
+        colonne(&o),
+        avant,
+        "éditer la cellule streamée l'a retirée de la scène"
+    );
+    for (x, z) in [(37, 37), (32, 32), (47, 40)] {
+        assert_eq!(
+            o.monde.etat_en(x, -40, z),
+            "minecraft:emerald_block",
+            "l'édition en ({x}, {z}) s'y voit"
+        );
+    }
+    for (cx, cz) in [(1, 1), (3, 2)] {
+        assert!(
+            (-4..20).all(|sy| o.monde.grille.section((cx, cz, sy)).is_none()),
+            "le chunk ({cx}, {cz}) n'est pas chargé : l'édition ne doit pas l'y faire naître"
+        );
+    }
+    assert_eq!(o.rechargements, 0, "sans recharger la zone");
+    assert_eq!(
+        o.octets_comptes(),
+        o.octets_residents(),
+        "la fenêtre de résidence a suivi le poids de ce qu'on vient d'éditer"
+    );
+}
+
+/// **Un état JAMAIS VU au bord d'une cellule qui arrive cache bien la face
+/// de sa voisine.**
+///
+/// Une voisine n'est remaillée que si la couche qui la touche a quelque chose
+/// d'opaque (`touchees_par_le_contenu`). Mais un état que la table ne connaît
+/// pas encore s'y lit « pas opaque » : relevé avant que la table accueille
+/// les états neufs, il laisse la voisine avec sa face — une face cachée, donc
+/// invisible, mais une scène qui n'est plus celle d'un chargement direct.
+///
+/// Le cas est construit pour que rien d'autre ne sauve la mise : en plein
+/// ciel, une pierre contre le bord +X du chunk (0, 0) et une émeraude — que
+/// la zone d'ouverture ne connaît pas — contre le bord −X du chunk (1, 0).
+#[test]
+fn un_etat_neuf_au_bord_d_une_cellule_cache_la_face_de_sa_voisine() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &["emerald_block"]);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 4);
+    {
+        let o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 1, 0]).expect("monde ouvert");
+        let mut moteur = Moteur::lancer(
+            o.staging.clone().unwrap(),
+            tf_world::Dimension::Overworld,
+            Journal::new(),
+            Some(m.chemin().to_path_buf()),
+        );
+        for (x, bloc) in [(15, "minecraft:stone"), (16, "minecraft:emerald_block")] {
+            let p = BlockPos::new(x, 150, 8);
+            poser(&mut moteur, bloc, BBox::new(p, p)).expect("écrit");
+        }
+        assert!(moteur.envoyer(Commande::Ecrire {
+            confirme_sans_verrou: true
+        }));
+        let r = attendre(&mut moteur);
+        let Reponse::Ecrit { sauvegarde, .. } = &r else {
+            panic!("attendu Ecrit, reçu {r:?} — {}", r.texte());
+        };
+        let _ = std::fs::remove_dir_all(sauvegarde);
+        moteur.arreter();
+    }
+
+    // Le témoin : les deux chunks chargés d'un bloc.
+    let temoin = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 1, 0]).expect("témoin");
+    // Le streamé : le chunk (0, 0) d'abord, puis (1, 0) arrive.
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
+    assert!(
+        o.monde
+            .atlas
+            .couches
+            .iter()
+            .all(|c| !c.nom.contains("emerald")),
+        "la prémisse : la zone d'ouverture ne connaît pas l'émeraude"
+    );
+    assert_eq!(o.monde.etat_en(15, 150, 8), "minecraft:stone");
+    // Ce qui n'est pas chargé est de l'AIR — pas l'état n° 0 de la table, qui
+    // est ici du deepslate. Sans ça, le réticule s'arrêtait sur un mur
+    // invisible au bord de ce qui est chargé.
+    assert_eq!(o.monde.etat_en(16, 150, 8), "minecraft:air");
+    assert!(
+        !(o.monde.solide())([16, 150, 8]),
+        "une case non chargée n'arrête pas le réticule"
+    );
+    let mut c = Chargeur::lancer(o.staging.clone().unwrap(), tf_world::Dimension::Overworld);
+    c.demander(tf_world::demande::par_region(&tf_world::demande::voulues(
+        BlockPos::new(24, 64, 8),
+        [1.0, 0.0, 0.0],
+        0,
+        tf_world::Niveau::Chunk,
+        (-64, 319),
+    )));
+    assert_eq!(streamer(&mut o, &mut c, 1), 1, "le chunk (1, 0) arrive");
+    c.arreter();
+    assert_eq!(o.monde.etat_en(16, 150, 8), "minecraft:emerald_block");
+
+    let mut mots = Vec::new();
+    let ct = canon(&temoin, &mut mots);
+    let cs = canon(&o, &mut mots);
+    let (attendu, obtenu) = (montre(&temoin, &ct), montre(&o, &cs));
+    assert_eq!(
+        obtenu.len(),
+        attendu.len(),
+        "le streamé porte {} quads, le chargement direct {} : la face de la pierre \
+         contre l'émeraude est restée",
+        obtenu.len(),
+        attendu.len()
+    );
+    assert!(obtenu == attendu, "la même scène que le chargement direct");
+}
+
 /// **Ce qu'une édition doit encore à la taille de la zone**, sur du BÂTI.
 ///
 /// Le remaillage ne relit et ne maille que ses bornes ; mais les arènes GPU,

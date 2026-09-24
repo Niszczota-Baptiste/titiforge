@@ -450,29 +450,38 @@ fn le_champ_protege_suit_la_camera_sans_rien_demander() {
         "rien à charger : le petit disque est compris dans le grand"
     );
 
-    // Le budget descend à la taille du PETIT disque. Seul lui est protégé,
-    // donc la traînée doit partir.
-    let cible = plein * petit / large;
-    o.budget_residence(cible);
+    // Le budget tombe à RIEN. Tout ce qui n'est pas épinglé doit partir, et
+    // seul le champ du PETIT disque l'est : la traînée du grand disque part,
+    // le petit reste, et la fenêtre dit qu'elle déborde.
+    //
+    // Le budget visait d'abord « la part du petit disque », `plein × petit /
+    // large` ; il ne tient plus depuis que les cellules du bord montrent leur
+    // paroi vers ce qui n'est pas chargé — un petit disque a proportionnel-
+    // lement plus de bord qu'un grand. Un budget nul ne suppose rien.
+    o.budget_residence(1);
     images(
         &mut p,
         &mut o,
         200,
         |_| oeil,
-        |o| o.octets_residents() <= cible && o.en_attente() == 0,
+        |o| o.residentes() <= petit && o.en_attente() == 0,
     );
     p.arreter();
 
-    assert!(
-        o.octets_residents() <= cible,
-        "{} octets tenus pour un plafond de {cible} : le champ épinglé est \
-         resté celui du grand disque, donc rien n'était évinçable",
-        o.octets_residents()
+    assert_eq!(
+        o.residentes(),
+        petit,
+        "seul le petit disque, épinglé, doit rester : le champ épinglé est \
+         resté celui du grand disque si la traînée ne part pas"
     );
     assert!(
-        o.residentes() >= petit,
-        "mais le petit disque, lui, reste entier : {} cellules pour {petit}",
-        o.residentes()
+        o.deborde(),
+        "et la fenêtre DIT qu'elle tient plus que son budget"
+    );
+    assert!(
+        o.octets_residents() < plein / 2,
+        "la mémoire a suivi : {} octets tenus, {plein} avant",
+        o.octets_residents()
     );
     println!(
         "rayon 6 → 2 sans une seule demande : {:.2} Mo ramenés à {:.2}, \
