@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (862 tests aujourd’hui)
+cargo test            # tous les crates (863 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1942,3 +1942,13 @@ propres à ce dépôt.
   touche ses bords partout ; un build entouré d'air, lui, n'en remaille plus
   une seule. Le test qui croise ce remaillage avec un maillage complet
   rougira le jour de l'occlusion ambiante, comme celui de la croix.
+- **Une phase qui MONTE au fil d'un vol est un parcours de la scène.** Le vol
+  par défaut ne remplit que 178 Mo : les phases `chantier` et `peser` y
+  valaient 0,1 ms, donc rien. Au rayon 16, découpées par tranches de cent
+  images, elles montaient de 0,1 à 0,5 et 0,4 ms à mesure que la scène
+  grandissait — une liste de lots filtrée et retriée à chaque remplacement,
+  et une pesée qui visitait tous les lots pour en trouver quelques dizaines.
+  Au budget déclaré de 1,5 Go, plusieurs millisecondes par image. Une mesure
+  prise à UNE taille de scène ne voit pas une pente ; une mesure découpée
+  dans le temps, si. `tf_mesh::Maillages` tient le maillage par section :
+  plat, 0,2 ms pour les deux.

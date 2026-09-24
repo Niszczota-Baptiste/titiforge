@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **862**, zéro échec |
+| Tests | **863**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-862 tests, répartis par ce qu'ils PROUVENT :
+863 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -64,7 +64,7 @@ cargo test --workspace
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 67 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 40 | glouton contre naïf, case par case ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
+| `tf-mesh` mailler/chantier | 41 | glouton contre naïf, case par case ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
 | `tf-render` rendu | 30 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -784,6 +784,27 @@ Chercher à réduire le maillage a fait trouver autre chose :
 
 La queue de `Build` reste celle du maillage sur le fil principal, et elle ne
 descendra pas sous 8 ms tant qu'il y restera : c'est la prochaine pièce.
+
+#### Trois parcours de la scène par image, qui grandissaient avec elle
+
+Le vol par défaut ne remplit que 178 Mo ; le budget déclaré est de 1,5 Go.
+Au rayon 16 (`--rayon 16`, 265 Mo au bout du vol), la découpe montrait deux
+phases qui MONTAIENT à mesure que la scène grandissait — le signe d'un
+parcours en O(scène) :
+
+| médiane par tranche de 100 images | 0–100 | 100–200 | 200–300 | 300–400 |
+|---|---:|---:|---:|---:|
+| `chantier` (liste filtrée et retriée) | 0,10 | 0,30 | 0,40 | 0,50 ms |
+| `peser` (tous les lots visités) | 0,10 | 0,20 | 0,30 | 0,40 ms |
+| les deux, avec `Maillages` | 0,20 | 0,20 | 0,20 | 0,20 ms |
+
+À 1,5 Go ils auraient pesé plusieurs millisecondes par image à eux deux. Le
+maillage de la scène est maintenant tenu PAR SECTION (`tf_mesh::Maillages`) :
+un remplacement coûte ce qu'il remplace, la pesée cherche les lots qu'elle
+veut au lieu de les parcourir tous, et les totaux se tiennent au lieu de se
+resommer. Reste un parcours en O(résidentes) : la liste des cellules
+résidentes, recopiée pour la demande à chaque image où le fil est libre —
+0,1 ms à 767 cellules.
 
 #### Une arrivée rechargeait la zone — en boucle
 

@@ -22,7 +22,7 @@ pub mod modeles;
 pub mod opacite;
 pub mod voisinage;
 
-pub use chantier::{Adresse, Chantier, Grille, Lot, ABSENT};
+pub use chantier::{Adresse, Chantier, Grille, Lot, Maillages, ABSENT};
 pub use forme::{Cuboide, Face, Formes, TableFormes, FACES};
 pub use maillage::{Instance, Instances, Maillage, Quad};
 pub use opacite::Opacite;

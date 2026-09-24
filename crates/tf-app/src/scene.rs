@@ -100,12 +100,13 @@ pub struct Monde {
     pub quoi: String,
     pub quads: usize,
     pub poses: usize,
-    /// Le maillage, gardé LOT PAR LOT.
+    /// Le maillage, gardé LOT PAR LOT et indexé par section.
     ///
     /// C'est ce qui rend le remaillage incrémental possible : on remplace les
-    /// lots des sections touchées et on reconstruit les arènes, au lieu de
-    /// remailler le monde entier pour trois blocs.
-    chantier: tf_mesh::Chantier,
+    /// lots des sections touchées au lieu de remailler le monde entier pour
+    /// trois blocs — et on les remplace en O(visées), pas en O(scène)
+    /// (`tf_mesh::Maillages`).
+    maillages: tf_mesh::Maillages,
     /// L'habillage, indexé par `StateId`. Sa LONGUEUR est aussi le nombre
     /// d'états que l'atlas connaît : un état au-delà n'a pas de texture.
     habillage: Vec<tf_assets::apparence::Habillage>,
@@ -293,6 +294,7 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
     Ok(Monde {
         quads: chantier.quads(),
         poses: chantier.poses(),
+        maillages: tf_mesh::Maillages::depuis(chantier),
         quoi,
         grille,
         table,
@@ -301,7 +303,6 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
         atlas,
         min,
         max,
-        chantier,
         habillage,
         interner,
     })
@@ -700,8 +701,8 @@ impl Ouvert {
     /// se trompant.
     pub fn octets_residents(&self) -> usize {
         self.monde.grille.octets()
-            + self.monde.chantier.octets()
-            + self.monde.chantier.octets_vive()
+            + self.monde.maillages.octets()
+            + self.monde.maillages.octets_vive()
     }
 
     /// **Inscrit la zone d'ouverture dans la fenêtre de résidence.**
@@ -815,8 +816,11 @@ impl Ouvert {
             *octets.get_mut(k).expect("clé posée juste au-dessus") +=
                 self.monde.grille.octets_de(*a);
         }
-        for l in &self.monde.chantier.lots {
-            if let Some(k) = ou.get(&l.adresse) {
+        // Par RECHERCHE, pas par parcours : les lots de la scène entière
+        // étaient visités pour en trouver quelques dizaines, à chaque image —
+        // 0,4 ms à 264 Mo résidents, et ça grandissait avec elle.
+        for (a, k) in &ou {
+            if let Some(l) = self.monde.maillages.lot(a) {
                 // Les DEUX formes : le `Vec<Quad>` en mémoire vive et sa copie
                 // packée dans l'arène. Ne compter que l'une sous-compterait le
                 // maillage d'un tiers, sur la moitié la plus lourde d'une
@@ -1142,8 +1146,8 @@ impl Ouvert {
         let t = std::time::Instant::now();
         self.peser(arrivees, &visees);
         phase("peser    ", t);
-        self.monde.quads = self.monde.chantier.quads();
-        self.monde.poses = self.monde.chantier.poses();
+        self.monde.quads = self.monde.maillages.quads();
+        self.monde.poses = self.monde.maillages.poses();
         Ok(posees)
     }
 
@@ -1222,10 +1226,10 @@ impl Ouvert {
         );
         phase("modèles  ", t3);
         let t1b = std::time::Instant::now();
-        self.monde.chantier.remplacer(visees, neufs);
+        self.monde.maillages.remplacer(visees, neufs);
         phase("chantier ", t1b);
-        self.monde.quads = self.monde.chantier.quads();
-        self.monde.poses = self.monde.chantier.poses();
+        self.monde.quads = self.monde.maillages.quads();
+        self.monde.poses = self.monde.maillages.poses();
         Ok(())
     }
 

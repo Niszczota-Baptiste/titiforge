@@ -929,3 +929,114 @@ fn ce_qui_manque_vaut_de_l_air_meme_quand_l_etat_zero_est_un_bloc_plein() {
         "l'intérieur d'une section absente"
     );
 }
+
+#[test]
+fn des_maillages_tenus_valent_le_chantier_retrie_et_ses_totaux() {
+    // `Maillages` remplace la liste triée que la scène filtrait et retriait à
+    // chaque remaillage : il doit tenir EXACTEMENT les mêmes lots, dans le
+    // même ordre, et des totaux tenus à chaque retrait et chaque ajout égaux à
+    // ceux qu'on resommerait — un total qui dérive d'un lot par image finit
+    // par mentir de plusieurs mégaoctets à la fenêtre de résidence.
+    let t = table();
+    let mut g = Grille::new();
+    let mut n = 99u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..3i32 {
+        for cx in 0..3i32 {
+            for sy in 0..2i8 {
+                g.poser(cx, cz, pleine(sy, PIERRE));
+            }
+        }
+    }
+    let mut liste = g.mailler(&t);
+    liste.trier();
+    let mut tenus = tf_mesh::Maillages::depuis(g.mailler(&t));
+    for pas in 0..200 {
+        let (cx, cz, sy) = (tirer(3) as i32, tirer(3) as i32, tirer(2) as i8);
+        match tirer(4) {
+            0 => {
+                g.retirer((cx, cz, sy));
+            }
+            mode => {
+                let graine = tirer(1 << 16);
+                let mut m = graine;
+                g.poser(
+                    cx,
+                    cz,
+                    section(sy, |_, _, _| {
+                        m = m.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        match ((m >> 16) % 7, mode) {
+                            (0, _) | (_, 1) => AIR,
+                            (1 | 2, _) => DALLE,
+                            _ => PIERRE,
+                        }
+                    }),
+                );
+            }
+        }
+        let p = (cx * 16 + 8, sy as i32 * 16 + 8, cz * 16 + 8);
+        let vise = Grille::sections_touchees([p.0, p.1, p.2], [p.0, p.1, p.2]);
+        liste.remplacer(&vise, g.mailler_ces(&t, &vise));
+        tenus.remplacer(&vise, g.mailler_ces(&t, &vise));
+        assert_eq!(
+            tenus.maillees(),
+            liste.lots.len(),
+            "pas {pas} : nombre de lots"
+        );
+        for (a, b) in tenus.lots().zip(liste.lots.iter()) {
+            assert_eq!(a.adresse, b.adresse, "pas {pas} : ordre");
+            assert_eq!(
+                a.quads.quads, b.quads.quads,
+                "pas {pas} : quads de {:?}",
+                a.adresse
+            );
+            assert_eq!(
+                a.poses.poses, b.poses.poses,
+                "pas {pas} : poses de {:?}",
+                a.adresse
+            );
+        }
+        assert_eq!(
+            (
+                tenus.quads(),
+                tenus.poses(),
+                tenus.octets(),
+                tenus.octets_vive()
+            ),
+            (
+                liste.quads(),
+                liste.poses(),
+                liste.octets(),
+                liste.octets_vive()
+            ),
+            "pas {pas} : les totaux tenus ont dérivé des totaux resommés"
+        );
+        let a = (cx, cz, sy);
+        assert_eq!(
+            tenus.lot(&a).map(|l| l.quads.len()),
+            liste
+                .lots
+                .iter()
+                .find(|l| l.adresse == a)
+                .map(|l| l.quads.len()),
+            "pas {pas} : la recherche par adresse"
+        );
+    }
+    // Un lot neuf pour une adresse qu'on n'a PAS visée : il remplace
+    // l'ancien, et l'ancien ne compte plus dans les totaux.
+    // (La boucle ne remaille que la section éditée : ses voisines peuvent
+    // être en retard, dans les deux structures à la fois. On met d'abord
+    // celle-ci à jour.)
+    let a = tenus.lots().next().expect("des lots").adresse;
+    tenus.remplacer(&[a], g.mailler_ces(&t, &[a]));
+    let avant = (tenus.maillees(), tenus.quads(), tenus.octets());
+    tenus.remplacer(&[], g.mailler_ces(&t, &[a]));
+    assert_eq!(
+        (tenus.maillees(), tenus.quads(), tenus.octets()),
+        avant,
+        "remettre le même lot sans le viser ne doit rien compter deux fois"
+    );
+}

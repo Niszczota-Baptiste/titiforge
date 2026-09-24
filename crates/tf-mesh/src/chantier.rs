@@ -14,7 +14,7 @@
 //! seule entrée d'air n'a rien à mailler, et ça se voit sur la palette, pas
 //! après l'avoir parcourue. Mesuré, une section d'air coûte 17 µs au mailleur.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use tf_anvil::{Section, StateId};
 
@@ -587,6 +587,115 @@ pub struct Chantier {
     pub lots: Vec<Lot>,
     /// Sections sautées faute de contenu.
     pub sautees: usize,
+}
+
+/// **Le maillage d'une scène, section par section — tenu, pas refait.**
+///
+/// Un [`Chantier`] est ce qu'un maillage PRODUIT : une liste de lots. La
+/// scène, elle, en garde un par section et le remplace à chaque remaillage
+/// partiel. Tenu dans une liste triée, chaque remplacement filtrait la scène
+/// entière, la retriait, et les totaux se resommaient ; la pesée, elle, la
+/// parcourait pour trouver trois lots. Mesuré en vol, rayon 16 : de 0,2 à
+/// 0,9 ms par image entre 30 et 264 Mo résidents, et ça grandissait avec
+/// elle — plusieurs millisecondes au budget déclaré de 1,5 Go.
+///
+/// Ici un remplacement coûte ce qu'il remplace : O(visées × log scène), et
+/// les totaux se TIENNENT à chaque retrait et chaque ajout.
+#[derive(Debug, Default)]
+pub struct Maillages {
+    lots: BTreeMap<Adresse, Lot>,
+    quads: usize,
+    poses: usize,
+    octets: usize,
+    octets_vive: usize,
+    sautees: usize,
+}
+
+impl Maillages {
+    /// Range un chantier complet.
+    pub fn depuis(c: Chantier) -> Maillages {
+        let mut m = Maillages {
+            sautees: c.sautees,
+            ..Maillages::default()
+        };
+        for l in c.lots {
+            m.ajouter(l);
+        }
+        m
+    }
+
+    /// **Remplace les lots des adresses VISÉES par ceux d'un remaillage
+    /// partiel** — même contrat que [`Chantier::remplacer`] : une visée sans
+    /// lot neuf est une section qui n'a plus rien à dessiner, et son ancien
+    /// maillage part avec elle.
+    pub fn remplacer(&mut self, visees: &[Adresse], neufs: Chantier) {
+        for a in visees {
+            if let Some(l) = self.lots.remove(a) {
+                self.soustraire(&l);
+            }
+        }
+        for l in neufs.lots {
+            self.ajouter(l);
+        }
+        self.sautees = neufs.sautees;
+    }
+
+    fn ajouter(&mut self, l: Lot) {
+        self.quads += l.quads.len();
+        self.poses += l.poses.len();
+        self.octets += l.octets();
+        self.octets_vive += l.octets_vive();
+        if let Some(ancien) = self.lots.insert(l.adresse, l) {
+            // Deux lots pour une adresse : le dernier gagne, et l'ancien ne
+            // compte plus.
+            self.soustraire(&ancien);
+        }
+    }
+
+    fn soustraire(&mut self, l: &Lot) {
+        self.quads -= l.quads.len();
+        self.poses -= l.poses.len();
+        self.octets -= l.octets();
+        self.octets_vive -= l.octets_vive();
+    }
+
+    /// Le lot d'une section, s'il y en a un.
+    pub fn lot(&self, a: &Adresse) -> Option<&Lot> {
+        self.lots.get(a)
+    }
+
+    /// Les lots, triés par adresse.
+    pub fn lots(&self) -> impl Iterator<Item = &Lot> + '_ {
+        self.lots.values()
+    }
+
+    /// Sections qui ont un maillage.
+    pub fn maillees(&self) -> usize {
+        self.lots.len()
+    }
+
+    pub fn quads(&self) -> usize {
+        self.quads
+    }
+
+    pub fn poses(&self) -> usize {
+        self.poses
+    }
+
+    /// Ce que la scène pèse sur le GPU — tenu, pas resommé.
+    pub fn octets(&self) -> usize {
+        self.octets
+    }
+
+    /// Ce qu'elle coûte en mémoire vive — tenu de même.
+    pub fn octets_vive(&self) -> usize {
+        self.octets_vive
+    }
+
+    /// Sections sautées faute de contenu au DERNIER remaillage.
+    pub fn sautees(&self) -> usize {
+        self.sautees
+    }
 }
 
 impl Chantier {
