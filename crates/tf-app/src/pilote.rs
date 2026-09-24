@@ -148,7 +148,10 @@ impl Pilote {
         let Some(c) = self.chargeur.as_mut() else {
             return Ok(fait);
         };
+        let t = std::time::Instant::now();
         let residentes: Vec<Cellule> = o.cellules_residentes();
+        crate::scene::phase("résidentes", t);
+        let t = std::time::Instant::now();
         // **Ce que la caméra regarde est protégé de l'éviction**, et c'est
         // calculé à CHAQUE image, pas seulement quand on redemande : le champ
         // suit la caméra même quand rien ne manque, et une traînée qui reste
@@ -171,6 +174,7 @@ impl Pilote {
         if let Some(lots) = self.suivi.suivre(oeil, regard, c.occupe(), &residentes) {
             fait.demande = c.demander(lots).is_some();
         }
+        crate::scene::phase("champ+suivi", t);
         let mut arrivees = Vec::new();
         let mut echec = None;
         for r in c.recevoir(budget) {

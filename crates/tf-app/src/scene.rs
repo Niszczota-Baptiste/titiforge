@@ -1106,7 +1106,9 @@ impl Ouvert {
         // fenêtre croirait tenir des cellules absentes. `recharger` a déjà
         // réinscrit ce qui reste.
         if self.rechargements == avant {
+            let t = std::time::Instant::now();
             self.peser(arrivees, &visees);
+            phase("peser    ", t);
         }
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();
@@ -1147,28 +1149,32 @@ impl Ouvert {
         }
         let t1 = std::time::Instant::now();
         let neufs = self.monde.grille.mailler_ces(&self.monde.table, visees);
-        self.monde.chantier.remplacer(visees, neufs);
-        phase("maillage ", t1);
+        phase("mailler  ", t1);
         let t2 = std::time::Instant::now();
-        // **L'arène des quads se REMPLACE tranche par tranche.** La rebâtir
-        // entière coûtait 52 ms sur les 80 d'une édition de trois blocs, sur
-        // une région bâtie de 256 chunks : du travail en O(scène) pour un
-        // geste en O(édition), la même famille que le rechargement d'atlas.
+        // **Les arènes reçoivent les lots NEUFS, pas le chantier.** Elles
+        // rangent chaque section à une place stable et ne réécrivent que les
+        // visées : 19 et 16 ms par image de vol sur du bâti quand elles
+        // recopiaient la scène entière (`--example vol`), et ce coût grandissait
+        // avec elle. Ne pas leur donner le chantier rend l'ancienne faute
+        // impossible à refaire par inadvertance.
+        //
+        // Les quads D'ABORD : c'est leur remplacement qui attribue et rend les
+        // emplacements des deux passes.
         self.monde.arene.remplacer(
-            &self.monde.chantier,
             visees,
+            &neufs.lots,
             &apparence(
                 &self.monde.habillage,
                 &self.monde.interner,
                 &self.assets.climat,
             ),
         );
-        // **La passe de MODÈLES se remplace aussi.** Une fois l'arène des
-        // quads corrigée, c'est elle qui dominait : 23 à 29 ms des 35 pour
-        // trois blocs posés sur une région bâtie.
+        phase("quads    ", t2);
+        let t3 = std::time::Instant::now();
         self.monde.modeles.remplacer(
-            &self.monde.chantier,
+            self.monde.arene.emplacements(),
             visees,
+            &neufs.lots,
             &modele_de(
                 &self.monde.table,
                 &self.monde.habillage,
@@ -1176,7 +1182,10 @@ impl Ouvert {
                 &self.assets.climat,
             ),
         );
-        phase("arènes   ", t2);
+        phase("modèles  ", t3);
+        let t1b = std::time::Instant::now();
+        self.monde.chantier.remplacer(visees, neufs);
+        phase("chantier ", t1b);
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();
         Ok(())
@@ -1388,7 +1397,7 @@ pub fn balayer_les_abandons() -> usize {
 /// je venais d'écrire passait 18 ms sur 18,3 à RELIRE — le maillage optimisé
 /// pesait 0,2. La ligne reste pour que la prochaine mesure soit une commande et
 /// pas une réécriture.
-fn phase(quoi: &str, depuis: std::time::Instant) {
+pub(crate) fn phase(quoi: &str, depuis: std::time::Instant) {
     if std::env::var_os("TF_PHASES").is_some() {
         eprintln!(
             "  {quoi} : {:.1} ms",

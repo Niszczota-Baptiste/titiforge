@@ -21,7 +21,7 @@ mod commun;
 
 use std::time::{Duration, Instant};
 
-use commun::{codex, semer, streamer, Jetable};
+use commun::{canon, codex, montre, montre_modeles, semer, streamer, Jetable};
 use tf_app::chargeur::Chargeur;
 use tf_app::moteur::{Commande, Moteur, Reponse};
 use tf_app::scene::Ouvert;
@@ -503,158 +503,58 @@ fn l_arene_remplacee_dit_la_meme_chose_qu_un_rebati() {
     }
     assert_eq!(o.rechargements, 0);
 
-    /// Ce qu'une instance VEUT DIRE : sa géométrie, sa teinte, son lot, et le
-    /// NOM de sa texture — jamais le numéro de couche, qui n'a de sens que
-    /// relativement à son atlas.
-    fn sens(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, u32, u32)> {
-        o.monde
-            .arene
-            .instances
-            .iter()
-            .map(|i| {
-                let couche = c.get(i.couche as usize).copied().unwrap_or(u32::MAX);
-                (i.geo, i.teinte, i.section, couche)
-            })
-            .collect()
-    }
-
-    /// **Ramène les couches d'atlas d'un côté à un dictionnaire COMMUN.**
-    ///
-    /// Un numéro de couche n'a de sens que relativement à son atlas, et les
-    /// deux chemins n'ont pas le même : l'un ÉTEND (à la fin), l'autre REBÂTIT
-    /// (par nom). Comparer les numéros, c'est comparer deux systèmes de
-    /// coordonnées — le piège du `StateId` relatif à son interner, et il se
-    /// referme ici sur DEUX champs à la fois : `InstanceQuad::couche` et
-    /// `FaceModele::couche`.
-    fn canon(o: &Ouvert, mots: &mut Vec<String>) -> Vec<u32> {
-        o.monde
-            .atlas
-            .couches
-            .iter()
-            .map(|c| match mots.iter().position(|m| *m == c.nom) {
-                Some(i) => i as u32,
-                None => {
-                    mots.push(c.nom.clone());
-                    mots.len() as u32 - 1
-                }
-            })
-            .collect()
-    }
-
-    /// Ce qu'une POSE veut dire : sa case, son lot, son rang de face, et la
-    /// GÉOMÉTRIE qu'elle désigne — couches ramenées au dictionnaire commun.
-    fn poses(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, u32, Vec<u8>)> {
-        let m = &o.monde.modeles;
-        m.poses
-            .iter()
-            .enumerate()
-            .map(|(k, p)| {
-                // **Le nombre de faces d'une pose se DÉDUIT de la somme
-                // préfixe**, il ne se devine pas : `debut_modele` indexe une
-                // table dont l'ordre diffère entre les deux chemins.
-                let fin = m
-                    .poses
-                    .get(k + 1)
-                    .map(|q| q.debut_face)
-                    .unwrap_or(m.faces_a_dessiner);
-                let nombre = (fin - p.debut_face) as usize;
-                let d = p.debut_modele as usize;
-                let g: Vec<tf_render::FaceModele> = m.faces[d..(d + nombre).min(m.faces.len())]
-                    .iter()
-                    .map(|f| tf_render::FaceModele {
-                        couche: c.get(f.couche as usize).copied().unwrap_or(u32::MAX),
-                        ..*f
-                    })
-                    .collect();
-                (
-                    p.local,
-                    p.section,
-                    p.debut_face,
-                    bytemuck::cast_slice(&g).to_vec(),
-                )
-            })
-            .collect()
-    }
-
+    // **Ce qui est DESSINÉ, pas la disposition.** Les arènes rangent chaque
+    // section à une place stable et laissent des trous : un remplacement et
+    // un rechargement ne produisent donc ni les mêmes tableaux, ni les mêmes
+    // emplacements, ni les mêmes numéros de couche — et c'est voulu. Ce qui
+    // doit être identique est l'image : chaque quad et chaque face de modèle,
+    // à la même ORIGINE, avec la même texture par NOM. La passe de modèles se
+    // rejoue comme le shader la dessine (`AreneModeles::dessinees`).
     let mut mots = Vec::new();
     let c = canon(&o, &mut mots);
-    let vite = sens(&o, &c);
-    let vite_poses = poses(&o, &c);
-    let faces_vite = o.monde.modeles.faces_a_dessiner;
-    let tranches = o.monde.arene.tranches.clone();
-    let tranches_m = o.monde.modeles.tranches.clone();
-    let origines: Vec<u8> = bytemuck::cast_slice(&o.monde.arene.origines).to_vec();
+    let vite = montre(&o, &c);
+    let vite_faces = montre_modeles(&o, &c);
 
     // Le témoin, sur le MÊME `Ouvert` : un second aurait sa propre copie de
     // travail et lirait le monde d'AVANT.
     o.remailler(None).expect("rechargement complet");
     let c = canon(&o, &mut mots);
-    let lent = sens(&o, &c);
+    let lent = montre(&o, &c);
+    let lent_faces = montre_modeles(&o, &c);
 
     assert_eq!(
         vite.len(),
         lent.len(),
-        "pas le même nombre d'instances : {} contre {}",
+        "pas le même nombre de quads dessinés : {} contre {}",
         vite.len(),
         lent.len()
     );
     if let Some(k) = (0..vite.len()).find(|&k| vite[k] != lent[k]) {
         panic!(
-            "instance {k} sur {} : remplacée {:?} contre rebâtie {:?}",
+            "quad {k} sur {} : remplacé {:?} contre rebâti {:?}",
             vite.len(),
             vite[k],
             lent[k]
         );
     }
     assert_eq!(
-        tranches.len(),
-        o.monde.arene.tranches.len(),
-        "pas le même nombre de tranches"
+        vite_faces.len(),
+        lent_faces.len(),
+        "pas le même nombre de faces de modèles dessinées : {} contre {}",
+        vite_faces.len(),
+        lent_faces.len()
     );
-    assert_eq!(
-        origines,
-        bytemuck::cast_slice::<_, u8>(&o.monde.arene.origines).to_vec(),
-        "les origines de section doivent suivre les lots"
-    );
-    // **La passe de MODÈLES aussi.** Elle porte une somme préfixe
-    // (`debut_face`) que le shader dichotomise : un seul rang faux et les
-    // faces d'une pose se dessinent pour une autre.
-    let lent_poses = poses(&o, &c);
-    assert_eq!(
-        vite_poses.len(),
-        lent_poses.len(),
-        "pas le même nombre de poses"
-    );
-    if let Some(k) = (0..vite_poses.len()).find(|&k| vite_poses[k] != lent_poses[k]) {
-        let (a, b) = (&vite_poses[k], &lent_poses[k]);
+    if let Some(k) = (0..vite_faces.len()).find(|&k| vite_faces[k] != lent_faces[k]) {
         panic!(
-            "pose {k} sur {} : remplacée (local {}, lot {}, rang {}) contre \
-             rebâtie (local {}, lot {}, rang {}) — géométries {}",
-            vite_poses.len(),
-            a.0,
-            a.1,
-            a.2,
-            b.0,
-            b.1,
-            b.2,
-            if a.3 == b.3 {
-                "identiques".to_string()
-            } else {
-                format!("DIFFÉRENTES ({} octets contre {})", a.3.len(), b.3.len())
-            }
+            "face {k} sur {} : remplacée {:?} contre rebâtie {:?}",
+            vite_faces.len(),
+            vite_faces[k],
+            lent_faces[k]
         );
     }
-    assert_eq!(
-        faces_vite, o.monde.modeles.faces_a_dessiner,
-        "le total de faces à dessiner doit être le même"
-    );
-    assert_eq!(
-        tranches_m.len(),
-        o.monde.modeles.tranches.len(),
-        "pas le même nombre de tranches de modèles"
-    );
+    let lent_poses = lent_faces;
     println!(
-        "arène : {} instances et {} poses, même sens entre remplacement et rechargement",
+        "arène : {} quads et {} faces de modèles, la même image par remplacement et par rechargement",
         lent.len(),
         lent_poses.len()
     );

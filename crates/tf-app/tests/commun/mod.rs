@@ -340,11 +340,13 @@ pub fn canon(o: &Ouvert, mots: &mut Vec<String>) -> Vec<u32> {
 /// d'arrivée des cellules, qui est justement ce qui diffère entre les deux
 /// chemins. Ce qu'on veut savoir est si les mêmes quads sont au même ENDROIT.
 pub fn montre(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, [u32; 4], String)> {
+    let origines = o.monde.arene.origines();
     let mut v: Vec<(u32, u32, [u32; 4], String)> = o
         .monde
         .arene
-        .instances
-        .iter()
+        // Les TROUS sautés : une place libérée ne dessine rien, et deux
+        // chemins n'en laissent pas les mêmes.
+        .visibles()
         .map(|i| {
             let nom = o
                 .monde
@@ -353,10 +355,7 @@ pub fn montre(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, [u32; 4], String)> {
                 .get(i.couche as usize)
                 .map(|x| x.nom.clone())
                 .unwrap_or_default();
-            let org = o
-                .monde
-                .arene
-                .origines
+            let org = origines
                 .get(i.section as usize)
                 .map(|p| p.position.map(|f| f.to_bits()))
                 .unwrap_or([0; 4]);
@@ -371,6 +370,38 @@ pub fn montre(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, [u32; 4], String)> {
     // L'ORDRE des instances suit l'ordre des lots, donc l'ordre d'arrivée.
     // Ce qui doit être identique est l'ENSEMBLE, pas la suite.
     v.sort();
+    v
+}
+
+/// **Ce que la passe de MODÈLES dessine**, rejoué comme le shader le fait.
+///
+/// Chaque face tirée de l'appel de dessin : l'origine réelle de sa pose, sa
+/// case, et le CONTENU de la face — couche ramenée au dictionnaire commun
+/// (`canon`), parce qu'un numéro de couche n'a de sens que relativement à son
+/// atlas. Jamais le rang dans la table de faces, qui dépend de l'ordre de
+/// remplissage, ni l'emplacement, qui dépend de l'ordre d'arrivée.
+///
+/// Le contenu est résumé en une empreinte de 64 bits : sur une région bâtie
+/// l'appel de dessin porte des millions de faces, et en garder seize mots
+/// chacune ferait peser le témoin plus que la scène.
+pub fn montre_modeles(o: &Ouvert, c: &[u32]) -> Vec<([u32; 4], u32, u64)> {
+    let m = &o.monde.modeles;
+    let origines = o.monde.arene.origines();
+    let mut v: Vec<([u32; 4], u32, u64)> = m
+        .dessinees()
+        .into_iter()
+        .map(|(slot, local, f)| {
+            let mut face = m.faces[f as usize];
+            face.couche = c.get(face.couche as usize).copied().unwrap_or(u32::MAX);
+            // FNV-1a : assez pour distinguer deux faces, sans dépendance.
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in bytemuck::bytes_of(&face) {
+                h = (h ^ *b as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+            (origines[slot as usize].position.map(f32::to_bits), local, h)
+        })
+        .collect();
+    v.sort_unstable();
     v
 }
 

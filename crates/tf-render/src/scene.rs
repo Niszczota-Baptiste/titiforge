@@ -122,10 +122,10 @@ impl Scene {
             label: Some("origines de section"),
             // Un tampon de stockage VIDE est refusé par wgpu, et une scène
             // vide est un cas de test parfaitement légitime.
-            contents: if arene.origines.is_empty() {
+            contents: if arene.origines().is_empty() {
                 &[0u8; 16]
             } else {
-                bytemuck::cast_slice(&arene.origines)
+                bytemuck::cast_slice(arene.origines())
             },
             usage: wgpu::BufferUsages::STORAGE,
         });

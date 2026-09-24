@@ -16,7 +16,7 @@ pub mod scene;
 pub mod viser;
 
 pub use appareil::{Appareil, AppareilError};
-pub use arene::{depaqueter, empaqueter, Arene, InstanceQuad, Tranche};
+pub use arene::{depaqueter, empaqueter, Arene, Emplacements, InstanceQuad, Tranche};
 pub use camera::Camera;
 pub use controles::{Mode, Vue};
 pub use lignes::{rgba, Lignes, Sommet, SEIZIEMES_PAR_BLOC};

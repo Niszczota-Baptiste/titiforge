@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **840**, zéro échec |
+| Tests | **842**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-840 tests, répartis par ce qu'ils PROUVENT :
+842 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -65,7 +65,7 @@ cargo test --workspace
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 65 | parents, uv, atlas, `.jar`, détection d'installation |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 33 | glouton contre naïf, case par case ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage |
-| `tf-render` rendu | 26 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
+| `tf-render` rendu | 27 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
@@ -79,7 +79,7 @@ cargo test --workspace
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
 | `tf-world` demande | 25 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
 | `tf-app` rechargement | 8 | qu'AUCUNE édition ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, et une texture trop grande se replie explicitement ; et qu'un repli PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
-| `tf-render` arene | 6 | le REMPLACEMENT de tranches d'arène : qu'une section qui apparaît ou disparaît décale les lots, et que les instances recopiées suivent — sinon un pan du build se dessine ailleurs ; et pour les MODÈLES, que la somme préfixe `debut_face` se recalcule — un seul rang faux fait dessiner les faces d'une pose pour une autre |
+| `tf-render` arene | 7 | les PLACES STABLES : que ce qui est dessiné — la passe de modèles rejouée comme le shader la dichotomise — est ce qu'une arène rebâtie dessinerait, après des milliers d'arrivées, de départs et d'éditions tirés d'une graine ; qu'un remplacement COMPTE ce qu'il écrit et paie ce qu'il change, pas la scène ; qu'un trou se réemploie ; qu'il y a un emplacement par lot et pas un de plus ; et que tasser ne change rien à l'image |
 | `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
 | `tf-app` pilote | 6 | la caméra qui PILOTE : que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
@@ -660,6 +660,25 @@ cellule posée** : les quatre cents images s'enchaînaient en 4 ms, avant que le
 fil ait lu une seule région. Elle est maintenant cadencée comme une fenêtre,
 et elle REFUSE de rendre un chiffre si moins de cent cellules sont arrivées.
 
+#### Après les places stables (arènes à emplacements)
+
+Chaque section a maintenant sa PLACE dans les deux arènes, et un remplacement
+n'écrit que les siennes ; ce qu'il libère devient un trou que les shaders
+rendent dégénéré. Même vol, même machine :
+
+| `Build`, médiane (pire) | avant | après |
+|---|---:|---:|
+| arène des quads | 18,8 ms (39) | **1,2 ms** (17) |
+| arène des modèles | 16,0 ms (45) | **0,8 ms** (18) |
+| image entière | 35,1 ms | **15,6 ms** |
+| images > 8 ms | 396 / 400 | 285 / 400 |
+
+**Ce qui domine maintenant est le MAILLAGE**, 12,5 ms en médiane et 56 au
+pire : il se fait en séquence, là où le chargement complet maille déjà sur
+tous les cœurs. C'est le chantier suivant. Les pires cas des deux arènes
+(17 et 18 ms) ne sont pas élucidés : un agrandissement du tableau recopie
+tout ce qu'il porte, et le tassement aussi — à mesurer avant d'y toucher.
+
 ---
 
 ## 7. Ce qui n'est pas fait, et ce qui n'est pas mesuré
@@ -672,7 +691,8 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **Une image de vol sur du bâti coûte 35 ms** | médiane, 104 au pire — la promesse de 8 ms n'est pas tenue sur 396 images sur 400 (`--example vol`). 26 ms sont la recopie des arènes, en O(scène) : elle grandit à mesure que la scène se remplit. Des tampons par SECTION la supprimeraient ; c'est le prochain chantier |
+| **Une image de vol sur du bâti coûte encore 15,6 ms** | médiane, 285 images sur 400 au-delà de 8 ms (`--example vol`). Les arènes sont réglées (35 → 2 ms) ; c'est le maillage, séquentiel, qui domine : 12,5 ms pour deux cellules et leur marge |
+| **Le GPU reçoit encore la scène ENTIÈRE à chaque changement** | `regarnir` rebâtit les tampons, les pipelines et l'atlas. Les arènes savent maintenant dire ce qui a changé (`prendre_sales`), mais rien ne s'en sert encore — et ce coût-là ne se mesure pas sur un rastériseur logiciel |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |
 | **L'arène GPU n'est pas par SECTION** | c'est la dernière dépense en O(scène) du chemin d'édition : 27 ms pour recopier 276 k instances et 178 k poses, là où le geste est en O(édition). Des tampons GPU par section la supprimeraient — et c'est la même pièce dont la résidence a besoin pour lâcher un maillage sans recopier le reste |

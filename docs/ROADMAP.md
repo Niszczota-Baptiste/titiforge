@@ -531,14 +531,25 @@ du BÂTI, **35 ms en médiane, 104 au pire, et 396 images sur 400 au-delà de
 8 ms**. 26 de ces 35 ms sont la recopie des deux arènes, qui est en O(scène)
 et GRANDIT à mesure que la scène se remplit.
 
-**Ce qui reste, donc, et dans cet ordre** :
+✅ **Les arènes ont des PLACES STABLES** (`Emplacements`, `Arene`,
+`AreneModeles`). Chaque section garde sa place et son emplacement d'origine
+tant qu'elle existe ; un remplacement n'écrit que les sections visées, ce
+qu'il libère devient un trou que les shaders rendent dégénéré, et les trous
+se réemploient au plus juste. La passe de modèles avait la contrainte dure —
+une somme préfixe que le shader dichotomise — et elle tient par trois règles
+(croissance sur tout le tableau, trous vides, un terminal vide par place) que
+les tests vérifient en REJOUANT la dichotomie sur le processeur. Mesuré en
+vol : **35 → 2 ms** pour les deux arènes, **35 → 15,6 ms** par image sur du
+bâti.
 
-1. **L'arène par SECTION** — des emplacements stables par lot, un
-   remplacement qui n'écrit que ce qui change, un envoi GPU partiel. C'est ce
-   qui bloque la sortie, pas une finition.
-2. **Le maillage incrémental en parallèle** : 12 ms pour deux cellules et
+**Ce qui reste, dans cet ordre** :
+
+1. **Le maillage incrémental en parallèle** : 12,5 ms pour deux cellules et
    leur marge, en séquence, là où le chargement complet maille déjà sur tous
-   les cœurs.
+   les cœurs. C'est lui qui domine maintenant.
+2. **L'envoi GPU partiel** : les arènes disent ce qui a changé
+   (`prendre_sales`), mais `regarnir` rebâtit encore tampons, pipelines et
+   atlas à chaque changement.
 3. Remesurer, et seulement alors décider si les deux cellules par image
    peuvent monter.
 

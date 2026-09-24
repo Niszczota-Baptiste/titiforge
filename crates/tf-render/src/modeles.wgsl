@@ -95,9 +95,21 @@ fn decompresse(t: u32) -> vec3<f32> {
 @vertex
 fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) inst: u32) -> Sortie {
     let p = poses[pose_de(inst)];
-    let f = faces[p.debut_modele + (inst - p.debut_face)];
 
     var out: Sortie;
+    // **Une pose VIDE** — un trou, ou le terminal d'une place — ne dessine
+    // rien, et surtout ne LIT rien : elle n'a pas de modèle, et `faces` à son
+    // `debut_modele` est la géométrie d'un autre bloc. On sort AVANT.
+    if (p.section == 0xFFFFFFFFu) {
+        out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        out.uv = vec2<f32>(0.0);
+        out.couche = 0u;
+        out.ombre = 0.0;
+        out.teinte = vec3<f32>(0.0);
+        return out;
+    }
+    let f = faces[p.debut_modele + (inst - p.debut_face)];
+
     out.couche = f.couche;
     out.ombre = ombre_de(f.face);
     out.teinte = decompresse(f.teinte);

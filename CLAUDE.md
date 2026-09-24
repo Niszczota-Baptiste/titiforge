@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (840 tests aujourd’hui)
+cargo test            # tous les crates (842 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1800,3 +1800,43 @@ propres à ce dépôt.
   moins de cent cellules sont arrivées : une prémisse se vérifie, elle ne
   s'espère pas. Une fois juste, elle a dit ce que personne n'avait mesuré :
   35 ms par image sur du bâti, 396 images sur 400 au-delà du budget.
+- **Une recopie « seulement de ce qui n'a pas changé » reste une recopie de
+  la scène.** Les arènes remplaçaient leurs tranches en recopiant les autres :
+  juste, et en O(scène) — 35 ms par image de vol sur du bâti, qui
+  grandissaient avec elle. La cause était un indice : le champ `section`
+  d'une instance était le RANG de son lot, donc une section qui apparaissait
+  décalait toutes les suivantes. Un emplacement STABLE par section a supprimé
+  la raison de recopier ; les places libérées deviennent des trous que le
+  shader rend dégénérés, et l'arène garde un seul appel de dessin. 35 → 2 ms.
+- **Une somme préfixe dichotomisée tient avec des trous, à trois conditions.**
+  La passe de modèles attribue chaque face à la DERNIÈRE pose dont le début la
+  précède. Il faut donc (1) des débuts croissants sur tout le tableau, (2) des
+  trous faits de poses vides, (3) un TERMINAL vide au bout de chaque place —
+  sans lui, les faces en trop d'une fenêtre tomberaient sur la dernière vraie
+  pose et dessineraient le modèle suivant de la table, un bout de chaise collé
+  à un escalier. Avec les trois, recoller deux trous ne réécrit rien, et en
+  couper un ne réécrit que le préfixe où la croissance casserait.
+- **Recoller un trou à son voisin d'AVANT laisse l'ancienne entrée derrière.**
+  Une place libérée était encore rangée sous sa première pose ; recollée au
+  trou qui la précède, le résultat se rangeait sous la clé du trou, et la place
+  morte survivait par-dessus. Tous les cas simples passaient — il fallait que
+  le voisin d'avant soit libre. Attrapé par un VÉRIFICATEUR de pavage appelé à
+  chaque pas d'une suite tirée d'une graine, qui dit quelle règle casse et où,
+  là où la comparaison d'images ne disait que « index hors bornes ».
+- **Un emplacement jamais rendu dessine juste et fuit.** Une section partie
+  qui garde son emplacement ne change pas un pixel — plus rien ne le désigne —
+  mais la table grandit d'une entrée par section JAMAIS vue, soit des millions
+  sur un vol de huit cents régions. La mutation passait tous les tests de
+  dessin ; celui qui la tue COMPTE : un emplacement par lot, et pas un de plus.
+- **Un trou qui dessine se cache derrière le build.** Retirer la garde du
+  shader des quads ne changeait aucun pixel : un trou y retombe sur la branche
+  par défaut de `coin`, donc un vrai quad d'un bloc au coin de l'emplacement
+  0 — posé sur la face d'un cube, puis au FOND de la scène vue de la caméra
+  par défaut. Le test compare maintenant les images vues des deux côtés, sur
+  une case laissée vide exprès. Deux angles morts de suite dans le même test :
+  une image ne prouve que ce qu'elle MONTRE.
+- **Un test aléatoire qui dure sept minutes ne vérifie rien de plus.** Des
+  sections pleines faisaient des millions de faces par pas, chacune comparée
+  dans un `Vec<u8>` alloué. La dynamique vérifiée — trous, découpes,
+  recollements, réemplois — ne dépend pas du volume : des sections creuses et
+  une clé sans allocation, 446 s → 8 s, et les six mutations meurent pareil.

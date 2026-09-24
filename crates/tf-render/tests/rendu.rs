@@ -255,7 +255,7 @@ fn les_tranches_couvrent_toute_l_arene_sans_trou_ni_recouvrement() {
     let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
 
     let mut attendu = 0u32;
-    for tr in &arene.tranches {
+    for tr in &arene.tranches() {
         assert_eq!(tr.debut, attendu, "trou ou recouvrement à {:?}", tr.adresse);
         attendu += tr.nombre;
     }
@@ -612,7 +612,12 @@ fn mille_dalles_ne_stockent_qu_un_seul_modele() {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
-    assert_eq!(a.poses.len(), 256, "une pose par bloc");
+    // Une pose par bloc — plus le TERMINAL de la place, une pose vide qui
+    // ferme la fenêtre de faces de la section (voir `Pose::vide`).
+    let vraies: Vec<_> = a.poses.iter().filter(|p| !p.est_vide()).collect();
+    assert_eq!(vraies.len(), 256, "une pose par bloc");
+    assert_eq!(a.poses.len(), 257, "et un terminal, pas davantage");
+    assert!(a.poses[256].est_vide(), "le terminal ferme la place");
     assert_eq!(
         a.faces.len(),
         6,
@@ -621,9 +626,9 @@ fn mille_dalles_ne_stockent_qu_un_seul_modele() {
     assert_eq!(a.faces_a_dessiner, 256 * 6);
     // Et les rangs de départ sont STRICTEMENT croissants — c'est ce que la
     // dichotomie du shader suppose. Une pose sans face les casserait.
-    for i in 1..a.poses.len() {
+    for i in 1..vraies.len() {
         assert!(
-            a.poses[i].debut_face > a.poses[i - 1].debut_face,
+            vraies[i].debut_face > vraies[i - 1].debut_face,
             "les rangs doivent croître strictement, sinon la dichotomie rend \
              la mauvaise pose"
         );
@@ -735,7 +740,11 @@ fn les_deux_arenes_designent_la_meme_section() {
 
     assert!(!arene.instances.is_empty() && !modeles.poses.is_empty());
     let origines = tf_render::origines(&chantier);
-    assert_eq!(arene.origines, origines, "l'arène porte la table partagée");
+    assert_eq!(
+        arene.origines(),
+        &origines[..],
+        "l'arène porte la table partagée"
+    );
 
     // La dalle est en chunk (4, 7), section y = 3 : son origine doit le dire.
     let p = modeles.poses[0];
@@ -1219,5 +1228,121 @@ fn la_couleur_demandee_est_la_couleur_dessinee() {
         let (image, _) = rendre_avec_lignes(&app, &l);
         let n = pixels_de(&image, [r, v, b], 12);
         assert!(n > 50, "couleur ({r}, {v}, {b}) : {n} pixels seulement");
+    }
+}
+
+/// **Une arène à TROUS dessine exactement l'image d'une arène neuve.**
+///
+/// Retirer une section laisse sa place en trou : des instances vides côté
+/// quads, des poses vides côté modèles. Les deux shaders les rendent en
+/// triangles dégénérés. Rien d'autre que l'IMAGE ne peut vérifier ça — les
+/// tests d'arène comparent ce qui serait dessiné, pas ce que le GPU dessine —
+/// et un trou mal traité se verrait comme un éclat de géométrie posé à
+/// l'origine du monde, ou comme la dalle d'une autre section recollée ici.
+///
+/// Les deux passes, et un remplacement qui fait à la fois disparaître,
+/// changer et apparaître des sections : trous au milieu, trous recollés,
+/// places réemployées.
+#[test]
+fn une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve() {
+    let Some(app) = app() else { return };
+    let t = table();
+    let modele = |s: StateId| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    };
+    let mut g = Grille::new();
+    for cx in 0..4 {
+        for cz in 0..2 {
+            g.poser(
+                cx,
+                cz,
+                // Le décalage de 2 laisse la case (0, 0, 0) VIDE, et c'est
+                // voulu : un trou que le shader dessinerait quand même tombe
+                // là — face 7 retombe sur la branche par défaut de `coin`,
+                // donc un vrai quad d'un bloc au coin de l'emplacement 0. Sur
+                // un cube, il se confondait avec la face du cube et la
+                // mutation qui retire la garde passait inaperçue.
+                section(0, move |x, y, z| match (x + y + z + cx + cz + 2) % 5 {
+                    0 => CUBE,
+                    1 => 2,
+                    _ => AIR,
+                }),
+            );
+        }
+    }
+    let chantier = g.mailler(&t);
+    let mut arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let mut modeles = AreneModeles::sans_biome(&chantier, &modele);
+
+    // Deux colonnes partent (dont une au milieu), une change, une arrive.
+    g.retirer((1, 0, 0));
+    g.retirer((2, 1, 0));
+    g.poser(
+        3,
+        1,
+        section(0, |x, _, z| if (x + z) % 2 == 0 { 2 } else { AIR }),
+    );
+    g.poser(5, 0, section(0, |x, y, _| if x == y { CUBE } else { AIR }));
+    let mut visees = Vec::new();
+    for (cx, cz) in [(1, 0), (2, 1), (3, 1), (5, 0)] {
+        visees.extend(Grille::sections_autour(
+            [cx * 16, 0, cz * 16],
+            [cx * 16 + 15, 15, cz * 16 + 15],
+        ));
+    }
+    visees.sort_unstable();
+    visees.dedup();
+    let neufs = g.mailler_ces(&t, &visees);
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
+        modele(s)
+    });
+    assert!(
+        arene.trous() > 0 && modeles.trous() > 0,
+        "la prémisse : le remplacement doit avoir laissé des trous au milieu"
+    );
+
+    let neuve_c = g.mailler(&t);
+    let neuve = Arene::depuis(&neuve_c, &|_, _, _| (0, [1.0; 3]));
+    let neuves_m = AreneModeles::sans_biome(&neuve_c, &modele);
+
+    // **Deux points de vue opposés.** `cadrer` regarde depuis +X +Y +Z ; un
+    // trou dessiné par erreur tombe au coin de l'emplacement 0, c'est-à-dire
+    // au fond de la scène vue de là, derrière tout le reste. Mesuré par
+    // mutation : vue d'un seul côté, la garde du shader des quads pouvait
+    // disparaître sans qu'un pixel change.
+    let cote = 256;
+    let face = Camera::cadrer([0.0, 0.0, 0.0], [96.0, 16.0, 32.0], 1.0);
+    let centre = [48.0, 8.0, 16.0];
+    let dos = Camera {
+        oeil: [
+            2.0 * centre[0] - face.oeil[0],
+            2.0 * centre[1] - face.oeil[1],
+            2.0 * centre[2] - face.oeil[2],
+        ],
+        cible: centre,
+        ..face
+    };
+    for (nom, cam) in [("de face", face), ("de dos", dos)] {
+        let rendre = |a: &Arene, m: &AreneModeles| {
+            let cible = Cible::nouvelle(&app, cote, cote);
+            let scene = Scene::avec_modeles(&app, a, m, &atlas_blanc(&app));
+            scene.rendre(&cible, &cam).0
+        };
+        let (avec_trous, sans) = (rendre(&arene, &modeles), rendre(&neuve, &neuves_m));
+        assert!(
+            dessines(&sans, cote) > 1000,
+            "la prémisse : la scène se voit {nom}"
+        );
+        let differents = avec_trous
+            .chunks(4)
+            .zip(sans.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            differents, 0,
+            "vue {nom} : {differents} pixels diffèrent entre l'arène à trous et l'arène neuve"
+        );
     }
 }

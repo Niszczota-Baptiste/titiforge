@@ -26,7 +26,7 @@
 
 mod commun;
 
-use commun::{canon, codex, montre, semer_build, streamer, Jetable};
+use commun::{canon, codex, montre, montre_modeles, semer_build, streamer, Jetable};
 use tf_app::chargeur::Chargeur;
 use tf_app::scene::Ouvert;
 use tf_world::coords::BlockPos;
@@ -283,6 +283,22 @@ fn ce_qui_survit_est_ce_qu_un_chargement_direct_donnerait() {
         );
     }
     assert_eq!(o.monde.poses, temoin.monde.poses, "les blocs-modèles aussi");
+    // Face par face : l'éviction laisse des TROUS dans la passe de modèles,
+    // et un trou mal fermé dessinerait les faces d'un bloc parti.
+    let (a, b) = (montre_modeles(&o, &cs), montre_modeles(&temoin, &ct));
+    assert!(
+        !b.is_empty(),
+        "la prémisse : du bâti porte des faces de modèles"
+    );
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "pas le même nombre de faces de modèles dessinées"
+    );
+    assert!(
+        a == b,
+        "les faces de modèles dessinées diffèrent d'un chargement direct"
+    );
     println!(
         "{} colonnes évincées sur {COTE} : les {} restantes donnent exactement \
          les {} quads d'un chargement direct",

@@ -77,6 +77,20 @@ fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
     let v = f32((i >> 1u) & 1u);
 
     let face = (inst.geo >> 23u) & 7u;
+    // **Un TROU de l'arène** (`InstanceQuad::VIDE`) : aucune face n'a un rang
+    // au-delà de 5. On rend un quad dégénéré — six sommets au même point,
+    // aucun fragment. C'est ce qui permet de libérer une place sans recopier
+    // le tableau, et de garder UN appel de dessin.
+    if (face > 5u) {
+        var vide: Sortie;
+        vide.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        vide.uv = vec2<f32>(0.0);
+        vide.couche = 0u;
+        vide.ombre = 0.0;
+        vide.monde = vec3<f32>(0.0);
+        vide.teinte = vec3<f32>(0.0);
+        return vide;
+    }
     // Blocs → seizièmes, l'unité du mailleur et des modèles.
     let bloc = vec3<f32>(
         f32(inst.geo & 31u),

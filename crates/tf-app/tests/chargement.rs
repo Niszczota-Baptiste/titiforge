@@ -14,7 +14,7 @@ mod commun;
 
 use std::time::{Duration, Instant};
 
-use commun::{canon, codex, montre, semer, semer_build, streamer, Jetable};
+use commun::{canon, codex, montre, montre_modeles, semer, semer_build, streamer, Jetable};
 use tf_app::chargeur::{Chargeur, Reponse};
 use tf_app::scene::{Arrivee, Ouvert};
 use tf_world::coords::BlockPos;
@@ -98,6 +98,12 @@ fn charger_cellule_par_cellule_donne_la_meme_scene() {
         o.monde.poses, temoin.monde.poses,
         "pas le même nombre de poses de blocs-modèles"
     );
+    // Et ce que la passe de MODÈLES dessine, face par face : c'est là que les
+    // arrivées remplissent des places et laissent des trous.
+    assert!(
+        montre_modeles(&o, &cs) == montre_modeles(&temoin, &ct),
+        "les faces de modèles dessinées diffèrent d'un chargement d'un bloc"
+    );
     println!(
         "streamé en {n} cellules : {} quads, identiques au chargement d'un bloc",
         o.monde.quads
@@ -152,6 +158,20 @@ fn le_streaming_tient_aussi_sur_du_bati() {
         "le bâti streamé diffère du bâti chargé d'un bloc"
     );
     assert_eq!(o.monde.poses, temoin.monde.poses);
+    let (a, b) = (montre_modeles(&o, &cs), montre_modeles(&temoin, &ct));
+    assert!(
+        !b.is_empty(),
+        "la prémisse : du bâti porte des faces de modèles"
+    );
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "pas le même nombre de faces de modèles dessinées"
+    );
+    assert!(
+        a == b,
+        "les faces de modèles dessinées diffèrent d'un chargement d'un bloc"
+    );
     println!(
         "bâti streamé : {} quads et {} poses, identiques",
         o.monde.quads, o.monde.poses
