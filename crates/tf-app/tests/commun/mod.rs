@@ -270,11 +270,10 @@ pub fn semer(dir: &Path, cote: i32, chunks: u32) {
 
 /// Remplace la texture d'un bloc par une plus GRANDE.
 ///
-/// Sert au seul cas où l'atlas ne peut pas s'étendre : accueillir une tuile
-/// qui dépasse son côté demanderait de réécrire tous les pixels des couches
-/// déjà montées. On veut que ce cas se REPLIE sur un rechargement, et qu'un
-/// test le prouve — sinon la tuile serait réduite en silence, ce qui perd la
-/// moitié de ses pixels.
+/// Sert au cas où l'atlas doit GRANDIR : une tuile qui dépasse son côté fait
+/// réécrire toutes les couches déjà montées. Il ne doit ni la réduire — ce
+/// qui perd la moitié de ses pixels — ni recharger la zone, ce qu'il faisait,
+/// et en boucle sous le streaming. Le pack du serveur mélange du 16 et du 32.
 pub fn texture_hd(racine: &Path, nom: &str, cote: u32) {
     ecrire(
         racine,

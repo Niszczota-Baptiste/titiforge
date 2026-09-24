@@ -1346,3 +1346,334 @@ fn une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve() {
         );
     }
 }
+
+// --- Synchronisation partielle ---------------------------------------------
+
+/// La table de `table()`, plus un SECOND modèle (un pavé centré) : c'est son
+/// arrivée qui fait grandir la table des faces au GPU.
+fn table_a_deux_modeles() -> TableFormes {
+    let mut t = table();
+    t.pousser(
+        false,
+        false,
+        vec![Cuboide {
+            min: [4.0, 0.0, 4.0],
+            max: [12.0, 12.0, 12.0],
+            faces: 0x3F,
+            cull: 0x3F,
+        }],
+    );
+    t
+}
+
+/// Remaille les colonnes `(cx, cz)` et leur voisinage, et remplace dans les
+/// deux arènes — ce que fait l'application après une édition.
+fn refaire_colonnes(
+    g: &Grille,
+    t: &TableFormes,
+    arene: &mut Arene,
+    modeles: &mut AreneModeles,
+    colonnes: &[(i32, i32)],
+) {
+    let mut visees = Vec::new();
+    for &(cx, cz) in colonnes {
+        visees.extend(Grille::sections_autour(
+            [cx * 16, 0, cz * 16],
+            [cx * 16 + 15, 15, cz * 16 + 15],
+        ));
+    }
+    visees.sort_unstable();
+    visees.dedup();
+    let neufs = g.mailler_ces(t, &visees);
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+}
+
+/// La scène synchronisée dessine-t-elle, pixel pour pixel, ce que dessine une
+/// scène NEUVE des mêmes arènes ? Vu de deux côtés opposés, pour la même
+/// raison que `une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve` :
+/// ce qui se glisse au fond d'une vue est au premier plan de l'autre.
+fn comme_une_neuve(
+    app: &Appareil,
+    suivie: &Scene,
+    arene: &Arene,
+    modeles: &AreneModeles,
+    atlas: &AtlasGpu,
+    etape: &str,
+) {
+    let cote = 192;
+    // Cadrée sur le CONTENU de l'étape : une colonne seule dans le cadre de
+    // huit n'occuperait qu'une poignée de pixels.
+    let (min, max) = arene
+        .bornes()
+        .expect("la prémisse : l'arène n'est pas vide");
+    let face = Camera::cadrer(min, max, 1.0);
+    let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
+    let dos = Camera {
+        oeil: [
+            2.0 * centre[0] - face.oeil[0],
+            2.0 * centre[1] - face.oeil[1],
+            2.0 * centre[2] - face.oeil[2],
+        ],
+        cible: centre,
+        ..face
+    };
+    let neuve = Scene::pour(app, arene, modeles, atlas, tf_render::scene::FORMAT);
+    for (nom, cam) in [("de face", face), ("de dos", dos)] {
+        let cible = Cible::nouvelle(app, cote, cote);
+        let (a, ca) = suivie.rendre(&cible, &cam);
+        let (b, cb) = neuve.rendre(&cible, &cam);
+        assert!(
+            dessines(&b, cote) > 500,
+            "{etape}, vue {nom} : la prémisse — la scène se voit"
+        );
+        assert_eq!(ca, cb, "{etape}, vue {nom} : les comptes diffèrent");
+        let differents = a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        assert_eq!(
+            differents, 0,
+            "{etape}, vue {nom} : {differents} pixels diffèrent de la scène neuve"
+        );
+    }
+}
+
+/// Un motif de colonne : des cubes, la dalle, et — si `m` vaut 3 — le pavé.
+///
+/// **La case (0, 0, 0) reste VIDE**, et c'est voulu : une pose périmée ou
+/// jamais écrite (des zéros) désigne l'emplacement 0 à sa case (0, 0, 0). Un
+/// cube posé là cachait exactement ce que le test doit voir.
+fn motif(cx: i32, cz: i32, graine: i32, m: StateId) -> impl Fn(i32, i32, i32) -> StateId {
+    move |x, y, z| {
+        if (x, y, z) == (0, 0, 0) {
+            return AIR;
+        }
+        match (x * 3 + y * 5 + z * 7 + cx + cz * 2 + graine) % 9 {
+            0 | 1 => CUBE,
+            2 => 2,
+            3 => m,
+            _ => AIR,
+        }
+    }
+}
+
+fn colonne(cx: i32, cz: i32, graine: i32, m: StateId) -> Section {
+    section(0, motif(cx, cz, graine, m))
+}
+
+#[test]
+fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
+    let Some(app) = app() else { return };
+    let t = table_a_deux_modeles();
+    let atlas = atlas_blanc(&app);
+    let mut g = Grille::new();
+    g.poser(0, 0, colonne(0, 0, 0, AIR));
+    let c = g.mailler(&t);
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut modeles = AreneModeles::sans_biome(&c, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
+    scene.synchroniser(&mut arene, &mut modeles);
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "départ");
+    let grandi = scene.agrandissements();
+
+    // **Une réécriture EN PLACE et une croissance dans la même
+    // synchronisation.** La colonne (0, 0) maigrit — elle se réécrit à sa
+    // place, sous l'ancienne longueur — pendant que sept colonnes arrivent et
+    // font grandir les quatre tampons, le pavé amenant des faces neuves.
+    // C'est le cas où une copie de croissance partie APRÈS les écritures
+    // remettrait l'ancien contenu par-dessus le neuf.
+    g.poser(
+        0,
+        0,
+        section(
+            0,
+            |x, y, z| if x == y && y == z && x > 0 { CUBE } else { AIR },
+        ),
+    );
+    let mut arrivees = vec![(0, 0)];
+    for cx in 1..8 {
+        let cz = cx % 2;
+        g.poser(cx, cz, colonne(cx, cz, 1, 3));
+        arrivees.push((cx, cz));
+    }
+    refaire_colonnes(&g, &t, &mut arene, &mut modeles, &arrivees);
+    scene.synchroniser(&mut arene, &mut modeles);
+    assert!(
+        scene.agrandissements() >= grandi + 4,
+        "la prémisse : les quatre tampons ont dû grandir ({} → {})",
+        grandi,
+        scene.agrandissements()
+    );
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "croissance");
+
+    // Des colonnes partent, dont la DERNIÈRE : l'arène raccourcit, les poses
+    // aussi, sans que rien ne grandisse. Une liaison des poses restée à
+    // l'ancienne longueur ferait dichotomiser la recherche dans des poses
+    // périmées.
+    let avant = scene.agrandissements();
+    g.retirer((7, 1, 0));
+    g.retirer((3, 1, 0));
+    refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(7, 1), (3, 1)]);
+    scene.synchroniser(&mut arene, &mut modeles);
+    assert_eq!(
+        scene.agrandissements(),
+        avant,
+        "la prémisse : rien n'a grandi"
+    );
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "départs");
+
+    // Une colonne change de contenu sur place, une autre revient.
+    g.poser(2, 0, colonne(2, 0, 4, 3));
+    g.poser(3, 1, colonne(3, 1, 7, 2));
+    refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(2, 0), (3, 1)]);
+    scene.synchroniser(&mut arene, &mut modeles);
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "changement");
+
+    // **Une PETITE croissance** : deux colonnes de plus, les poses grandissent
+    // de moins de moitié, donc le tampon grandit par moitié et garde de la
+    // MARGE — des zéros jamais écrits. Liées au tampon entier plutôt qu'à
+    // leur nombre, ces poses-là seraient prises par la dichotomie.
+    let p = modeles.poses.len() as u64;
+    g.poser(8, 0, colonne(8, 0, 2, 3));
+    g.poser(8, 1, colonne(8, 1, 2, 3));
+    refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(8, 0), (8, 1)]);
+    scene.synchroniser(&mut arene, &mut modeles);
+    let marge = scene.capacites()[3] / 16;
+    assert!(
+        (modeles.poses.len() as u64) < marge && marge > p,
+        "la prémisse : le tampon des poses a grandi avec de la marge \
+         ({} poses pour {marge} places)",
+        modeles.poses.len()
+    );
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "petite croissance");
+
+    // **Puis des poses DANS la marge** : leur nombre change sans que le
+    // tampon grandisse. Une liaison refaite seulement à la croissance
+    // garderait l'ancienne longueur, et la dichotomie ne verrait jamais les
+    // nouvelles.
+    let (avant, p) = (scene.capacites()[3], modeles.poses.len());
+    g.poser(9, 1, colonne(9, 1, 6, 3));
+    refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(9, 1)]);
+    scene.synchroniser(&mut arene, &mut modeles);
+    assert!(
+        scene.capacites()[3] == avant && modeles.poses.len() > p,
+        "la prémisse : des poses en plus, dans la marge ({p} → {}, {} → {} octets)",
+        modeles.poses.len(),
+        avant,
+        scene.capacites()[3]
+    );
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "dans la marge");
+
+    // **Un rechargement** : des arènes NEUVES, plus petites, pour la même
+    // scène. Elles sont sales de bout en bout, donc tout part — et ce qui
+    // reste au-delà dans les tampons ne doit plus se voir.
+    let mut petite = Grille::new();
+    petite.poser(1, 0, colonne(1, 0, 5, 3));
+    let c = petite.mailler(&t);
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut modeles = AreneModeles::sans_biome(&c, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    scene.synchroniser(&mut arene, &mut modeles);
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "rechargement");
+}
+
+#[test]
+fn une_scene_ne_montre_jamais_ce_qu_elle_n_a_pas_recu() {
+    // Une arène dont quelqu'un a déjà PRIS les plages sales — une autre
+    // scène, un appel de trop. Pour une scène qui n'en a jamais rien reçu,
+    // tout est à envoyer quand même : ce que le GPU n'a jamais tenu est sale,
+    // quoi que disent les arènes.
+    let Some(app) = app() else { return };
+    let t = table_a_deux_modeles();
+    let atlas = atlas_blanc(&app);
+    let mut g = Grille::new();
+    for cx in 0..4 {
+        g.poser(cx, 0, colonne(cx, 0, 3, 3));
+    }
+    let c = g.mailler(&t);
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut modeles = AreneModeles::sans_biome(&c, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    arene.prendre_sales();
+    modeles.prendre_sales();
+    let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
+    scene.synchroniser(&mut arene, &mut modeles);
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "sales déjà prises");
+}
+
+#[test]
+fn synchroniser_n_envoie_que_ce_qui_a_change() {
+    let Some(app) = app() else { return };
+    let t = table_a_deux_modeles();
+    let atlas = atlas_blanc(&app);
+    let mut g = Grille::new();
+    for cx in 0..8 {
+        for cz in 0..8 {
+            g.poser(cx, cz, colonne(cx, cz, 0, 3));
+        }
+    }
+    let c = g.mailler(&t);
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut modeles = AreneModeles::sans_biome(&c, &|s| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
+    let tout = scene.synchroniser(&mut arene, &mut modeles);
+    let attendu = arene.octets() + std::mem::size_of_val(arene.origines()) + modeles.octets();
+    assert_eq!(
+        tout as usize, attendu,
+        "la première fois, tout part — une fois"
+    );
+    assert_eq!(
+        scene.synchroniser(&mut arene, &mut modeles),
+        0,
+        "rien n'a changé, rien ne part"
+    );
+
+    // Un bloc au MILIEU d'une section : il ne touche qu'elle.
+    let avant = motif(3, 3, 0, 3);
+    assert_eq!(avant(8, 8, 8), 3, "la prémisse : un pavé devient un cube");
+    g.poser(
+        3,
+        3,
+        section(0, |x, y, z| {
+            if (x, y, z) == (8, 8, 8) {
+                CUBE
+            } else {
+                avant(x, y, z)
+            }
+        }),
+    );
+    let visees = Grille::sections_touchees([56, 8, 56], [56, 8, 56]);
+    assert_eq!(visees, vec![(3, 3, 0)], "la prémisse : une seule section");
+    let neufs = g.mailler_ces(&t, &visees);
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
+        let c = t.cuboides(s);
+        faces_de(c, &blanc(c.len()))
+    });
+    let envoyes = scene.synchroniser(&mut arene, &mut modeles);
+    let section_neuve = neufs.octets();
+    assert!(envoyes > 0, "la section changée part");
+    assert!(
+        envoyes as usize <= 2 * section_neuve + 256,
+        "{envoyes} octets envoyés pour une section qui en pèse {section_neuve}"
+    );
+    // Soixante-quatre sections ; une section qui déménage en coûte deux (sa
+    // nouvelle place, et l'ancienne vidée). Tout renvoyer coûterait `tout`.
+    assert!(
+        envoyes * 16 < tout,
+        "{envoyes} octets pour un bloc, sur une scène de {tout} : la synchronisation \
+         paie la scène, pas l'édition"
+    );
+    comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "un bloc");
+}

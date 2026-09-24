@@ -96,6 +96,13 @@ struct Gpu {
     /// aussi à Ctrl+Z.
     ctrl: bool,
     souris: Option<(f64, f64)>,
+    /// L'atlas que la scène a monté : `(rechargements, couches, côté)`.
+    /// L'atlas ne change que de trois façons — un rechargement le refait, un
+    /// état jamais vu l'ALLONGE, une texture plus grande l'AGRANDIT — et la
+    /// clé change avec chacune. Le remonter à chaque arrivée renvoyait toutes
+    /// ses couches et ses mips pour trois sections qui n'amenaient aucune
+    /// texture.
+    atlas_monte: (u32, usize, u32),
 }
 
 struct Coque {
@@ -133,7 +140,7 @@ impl ApplicationHandler for Coque {
                 return;
             }
         };
-        match preparer(&f, &self.ouvert.monde) {
+        match preparer(&f, &mut self.ouvert) {
             Ok(g) => {
                 self.gpu = Some(g);
                 self.fenetre = Some(f);
@@ -313,8 +320,8 @@ impl ApplicationHandler for Coque {
                 if let Some(b) = self.remailler.take() {
                     if let Err(e) = self.ouvert.remailler(Some(b)) {
                         g.etat.message = format!("remaillage : {e}");
-                    } else if let Err(e) = regarnir(g, &self.ouvert.monde) {
-                        g.etat.message = format!("remaillage : {e}");
+                    } else {
+                        regarnir(g, &mut self.ouvert);
                     }
                 }
                 // **Le streaming vient en DERNIER dans l'image.** Ce qu'il
@@ -328,11 +335,7 @@ impl ApplicationHandler for Coque {
                     .image(&mut self.ouvert, oeil, regard, CELLULES_PAR_IMAGE)
                 {
                     Err(e) => g.etat.message = format!("chargement : {e}"),
-                    Ok(f) if f.a_change() => {
-                        if let Err(e) = regarnir(g, &self.ouvert.monde) {
-                            g.etat.message = format!("chargement : {e}");
-                        }
-                    }
+                    Ok(f) if f.a_change() => regarnir(g, &mut self.ouvert),
                     Ok(_) => {}
                 }
             }
@@ -411,20 +414,37 @@ fn envoyer(m: &mut Option<Moteur>, e: &mut Etat) {
     }
 }
 
-/// Reconstruit ce que le GPU dessine après un remaillage.
+/// **Ce que le GPU dessine rattrape le monde** — sans le refaire.
 ///
-/// Le matériau et l'atlas changent avec la scène : un bloc qui apparaît pour
-/// la première fois amène sa texture, et l'atlas ne monte que les textures des
-/// blocs PRÉSENTS. Garder l'ancien afficherait la mauvaise tuile.
-fn regarnir(g: &mut Gpu, m: &scene::Monde) -> Result<(), String> {
-    let atlas = AtlasGpu::avec_mips(
-        &g.appareil,
-        m.atlas.cote,
-        m.atlas.len() as u32,
-        &m.atlas.pyramide(),
-    );
-    g.scene = Scene::pour(&g.appareil, &m.arene, &m.modeles, &atlas, g.config.format);
-    Ok(())
+/// Les arènes n'envoient que ce qu'elles ont réécrit (`synchroniser`) ; un
+/// rechargement leur donne des arènes neuves, sales de bout en bout, et tout
+/// repart sans qu'on ait à le dire. L'atlas, lui, ne remonte que s'il a
+/// changé : un bloc qui apparaît pour la première fois amène sa texture, et
+/// garder l'ancien afficherait la mauvaise tuile.
+///
+/// Reconstruire la scène ici, comme avant, renvoyait tout le monde au GPU,
+/// recompilait les deux pipelines et remontait l'atlas avec ses mips — à
+/// chaque image où une cellule arrivait.
+fn regarnir(g: &mut Gpu, o: &mut scene::Ouvert) {
+    let cle = cle_atlas(o);
+    if cle != g.atlas_monte {
+        g.scene
+            .changer_atlas(&monter_atlas(&g.appareil, &o.monde.atlas));
+        g.atlas_monte = cle;
+    }
+    let t = std::time::Instant::now();
+    let m = &mut o.monde;
+    g.scene.synchroniser(&mut m.arene, &mut m.modeles);
+    tf_app::scene::phase("gpu", t);
+}
+
+/// Ce qui dit si l'atlas monté est encore le bon — voir `Gpu::atlas_monte`.
+fn cle_atlas(o: &scene::Ouvert) -> (u32, usize, u32) {
+    (o.rechargements, o.monde.atlas.len(), o.monde.atlas.cote)
+}
+
+fn monter_atlas(app: &Appareil, a: &tf_assets::Atlas) -> AtlasGpu {
+    AtlasGpu::avec_mips(app, a.cote, a.len() as u32, &a.pyramide())
 }
 fn voler(g: &mut Gpu) {
     let v = 0.6;
@@ -436,7 +456,7 @@ fn voler(g: &mut Gpu) {
     }
 }
 
-fn preparer(f: &Arc<Window>, m: &scene::Monde) -> Result<Gpu, String> {
+fn preparer(f: &Arc<Window>, o: &mut scene::Ouvert) -> Result<Gpu, String> {
     let appareil = Appareil::ouvrir().map_err(|e| format!("pas d'adaptateur : {e}"))?;
     let surface = appareil
         .instance
@@ -462,13 +482,18 @@ fn preparer(f: &Arc<Window>, m: &scene::Monde) -> Result<Gpu, String> {
     config.view_formats = vec![config.format];
     surface.configure(&appareil.device, &config);
 
-    let atlas = AtlasGpu::avec_mips(
+    // **Une scène VIDE, rattrapée par la synchronisation** : c'est le même
+    // chemin que toutes les images suivantes, et rien ne part deux fois — une
+    // scène remplie d'un coup laisserait les arènes sales, et la première
+    // arrivée renverrait le monde entier.
+    let mut scene = Scene::vide(
         &appareil,
-        m.atlas.cote,
-        m.atlas.len() as u32,
-        &m.atlas.pyramide(),
+        &monter_atlas(&appareil, &o.monde.atlas),
+        config.format,
     );
-    let scene = Scene::pour(&appareil, &m.arene, &m.modeles, &atlas, config.format);
+    scene.synchroniser(&mut o.monde.arene, &mut o.monde.modeles);
+    let atlas_monte = cle_atlas(o);
+    let m = &o.monde;
     let egui = egui::Context::default();
     let etat_egui = egui_winit::State::new(
         egui.clone(),
@@ -496,6 +521,7 @@ fn preparer(f: &Arc<Window>, m: &scene::Monde) -> Result<Gpu, String> {
         maj: false,
         ctrl: false,
         souris: None,
+        atlas_monte,
     })
 }
 

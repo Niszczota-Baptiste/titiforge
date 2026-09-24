@@ -3,6 +3,12 @@
 //! **Un seul appel de dessin** pour toute l'arène : les quads sont des
 //! instances d'un même quad unitaire, et la géométrie se déduit de la face.
 //! La référence à battre est 1 281 appels, mesurée sur `ExeWorldEdit`.
+//!
+//! **La scène se TIENT, elle ne se refait pas.** Ses tampons vivent aussi
+//! longtemps qu'elle, grandissent au GPU quand l'arène grandit, et ne
+//! reçoivent que ce que les arènes disent avoir réécrit (`synchroniser`). La
+//! reconstruire à chaque arrivée renvoyait toute la scène, recompilait les
+//! pipelines et remontait l'atlas avec ses mips — pour trois sections.
 
 use std::sync::Arc;
 
@@ -10,6 +16,7 @@ use wgpu::util::DeviceExt;
 
 use crate::arene::Arene;
 use crate::camera::{Camera, CameraGpu};
+use crate::modeles::{AreneModeles, FaceModele, Origine, Pose};
 use crate::Appareil;
 
 /// Le format de la cible HORS ÉCRAN.
@@ -35,19 +42,33 @@ pub struct Scene {
     appareil: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     pipeline: wgpu::RenderPipeline,
-    liaison: wgpu::BindGroup,
+    /// Groupe 0 : caméra, atlas, échantillonneur. Ne se refait que si
+    /// l'ATLAS change (`changer_atlas`).
+    disposition_commune: wgpu::BindGroupLayout,
+    commune: wgpu::BindGroup,
     camera: wgpu::Buffer,
-    instances: wgpu::Buffer,
+    /// Groupe 1 : la table des origines, PARTAGÉE par les deux passes. Deux
+    /// tables se décaleraient le jour où l'une saute une section vide, et
+    /// tout un pan du build se dessinerait ailleurs — sans la moindre erreur.
+    disposition_origines: wgpu::BindGroupLayout,
+    liaison_origines: wgpu::BindGroup,
+    origines: Tampon,
+    /// Origines que le GPU tient à jour.
+    nb_origines: usize,
+    instances: Tampon,
     nombre: u32,
-    /// La passe de MODÈLES. Absente quand la scène n'a aucun bloc-modèle —
-    /// une passe qui ne dessine rien reste un changement de pipeline.
-    modeles: Option<PasseModeles>,
+    modeles: PasseModeles,
     /// Le QUADRILLAGE — chunks, `.mca`, sélection. Absent par défaut : une
     /// scène qui n'en demande pas n'en paie pas.
     lignes: Option<PasseLignes>,
     /// Le format de la cible. Gardé parce que le quadrillage se pose APRÈS la
     /// scène et doit construire son pipeline pour la même.
     format: wgpu::TextureFormat,
+    /// Octets envoyés au GPU depuis la création. **Le compteur qui prouve
+    /// qu'une synchronisation paie ce qui a changé**, et pas la scène.
+    envoyes: u64,
+    /// Combien de fois un tampon a dû grandir.
+    agrandissements: u32,
 }
 
 /// Ce que le quadrillage tient au GPU.
@@ -59,41 +80,195 @@ struct PasseLignes {
 }
 
 /// Ce que la passe de modèles tient au GPU.
+///
+/// Toujours là, même sans le moindre bloc-modèle : c'est son APPEL qui se
+/// saute quand il n'y a rien à dessiner — une passe vide reste un changement
+/// de pipeline. La construire à la demande obligerait à la refaire le jour où
+/// le premier escalier arrive par le streaming.
 struct PasseModeles {
     pipeline: wgpu::RenderPipeline,
+    disposition: wgpu::BindGroupLayout,
     liaison: wgpu::BindGroup,
-    /// Nombre de FACES à dessiner — une instance chacune.
-    faces: u32,
+    faces: Tampon,
+    nb_faces: usize,
+    poses: Tampon,
+    nb_poses: usize,
+    /// Nombre de FACES à dessiner — une instance chacune, trous compris.
+    a_dessiner: u32,
+}
+
+/// Un tampon GPU qui GRANDIT sans repartir de zéro.
+///
+/// Sa capacité croît par moitiés, et l'ancien contenu passe dans le nouveau
+/// par une copie GPU → GPU : ni le fil principal ni le bus ne revoient ce
+/// qu'ils avaient déjà envoyé.
+struct Tampon {
+    buf: wgpu::Buffer,
+    capacite: u64,
+    usage: wgpu::BufferUsages,
+    nom: &'static str,
+}
+
+impl Tampon {
+    /// Seize octets : wgpu refuse un tampon de taille nulle, et une scène
+    /// vide est un cas de test légitime.
+    fn vide(device: &wgpu::Device, nom: &'static str, usage: wgpu::BufferUsages) -> Tampon {
+        let usage = usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+        Tampon {
+            buf: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(nom),
+                size: 16,
+                usage,
+                mapped_at_creation: false,
+            }),
+            capacite: 16,
+            usage,
+            nom,
+        }
+    }
+
+    /// Assez de place pour `octets`, en gardant les `garder` premiers.
+    ///
+    /// Rend vrai si le TAMPON a changé : ce qui le lie doit alors être refait.
+    /// La copie est enregistrée dans `enc`, qui doit partir AVANT toute
+    /// écriture dans le nouveau tampon — voir `Scene::envoyer`.
+    fn assurer(
+        &mut self,
+        device: &wgpu::Device,
+        enc: &mut wgpu::CommandEncoder,
+        octets: u64,
+        garder: u64,
+    ) -> bool {
+        if octets <= self.capacite {
+            return false;
+        }
+        let capacite = octets
+            .max(self.capacite + self.capacite / 2)
+            .next_multiple_of(16);
+        let neuf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(self.nom),
+            size: capacite,
+            usage: self.usage,
+            mapped_at_creation: false,
+        });
+        let garder = garder.min(self.capacite) & !(wgpu::COPY_BUFFER_ALIGNMENT - 1);
+        if garder > 0 {
+            enc.copy_buffer_to_buffer(&self.buf, 0, &neuf, 0, garder);
+        }
+        self.buf = neuf;
+        self.capacite = capacite;
+        true
+    }
+
+    /// Écrit `donnees` à partir de l'élément `debut`. Rend les octets écrits.
+    fn ecrire<T: bytemuck::Pod>(&self, queue: &wgpu::Queue, debut: usize, donnees: &[T]) -> u64 {
+        if donnees.is_empty() {
+            return 0;
+        }
+        let b: &[u8] = bytemuck::cast_slice(donnees);
+        queue.write_buffer(&self.buf, (debut * std::mem::size_of::<T>()) as u64, b);
+        b.len() as u64
+    }
+}
+
+/// Ce qu'une synchronisation doit envoyer, par plages `(début, nombre)`.
+struct Sales {
+    instances: Vec<(u32, u32)>,
+    origines: Vec<(u32, u32)>,
+    poses: Vec<(u32, u32)>,
+    /// Début de la queue de `faces` à envoyer.
+    faces_depuis: usize,
+}
+
+/// Des indices triés en plages contiguës.
+fn en_plages(indices: &[u32]) -> Vec<(u32, u32)> {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for &i in indices {
+        match out.last_mut() {
+            Some((d, n)) if *d + *n == i => *n += 1,
+            _ => out.push((i, 1)),
+        }
+    }
+    out
+}
+
+/// Ajoute la plage `debut..fin`, puis trie et recolle : une case couverte
+/// deux fois partirait deux fois, et le compteur d'octets mentirait.
+fn ajouter_queue(plages: &mut Vec<(u32, u32)>, debut: usize, fin: usize) {
+    if fin > debut {
+        plages.push((debut as u32, (fin - debut) as u32));
+    }
+    plages.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(plages.len());
+    for &(d, n) in plages.iter() {
+        match out.last_mut() {
+            Some((pd, pn)) if *pd + *pn >= d => *pn = (*pn).max(d + n - *pd),
+            _ => out.push((d, n)),
+        }
+    }
+    *plages = out;
+}
+
+fn lecture_seule(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
 }
 
 impl Scene {
     /// Prépare la passe : l'atlas monte au GPU, les instances aussi.
     pub fn nouvelle(app: &Appareil, arene: &Arene, atlas: &AtlasGpu) -> Scene {
-        Scene::avec_modeles(app, arene, &crate::AreneModeles::default(), atlas)
+        Scene::avec_modeles(app, arene, &AreneModeles::default(), atlas)
     }
 
     /// La scène complète : les cubes gloutons ET les blocs-modèles.
     pub fn avec_modeles(
         app: &Appareil,
         arene: &Arene,
-        modeles: &crate::AreneModeles,
+        modeles: &AreneModeles,
         atlas: &AtlasGpu,
     ) -> Scene {
         Scene::pour(app, arene, modeles, atlas, FORMAT)
     }
 
-    /// La même, pour un format de cible donné.
+    /// La même, pour un format de cible donné, remplie d'un coup.
+    ///
+    /// Elle envoie TOUT et ne touche pas aux listes de ce qui a changé : une
+    /// scène qui doit ensuite suivre les arènes naît avec [`Scene::vide`] et
+    /// les rattrape par [`Scene::synchroniser`], sans rien envoyer deux fois.
+    pub fn pour(
+        app: &Appareil,
+        arene: &Arene,
+        modeles: &AreneModeles,
+        atlas: &AtlasGpu,
+        format: wgpu::TextureFormat,
+    ) -> Scene {
+        let mut s = Scene::vide(app, atlas, format);
+        let tout = Sales {
+            instances: vec![(0, arene.len() as u32)],
+            origines: vec![(0, arene.origines().len() as u32)],
+            poses: vec![(0, modeles.poses.len() as u32)],
+            faces_depuis: 0,
+        };
+        s.envoyer(arene, modeles, tout);
+        s
+    }
+
+    /// Une scène sans rien à dessiner : les pipelines, l'atlas et des tampons
+    /// minuscules. Construite UNE fois ; ce qu'elle dessine arrive ensuite
+    /// par [`Scene::synchroniser`].
     ///
     /// La fenêtre s'en sert avec le format de SA surface : sur X11 et pilote
     /// logiciel, elle ne propose que `Bgra8UnormSrgb`, et forcer le format du
     /// hors-écran fait paniquer wgpu. Le sRGB, lui, ne se négocie pas.
-    pub fn pour(
-        app: &Appareil,
-        arene: &Arene,
-        modeles: &crate::AreneModeles,
-        atlas: &AtlasGpu,
-        format: wgpu::TextureFormat,
-    ) -> Scene {
+    pub fn vide(app: &Appareil, atlas: &AtlasGpu, format: wgpu::TextureFormat) -> Scene {
         debug_assert!(
             format.is_srgb(),
             "une cible non sRGB ferait sortir toutes les couleurs autrement, \
@@ -109,95 +284,51 @@ impl Scene {
             mapped_at_creation: false,
         });
 
-        let instances = tampon_pages(
-            &device,
-            "arène",
-            wgpu::BufferUsages::VERTEX,
-            &arene.instances,
-        );
-
-        // UNE table d'origines pour les deux passes. Deux se décaleraient le
-        // jour où l'une saute une section vide, et tout un pan du build se
-        // dessinerait ailleurs — sans la moindre erreur.
-        let origines = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("origines de section"),
-            // Un tampon de stockage VIDE est refusé par wgpu, et une scène
-            // vide est un cas de test parfaitement légitime.
-            contents: if arene.origines().is_empty() {
-                &[0u8; 16]
-            } else {
-                bytemuck::cast_slice(arene.origines())
-            },
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scène"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let disposition_commune =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("scène"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        // Un TABLEAU, pas une planche : la répétition d'un quad
-                        // glouton ne peut alors pas mordre sur la tuile
-                        // voisine.
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            // Un TABLEAU, pas une planche : la répétition d'un
+                            // quad glouton ne peut alors pas mordre sur la
+                            // tuile voisine.
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                ],
+            });
+        let commune = liaison_commune(&device, &disposition_commune, &camera, atlas);
 
-        let liaison = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("scène"),
-            layout: &disposition,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas.vue),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&atlas.echantillonneur),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: origines.as_entire_binding(),
-                },
-            ],
-        });
+        let disposition_origines =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("origines de section"),
+                entries: &[lecture_seule(0)],
+            });
+        let origines = Tampon::vide(&device, "origines de section", wgpu::BufferUsages::STORAGE);
+        let liaison_origines = liaison_origines(&device, &disposition_origines, &origines);
+        let instances = Tampon::vide(&device, "arène", wgpu::BufferUsages::VERTEX);
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad"),
@@ -206,7 +337,7 @@ impl Scene {
 
         let agencement = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scène"),
-            bind_group_layouts: &[&disposition],
+            bind_group_layouts: &[&disposition_commune, &disposition_origines],
             push_constant_ranges: &[],
         });
 
@@ -256,21 +387,189 @@ impl Scene {
             cache: None,
         });
 
-        let passe_modeles = (!modeles.is_empty())
-            .then(|| PasseModeles::nouvelle(&device, &disposition, modeles, format));
+        let modeles =
+            PasseModeles::nouvelle(&device, &disposition_commune, &disposition_origines, format);
 
         Scene {
             appareil: device,
             queue,
             pipeline,
-            liaison,
+            disposition_commune,
+            commune,
             camera,
+            disposition_origines,
+            liaison_origines,
+            origines,
+            nb_origines: 0,
             instances,
-            nombre: arene.len() as u32,
-            modeles: passe_modeles,
+            nombre: 0,
+            modeles,
             lignes: None,
             format,
+            envoyes: 0,
+            agrandissements: 0,
         }
+    }
+
+    /// **Rattrape les arènes : n'envoie que ce qu'elles ont réécrit.**
+    ///
+    /// Les arènes tiennent la liste de leurs plages sales ; celle-ci les
+    /// PREND, donc une scène synchronise UNE paire d'arènes. Une arène neuve
+    /// (`depuis`, un rechargement) est sale de bout en bout, et la
+    /// synchronisation l'envoie en entier sans rien avoir à deviner.
+    ///
+    /// Rend les octets envoyés par cet appel.
+    pub fn synchroniser(&mut self, arene: &mut Arene, modeles: &mut AreneModeles) -> u64 {
+        let (mut instances, emplacements) = arene.prendre_sales();
+        let (mut poses, faces_depuis) = modeles.prendre_sales();
+        let mut origines = en_plages(&emplacements);
+        // **Ce que le GPU n'a jamais tenu est sale, quoi que disent les
+        // arènes.** Au-delà de l'ancienne longueur, le tampon porte au mieux
+        // une scène périmée : une case que l'arène aurait laissée à sa valeur
+        // vide sans la marquer y dessinerait l'ancienne.
+        ajouter_queue(&mut instances, self.nombre as usize, arene.len());
+        ajouter_queue(&mut origines, self.nb_origines, arene.origines().len());
+        ajouter_queue(&mut poses, self.modeles.nb_poses, modeles.poses.len());
+        let faces_depuis = faces_depuis.min(self.modeles.nb_faces);
+        self.envoyer(
+            arene,
+            modeles,
+            Sales {
+                instances,
+                origines,
+                poses,
+                faces_depuis,
+            },
+        )
+    }
+
+    /// Envoie les plages dites, en agrandissant d'abord ce qui doit l'être.
+    fn envoyer(&mut self, arene: &Arene, modeles: &AreneModeles, s: Sales) -> u64 {
+        const QUAD: usize = std::mem::size_of::<crate::arene::InstanceQuad>();
+        const ORIGINE: usize = std::mem::size_of::<Origine>();
+        const FACE: usize = std::mem::size_of::<FaceModele>();
+        const POSE: usize = std::mem::size_of::<Pose>();
+        let device = self.appareil.clone();
+        let queue = self.queue.clone();
+
+        let (n, o) = (arene.len(), arene.origines().len());
+        let (f, p) = (modeles.faces.len(), modeles.poses.len());
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("agrandir la scène"),
+        });
+        let m = &mut self.modeles;
+        let grandi = [
+            self.instances.assurer(
+                &device,
+                &mut enc,
+                (n * QUAD) as u64,
+                self.nombre as u64 * QUAD as u64,
+            ),
+            self.origines.assurer(
+                &device,
+                &mut enc,
+                (o * ORIGINE) as u64,
+                (self.nb_origines * ORIGINE) as u64,
+            ),
+            m.faces.assurer(
+                &device,
+                &mut enc,
+                (f * FACE) as u64,
+                (m.nb_faces * FACE) as u64,
+            ),
+            m.poses.assurer(
+                &device,
+                &mut enc,
+                (p * POSE) as u64,
+                (m.nb_poses * POSE) as u64,
+            ),
+        ];
+        if grandi.iter().any(|&g| g) {
+            // **La copie part AVANT les écritures.** `write_buffer` s'exécute
+            // au début de la PROCHAINE soumission, avant ses commandes : si la
+            // copie de l'ancien tampon partait avec le dessin, elle écraserait
+            // ce qu'on vient d'écrire par l'ancien contenu.
+            queue.submit([enc.finish()]);
+            self.agrandissements += grandi.iter().filter(|&&g| g).count() as u32;
+        }
+        if grandi[1] {
+            self.liaison_origines =
+                liaison_origines(&device, &self.disposition_origines, &self.origines);
+        }
+
+        let mut envoyes = 0u64;
+        for &(d, k) in &s.instances {
+            let fin = (d as usize + k as usize).min(n);
+            for (i, t) in arene.instances.plage(d as usize, fin) {
+                envoyes += self.instances.ecrire(&queue, i, t);
+            }
+        }
+        for &(d, k) in &s.origines {
+            let fin = (d as usize + k as usize).min(o);
+            if (d as usize) < fin {
+                envoyes +=
+                    self.origines
+                        .ecrire(&queue, d as usize, &arene.origines()[d as usize..fin]);
+            }
+        }
+        if s.faces_depuis < f {
+            envoyes += m
+                .faces
+                .ecrire(&queue, s.faces_depuis, &modeles.faces[s.faces_depuis..]);
+        }
+        for &(d, k) in &s.poses {
+            let fin = (d as usize + k as usize).min(p);
+            for (i, t) in modeles.poses.plage(d as usize, fin) {
+                envoyes += m.poses.ecrire(&queue, i, t);
+            }
+        }
+        // Les poses sont liées à leur taille EXACTE : la liaison se refait
+        // dès que leur nombre change, pas seulement quand le tampon grandit.
+        if grandi[2] || grandi[3] || p != m.nb_poses {
+            m.liaison = liaison_modeles(&device, &m.disposition, &m.faces, &m.poses, p);
+        }
+
+        self.nombre = n as u32;
+        self.nb_origines = o;
+        m.nb_faces = f;
+        m.nb_poses = p;
+        m.a_dessiner = modeles.faces_a_dessiner;
+        self.envoyes += envoyes;
+        envoyes
+    }
+
+    /// Relie un autre atlas. Les tampons ne bougent pas : c'est l'atlas qui
+    /// grandit quand un état jamais vu arrive, pas la scène.
+    pub fn changer_atlas(&mut self, atlas: &AtlasGpu) {
+        self.commune = liaison_commune(
+            &self.appareil,
+            &self.disposition_commune,
+            &self.camera,
+            atlas,
+        );
+    }
+
+    /// Octets envoyés au GPU depuis la création.
+    pub fn octets_envoyes(&self) -> u64 {
+        self.envoyes
+    }
+
+    /// Combien de fois un tampon a grandi.
+    pub fn agrandissements(&self) -> u32 {
+        self.agrandissements
+    }
+
+    /// Capacités en octets : instances, origines, faces, poses. Pour les
+    /// tests, qui doivent pouvoir PROUVER qu'un tampon a de la marge — c'est
+    /// là que se cachent les poses périmées.
+    #[doc(hidden)]
+    pub fn capacites(&self) -> [u64; 4] {
+        [
+            self.instances.capacite,
+            self.origines.capacite,
+            self.modeles.faces.capacite,
+            self.modeles.poses.capacite,
+        ]
     }
 
     /// Pose (ou remplace) le quadrillage.
@@ -323,19 +622,22 @@ impl Scene {
             occlusion_query_set: None,
         });
         passe.set_pipeline(&self.pipeline);
-        passe.set_bind_group(0, &self.liaison, &[]);
-        passe.set_vertex_buffer(0, self.instances.slice(..));
+        passe.set_bind_group(0, &self.commune, &[]);
+        passe.set_bind_group(1, &self.liaison_origines, &[]);
+        passe.set_vertex_buffer(0, self.instances.buf.slice(..));
         // UN appel pour toute l'arène.
         passe.draw(0..6, 0..self.nombre);
 
         // Et UN pour tous les blocs-modèles, quel que soit leur nombre de
         // faces : la pose porte le rang de sa première face, le sommet
         // retrouve la sienne par dichotomie.
-        if let Some(m) = &self.modeles {
+        let m = &self.modeles;
+        if m.a_dessiner > 0 {
             passe.set_pipeline(&m.pipeline);
-            passe.set_bind_group(0, &self.liaison, &[]);
-            passe.set_bind_group(1, &m.liaison, &[]);
-            passe.draw(0..6, 0..m.faces);
+            passe.set_bind_group(0, &self.commune, &[]);
+            passe.set_bind_group(1, &self.liaison_origines, &[]);
+            passe.set_bind_group(2, &m.liaison, &[]);
+            passe.draw(0..6, 0..m.a_dessiner);
         }
 
         // **Le quadrillage passe en DERNIER, et sans test de
@@ -385,9 +687,9 @@ impl Scene {
     fn compte(&self) -> Compte {
         Compte {
             appels_de_dessin: 1
-                + u32::from(self.modeles.is_some())
+                + u32::from(self.modeles.a_dessiner > 0)
                 + u32::from(self.lignes.is_some()),
-            instances: self.nombre + self.modeles.as_ref().map_or(0, |m| m.faces),
+            instances: self.nombre + self.modeles.a_dessiner,
         }
     }
 
@@ -405,69 +707,96 @@ impl Scene {
         cible.copier(&mut enc);
         self.queue.submit([enc.finish()]);
 
-        (
-            cible.relire(&self.appareil),
-            Compte {
-                appels_de_dessin: 1
-                    + u32::from(self.modeles.is_some())
-                    + u32::from(self.lignes.is_some()),
-                instances: self.nombre + self.modeles.as_ref().map_or(0, |m| m.faces),
-            },
-        )
+        (cible.relire(&self.appareil), self.compte())
     }
+}
+
+fn liaison_commune(
+    device: &wgpu::Device,
+    disposition: &wgpu::BindGroupLayout,
+    camera: &wgpu::Buffer,
+    atlas: &AtlasGpu,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("scène"),
+        layout: disposition,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&atlas.vue),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&atlas.echantillonneur),
+            },
+        ],
+    })
+}
+
+fn liaison_origines(
+    device: &wgpu::Device,
+    disposition: &wgpu::BindGroupLayout,
+    origines: &Tampon,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("origines de section"),
+        layout: disposition,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: origines.buf.as_entire_binding(),
+        }],
+    })
+}
+
+/// Les faces entières, les poses à leur nombre EXACT (voir `modeles.wgsl`).
+/// Au moins une pose : une liaison de taille nulle est refusée, et une scène
+/// sans modèle ne lance de toute façon pas l'appel qui la lirait.
+fn liaison_modeles(
+    device: &wgpu::Device,
+    disposition: &wgpu::BindGroupLayout,
+    faces: &Tampon,
+    poses: &Tampon,
+    nb_poses: usize,
+) -> wgpu::BindGroup {
+    let taille = (nb_poses.max(1) * std::mem::size_of::<Pose>()) as u64;
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("modèles"),
+        layout: disposition,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: faces.buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &poses.buf,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(taille),
+                }),
+            },
+        ],
+    })
 }
 
 impl PasseModeles {
     fn nouvelle(
         device: &wgpu::Device,
-        commun: &wgpu::BindGroupLayout,
-        a: &crate::AreneModeles,
+        commune: &wgpu::BindGroupLayout,
+        origines: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
     ) -> PasseModeles {
-        let tampon = |nom: &str, octets: &[u8]| {
-            // Un tampon de stockage VIDE est refusé par wgpu, et une arène peut
-            // n'avoir aucune origine si toutes ses sections sont sans modèle.
-            // Seize octets de rien coûtent moins qu'une branche par usage.
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(nom),
-                contents: if octets.is_empty() {
-                    &[0u8; 16]
-                } else {
-                    octets
-                },
-                usage: wgpu::BufferUsages::STORAGE,
-            })
-        };
-        let faces = tampon("faces de modèle", bytemuck::cast_slice(&a.faces));
-        let poses = tampon_pages(device, "poses", wgpu::BufferUsages::STORAGE, &a.poses);
-        let lecture = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
+        let faces = Tampon::vide(device, "faces de modèle", wgpu::BufferUsages::STORAGE);
+        let poses = Tampon::vide(device, "poses", wgpu::BufferUsages::STORAGE);
         let disposition = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("modèles"),
-            entries: &[lecture(0), lecture(1)],
+            entries: &[lecture_seule(0), lecture_seule(1)],
         });
-        let liaison = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("modèles"),
-            layout: &disposition,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: faces.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: poses.as_entire_binding(),
-                },
-            ],
-        });
+        let liaison = liaison_modeles(device, &disposition, &faces, &poses, 0);
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("modèles"),
@@ -475,7 +804,7 @@ impl PasseModeles {
         });
         let agencement = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("modèles"),
-            bind_group_layouts: &[commun, &disposition],
+            bind_group_layouts: &[commune, origines, &disposition],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -520,46 +849,15 @@ impl PasseModeles {
         });
         PasseModeles {
             pipeline,
+            disposition,
             liaison,
-            faces: a.faces_a_dessiner,
+            faces,
+            nb_faces: 0,
+            poses,
+            nb_poses: 0,
+            a_dessiner: 0,
         }
     }
-}
-
-/// **Un tampon GPU rempli page par page** depuis un tableau par pages.
-///
-/// Sans copie intermédiaire : recoller les pages dans un `Vec` contigu pour
-/// le seul plaisir de `create_buffer_init` referait exactement la recopie de
-/// toute la scène que les pages existent pour éviter. Le tampon est projeté
-/// en mémoire à la création, chaque page y est écrite à son décalage.
-///
-/// Seize octets au moins : wgpu refuse un tampon de taille nulle, et une
-/// scène vide est un cas de test légitime.
-fn tampon_pages<T: bytemuck::Pod>(
-    device: &wgpu::Device,
-    nom: &str,
-    usage: wgpu::BufferUsages,
-    p: &crate::pages::Pages<T>,
-) -> wgpu::Buffer {
-    let octets = p.len() * std::mem::size_of::<T>();
-    let taille = (octets.max(16) as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
-    let tampon = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(nom),
-        size: taille,
-        usage,
-        mapped_at_creation: true,
-    });
-    {
-        let mut vue = tampon.slice(..).get_mapped_range_mut();
-        let mut o = 0;
-        for page in p.pages() {
-            let b: &[u8] = bytemuck::cast_slice(page);
-            vue[o..o + b.len()].copy_from_slice(b);
-            o += b.len();
-        }
-    }
-    tampon.unmap();
-    tampon
 }
 
 /// L'atlas, monté au GPU en texture-TABLEAU.

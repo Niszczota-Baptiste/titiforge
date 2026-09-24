@@ -552,16 +552,30 @@ par image en médiane**, 68 images sur 400 au-delà de 8 ms — puis **5,9 ms et
 croix est celui du mailleur d'aujourd'hui : l'occlusion ambiante le cassera,
 et un test croisé avec le maillage complet le dira.
 
+✅ **Le GPU ne reçoit plus que ce qui a changé** (`Scene::synchroniser`). La
+scène garde ses tampons, qui grandissent au GPU par moitiés ; les pipelines
+se construisent une fois ; l'atlas ne remonte que s'il a changé. `regarnir`
+refaisait tout cela à chaque arrivée — invisible sur un rastériseur logiciel,
+donc jamais mesuré. `--example vol -- --gpu …` le chiffre sur du bâti :
+**18 ms → 0,4 ms** par image pour l'étape GPU en médiane, **15 Go → 196 Mo**
+envoyés sur le vol, et l'image entière **25,7 → 6,3 ms** — celle qu'on aurait
+eue dans la fenêtre, et que l'arène seule ne montrait pas.
+
+✅ **Une arrivée ne recharge plus JAMAIS la zone.** Trouvé en ouvrant la
+fenêtre sur le vrai codex : une texture plus grande que l'atlas (les crânes
+d'oiseau, en 32 × 32) faisait recharger la zone, qui ne contenait plus la
+cellule, que la caméra redemandait — **53 rechargements en 30 s**, en boucle,
+le défaut même que les deux applications précédentes avaient payé. L'atlas
+grandit maintenant sur place, identique pixel pour pixel à un bâti direct ; un
+test vole jusqu'à la texture et compte zéro rechargement.
+
 **Ce qui reste, dans cet ordre** :
 
-1. **La queue** : une image sur dix au-delà de 8 ms, 25 ms au pire. Les pics
-   des arènes étaient des doublements de `Vec` — réglés par un tableau par
-   PAGES, qui grandit sans recopier ; ce qui reste vient du MAILLAGE, et se
-   découpe avant de s'attaquer.
-2. **L'envoi GPU partiel** : les arènes disent ce qui a changé
-   (`prendre_sales`), mais `regarnir` rebâtit encore tampons, pipelines et
-   atlas à chaque changement.
-3. Remesurer, et seulement alors décider si les deux cellules par image
+1. **La queue** : une image sur dix environ au-delà de 8 ms, 20 ms au pire.
+   Les pics des arènes étaient des doublements de `Vec` — réglés par un
+   tableau par PAGES ; ceux du GPU, la reconstruction de la scène — réglés ;
+   ce qui reste vient du MAILLAGE, et se découpe avant de s'attaquer.
+2. Remesurer, et seulement alors décider si les deux cellules par image
    peuvent monter.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,

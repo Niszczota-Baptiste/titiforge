@@ -45,9 +45,12 @@ struct Origine {
 @group(0) @binding(2) var echantillonneur: sampler;
 // La table des origines est PARTAGÉE avec la passe gloutonne : deux tables se
 // décaleraient le jour où l'une saute une section vide.
-@group(0) @binding(3) var<storage, read> origines: array<Origine>;
-@group(1) @binding(0) var<storage, read> faces: array<FaceModele>;
-@group(1) @binding(1) var<storage, read> poses: array<Pose>;
+@group(1) @binding(0) var<storage, read> origines: array<Origine>;
+@group(2) @binding(0) var<storage, read> faces: array<FaceModele>;
+// Liée à sa taille EXACTE, pas à celle du tampon : `pose_de` dichotomise
+// jusqu'à `arrayLength(&poses)`, et un tampon qui a grandi d'avance porterait
+// au-delà des poses périmées que la recherche prendrait pour des vraies.
+@group(2) @binding(1) var<storage, read> poses: array<Pose>;
 
 struct Sortie {
     @builtin(position) clip: vec4<f32>,

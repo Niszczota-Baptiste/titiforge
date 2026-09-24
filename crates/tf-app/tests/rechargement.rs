@@ -358,18 +358,19 @@ fn les_couches_de_l_atlas_etendu_sont_celles_de_l_atlas_rebati() {
     moteur.arreter();
 }
 
-/// **Une texture plus grande que l'atlas se REPLIE sur un rechargement.**
+/// **Une texture plus grande que l'atlas le fait GRANDIR — sans recharger.**
 ///
-/// Un tableau n'a qu'une taille de couche. Accueillir une tuile plus grande
-/// demanderait de réécrire tous les pixels déjà montés ; la réduire perdrait
-/// la moitié des siens, ce que le dépôt s'interdit (« on agrandit les petites
-/// plutôt que de réduire les grandes »). Le repli est donc la bonne réponse —
-/// mais il doit être EXPLICITE, pas un silence.
+/// Un tableau n'a qu'une taille de couche. Ce cas RECHARGEAIT la zone : on
+/// refusait de réécrire les pixels déjà montés, et on payait la zone entière
+/// pour ne pas le faire — puis, sous le streaming, on la payait en boucle
+/// (`une_texture_plus_grande_qui_arrive_en_volant_ne_recharge_pas`).
 ///
-/// Mesuré par mutation : accepter la tuile trop grande passait tous les
-/// autres tests, parce qu'ils n'emploient que du 16 × 16.
+/// L'atlas agrandi doit être CELUI qu'un bâti direct aurait donné : mêmes
+/// pixels, couche par couche, que le rechargement complet qui le rebâtit.
+/// C'est ce qui prouve qu'agrandir sur place ne perd rien — ni la tuile neuve
+/// (rien n'est réduit), ni les anciennes (agrandies au plus proche voisin).
 #[test]
-fn une_texture_trop_grande_recharge_au_lieu_de_reduire() {
+fn une_texture_plus_grande_agrandit_l_atlas_sans_recharger() {
     let j = Jetable::neuf("codex");
     let pack = codex(j.chemin(), &["emerald_block"]);
     // Le pack du serveur mélange du 16 et du 32 : c'est un cas réel.
@@ -385,26 +386,153 @@ fn une_texture_trop_grande_recharge_au_lieu_de_reduire() {
         Some(m.chemin().to_path_buf()),
     );
     let cote_avant = o.monde.atlas.cote;
+    let noms_avant: Vec<String> = o
+        .monde
+        .atlas
+        .couches
+        .iter()
+        .map(|c| c.nom.clone())
+        .collect();
 
     let sel = BBox::new(BlockPos::new(4, -40, 4), BlockPos::new(6, -40, 6));
     let bornes = poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
     o.remailler(Some(bornes)).expect("remaillage");
+    moteur.arreter();
 
     assert_eq!(
-        o.rechargements, 1,
-        "une tuile plus grande que l'atlas doit forcer un rechargement"
+        o.rechargements, 0,
+        "une tuile plus grande que l'atlas l'agrandit ; elle ne recharge pas la zone"
     );
-    assert!(
-        o.monde.atlas.cote > cote_avant,
-        "et l'atlas rebâti doit prendre le côté de la PLUS GRANDE : {} après {cote_avant}",
-        o.monde.atlas.cote
+    assert_eq!(
+        o.monde.atlas.cote, 32,
+        "l'atlas a pris le côté de la PLUS GRANDE ({cote_avant} avant)"
     );
-    println!(
-        "tuile 32 dans un atlas 16 : rechargement, côté {cote_avant} → {}",
-        o.monde.atlas.cote
+    assert!(cote_avant < 32, "la prémisse : l'atlas partait plus petit");
+    let noms: Vec<String> = o
+        .monde
+        .atlas
+        .couches
+        .iter()
+        .map(|c| c.nom.clone())
+        .collect();
+    assert_eq!(
+        &noms[..noms_avant.len()],
+        &noms_avant[..],
+        "agrandir ne déplace AUCUNE couche : le maillage déjà produit porte ces indices"
     );
 
+    let par_nom = |o: &Ouvert| -> std::collections::BTreeMap<String, Vec<u8>> {
+        let a = &o.monde.atlas;
+        let n = (a.cote * a.cote * 4) as usize;
+        a.couches
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.nom.clone(), a.pixels[i * n..(i + 1) * n].to_vec()))
+            .collect()
+    };
+    let agrandi = par_nom(&o);
+    o.remailler(None).expect("rechargement complet");
+    let rebati = par_nom(&o);
+    assert_eq!(o.monde.atlas.cote, 32);
+    assert_eq!(
+        agrandi.keys().collect::<Vec<_>>(),
+        rebati.keys().collect::<Vec<_>>(),
+        "les mêmes textures"
+    );
+    for (nom, px) in &agrandi {
+        assert!(
+            px == &rebati[nom],
+            "la couche « {nom} » agrandie sur place diffère de celle d'un bâti direct"
+        );
+    }
+    println!(
+        "tuile 32 dans un atlas {cote_avant} : agrandi sur place, {} couches, aucun rechargement",
+        agrandi.len()
+    );
+}
+
+/// **Une texture plus grande qui arrive EN VOLANT ne recharge pas la zone.**
+///
+/// Trouvé en ouvrant la fenêtre sur le vrai codex : les crânes d'oiseau du
+/// serveur sont en 32 × 32, la zone d'ouverture n'en contenait pas, et chaque
+/// cellule qui en amenait un faisait RECHARGER la zone. Le rechargement
+/// rebâtit l'atlas depuis la zone seule — sans le crâne, donc au même côté —
+/// la caméra redemande la cellule, et tout recommence : cinquante-trois
+/// rechargements en trente secondes, chacun en O(zone). C'est le défaut que
+/// les deux applications précédentes avaient déjà payé.
+#[test]
+fn une_texture_plus_grande_qui_arrive_en_volant_ne_recharge_pas() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &["emerald_block"]);
+    commun::texture_hd(j.chemin(), "emerald_block", 32);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 8);
+
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
+    // Le bloc en haute définition est posé LOIN de la zone d'ouverture, dans
+    // la copie de travail — c'est elle que le fil lit.
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(m.chemin().to_path_buf()),
+    );
+    let sel = BBox::new(BlockPos::new(84, -40, 4), BlockPos::new(86, -40, 6));
+    poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
     moteur.arreter();
+    let cote_avant = o.monde.atlas.cote;
+    assert!(
+        o.monde
+            .atlas
+            .couches
+            .iter()
+            .all(|c| !c.nom.contains("emerald")),
+        "la prémisse : la zone d'ouverture ne contient pas le bloc"
+    );
+
+    let mut p = tf_app::pilote::Pilote::pour(
+        &o,
+        tf_world::Dimension::Overworld,
+        tf_world::Niveau::Chunk,
+        6,
+        (-64, 319),
+    );
+    let debut = Instant::now();
+    let mut vu = None;
+    for i in 0..4000 {
+        p.image(&mut o, BlockPos::new(8, 64, 8), [1.0, 0.0, 0.0], 2)
+            .expect("une image");
+        let arrive = o
+            .monde
+            .atlas
+            .couches
+            .iter()
+            .any(|c| c.nom.contains("emerald"));
+        if arrive && vu.is_none() {
+            vu = Some(i);
+        }
+        // Deux cents images APRÈS l'arrivée : une boucle de rechargements a
+        // le temps de se montrer.
+        if vu.is_some_and(|v| i > v + 200) || o.rechargements > 3 {
+            break;
+        }
+        assert!(
+            debut.elapsed() < Duration::from_secs(120),
+            "le vol n'avance plus"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    p.arreter();
+
+    assert_eq!(
+        o.rechargements, 0,
+        "une texture plus grande que l'atlas l'AGRANDIT ; elle ne recharge pas la zone"
+    );
+    assert!(vu.is_some(), "la prémisse : le bloc est arrivé par le vol");
+    assert_eq!(
+        o.monde.atlas.cote, 32,
+        "l'atlas a pris le côté de la plus grande ({cote_avant} avant)"
+    );
 }
 
 /// **Ce qu'une édition doit encore à la taille de la zone**, sur du BÂTI.
@@ -563,21 +691,23 @@ fn l_arene_remplacee_dit_la_meme_chose_qu_un_rebati() {
 
 /// **Un rechargement pendant le streaming ne laisse pas de cellule fantôme.**
 ///
-/// Le repli du cas « texture trop grande » remplace le monde par la seule
-/// ZONE : les cellules qu'on venait de poser n'y sont plus. Les inscrire
-/// quand même à la fenêtre de résidence les ferait compter pour zéro octet —
-/// donc invisibles à la comptabilité — tout en les déclarant résidentes. Une
-/// cellule déclarée résidente et jamais chargée est un trou dans le monde que
-/// rien ne vient combler : la demande la croit là et ne la redemande plus.
+/// Un rechargement remplace le monde par la seule ZONE : les cellules
+/// streamées n'y sont plus. Les garder inscrites à la fenêtre de résidence
+/// les ferait compter pour zéro octet — donc invisibles à la comptabilité —
+/// tout en les déclarant résidentes. Une cellule déclarée résidente et jamais
+/// chargée est un trou dans le monde que rien ne vient combler : la demande
+/// la croit là et ne la redemande plus.
 ///
 /// Rien d'autre ne le voit. Le contenu affiché est juste (c'est celui de la
 /// zone rechargée), la mémoire est bornée, la comptabilité reste exacte —
 /// seule la LISTE des résidentes ment.
+///
+/// Le rechargement est ici DEMANDÉ (`remailler(None)`) : une arrivée n'en
+/// déclenche plus aucun — l'atlas grandit sur place.
 #[test]
 fn un_rechargement_pendant_le_streaming_ne_laisse_pas_de_cellule_fantome() {
     let j = Jetable::neuf("codex");
-    let pack = codex(j.chemin(), &["emerald_block"]);
-    commun::texture_hd(j.chemin(), "emerald_block", 32);
+    let pack = codex(j.chemin(), &[]);
     let m = Jetable::neuf("monde");
     semer(m.chemin(), 1, 4);
 
@@ -585,23 +715,7 @@ fn un_rechargement_pendant_le_streaming_ne_laisse_pas_de_cellule_fantome() {
     let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
     assert_eq!(o.residentes(), 1, "la zone, et elle seule");
 
-    // L'émeraude va dans le chunk (2, 2), HORS de la zone : la scène ne la
-    // connaîtra qu'en streamant cette cellule.
-    let mut moteur = Moteur::lancer(
-        o.staging.clone().unwrap(),
-        tf_world::Dimension::Overworld,
-        Journal::new(),
-        Some(m.chemin().to_path_buf()),
-    );
-    let sel = BBox::new(BlockPos::new(36, -40, 36), BlockPos::new(38, -40, 38));
-    poser(&mut moteur, "minecraft:emerald_block", sel).expect("écrit");
-    moteur.arreter();
-
     let mut c = Chargeur::lancer(o.staging.clone().unwrap(), tf_world::Dimension::Overworld);
-    // **Une cellule ORDINAIRE d'abord.** C'est elle qui rend le test
-    // porteur : au rechargement elle disparaît de la grille comme le reste,
-    // et si la fenêtre garde son inscription, elle déclare résidente une
-    // cellule qui n'existe plus — tout en comptant ses octets.
     let cellule = |bx: i32, bz: i32| {
         tf_world::demande::par_region(&tf_world::demande::voulues(
             BlockPos::new(bx, 64, bz),
@@ -611,38 +725,39 @@ fn un_rechargement_pendant_le_streaming_ne_laisse_pas_de_cellule_fantome() {
             (-64, 319),
         ))
     };
-    let lots = cellule(24, 24);
-    assert_eq!(lots.iter().map(|l| l.cellules.len()).sum::<usize>(), 1);
-    c.demander(lots);
-    assert_eq!(streamer(&mut o, &mut c, 1), 1);
-    assert_eq!(o.rechargements, 0, "celle-là n'apporte rien d'inconnu");
-    assert_eq!(o.residentes(), 2, "la zone, plus la cellule streamée");
-
-    // Puis celle qui porte l'émeraude, et qui force le repli.
-    let lots = cellule(40, 40);
-    let n: usize = lots.iter().map(|l| l.cellules.len()).sum();
-    assert_eq!(n, 1, "un rayon de zéro demande la cellule où l'on est");
-    c.demander(lots);
-    assert_eq!(streamer(&mut o, &mut c, n), n);
+    for (bx, bz) in [(24, 24), (40, 40)] {
+        let lots = cellule(bx, bz);
+        assert_eq!(
+            lots.iter().map(|l| l.cellules.len()).sum::<usize>(),
+            1,
+            "un rayon de zéro demande la cellule où l'on est"
+        );
+        c.demander(lots);
+        assert_eq!(streamer(&mut o, &mut c, 1), 1);
+    }
     c.arreter();
-
+    assert_eq!(o.rechargements, 0, "streamer ne recharge jamais");
     assert_eq!(
-        o.rechargements, 1,
-        "une tuile plus grande que l'atlas doit forcer le repli"
+        o.residentes(),
+        3,
+        "la zone, plus les deux cellules streamées"
     );
+
+    o.remailler(None).expect("rechargement complet");
+    assert_eq!(o.rechargements, 1);
     assert_eq!(
         o.residentes(),
         1,
-        "le rechargement remet la scène à la ZONE : la cellule streamée n'en \
-         fait plus partie et ne doit pas rester inscrite"
+        "le rechargement remet la scène à la ZONE : les cellules streamées n'en \
+         font plus partie et ne doivent pas rester inscrites"
     );
     assert!(
         (-4..20).all(|sy| o.monde.grille.section((2, 2, sy)).is_none()),
-        "et elle n'est effectivement plus dans la grille"
+        "et elles ne sont effectivement plus dans la grille"
     );
     assert_eq!(
         o.octets_comptes(),
         o.octets_residents(),
-        "la comptabilité reste exacte après le repli"
+        "la comptabilité reste exacte après le rechargement"
     );
 }

@@ -21,7 +21,16 @@
 //! cargo run --release -p tf-app --example vol
 //! cargo run --release -p tf-app --example vol -- --rayon 8
 //! cargo run --release -p tf-app --example vol -- --pack <assets>
+//! cargo run --release -p tf-app --example vol -- --gpu synchro
 //! ```
+//!
+//! **`--gpu`** ajoute à chaque image ce que la coque fait après une arrivée :
+//! `refaire` reconstruit la scène GPU entière (l'ancienne `regarnir`),
+//! `synchro` n'envoie que ce que les arènes ont réécrit, `aucun` s'arrête aux
+//! arènes. Sans l'option, les trois passent, si un adaptateur est là. Le
+//! temps mesuré est celui du fil principal — copies vers les tampons de
+//! transfert, créations, compilations — pas celui du GPU, qui travaille à
+//! côté ; sous un pilote logiciel, ce dernier ne vaudrait de toute façon rien.
 //!
 //! Sans `--pack`, le codex MINIMAL des tests est écrit à la volée
 //! (`tests/commun`) : il couvre les 221 blocs `minefield:*` du catalogue avec
@@ -36,6 +45,7 @@ mod commun;
 
 use tf_app::pilote::{Pilote, CELLULES_PAR_IMAGE};
 use tf_app::scene::Ouvert;
+use tf_render::{Appareil, AtlasGpu, Scene};
 use tf_world::coords::BlockPos;
 use tf_world::{Dimension, Niveau};
 
@@ -117,17 +127,115 @@ fn semer(dir: &std::path::Path, bati: bool) -> usize {
     octets
 }
 
-fn voler(pack: &str, monde: &str, rayon: u32, pas: i32, images: usize) -> (Profil, usize, usize) {
+/// Ce que la fenêtre fait au GPU après une arrivée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gpu {
+    /// Rien : la mesure s'arrête aux arènes.
+    Aucun,
+    /// L'ancienne `regarnir` : atlas remonté, scène refaite, tout renvoyé.
+    Refaire,
+    /// `Scene::synchroniser` : seulement ce que les arènes ont réécrit.
+    Synchro,
+}
+
+fn monter_atlas(app: &Appareil, a: &tf_assets::Atlas) -> AtlasGpu {
+    AtlasGpu::avec_mips(app, a.cote, a.len() as u32, &a.pyramide())
+}
+
+/// La scène GPU d'un vol, et la clé de l'atlas qu'elle a monté.
+struct CoteGpu<'a> {
+    app: &'a Appareil,
+    scene: Scene,
+    atlas: (u32, usize, u32),
+}
+
+impl CoteGpu<'_> {
+    /// Ce que fait la coque après une arrivée. Rend les octets envoyés.
+    fn regarnir(&mut self, mode: Gpu, o: &mut Ouvert) -> u64 {
+        match mode {
+            Gpu::Aucun => 0,
+            Gpu::Refaire => {
+                let atlas = monter_atlas(self.app, &o.monde.atlas);
+                self.scene = Scene::pour(
+                    self.app,
+                    &o.monde.arene,
+                    &o.monde.modeles,
+                    &atlas,
+                    tf_render::scene::FORMAT,
+                );
+                // Une scène neuve : son compteur est TOUT ce qu'elle a reçu.
+                self.scene.octets_envoyes()
+            }
+            Gpu::Synchro => {
+                let cle = (o.rechargements, o.monde.atlas.len(), o.monde.atlas.cote);
+                if cle != self.atlas {
+                    self.scene
+                        .changer_atlas(&monter_atlas(self.app, &o.monde.atlas));
+                    self.atlas = cle;
+                }
+                self.scene
+                    .synchroniser(&mut o.monde.arene, &mut o.monde.modeles)
+            }
+        }
+    }
+}
+
+/// Ce qu'un vol a coûté.
+struct Vol {
+    images: Profil,
+    /// Le temps de la seule étape GPU, sur les images où elle a eu lieu.
+    gpu: Option<Profil>,
+    cellules: usize,
+    resident: usize,
+    envoyes: u64,
+}
+
+fn voler(
+    pack: &str,
+    monde: &str,
+    rayon: u32,
+    pas: i32,
+    images: usize,
+    gpu: Option<(&Appareil, Gpu)>,
+) -> Vol {
     let mut o = Ouvert::ouvrir(pack, Some(monde), [0, 0, 0, 0]).expect("monde ouvert");
     let mut p = Pilote::pour(&o, Dimension::Overworld, Niveau::Chunk, rayon, HAUTEUR);
+    let mode = gpu.map_or(Gpu::Aucun, |(_, m)| m);
+    let mut cote = gpu.map(|(app, _)| {
+        let mut scene = Scene::vide(
+            app,
+            &monter_atlas(app, &o.monde.atlas),
+            tf_render::scene::FORMAT,
+        );
+        scene.synchroniser(&mut o.monde.arene, &mut o.monde.modeles);
+        CoteGpu {
+            app,
+            scene,
+            atlas: (o.rechargements, o.monde.atlas.len(), o.monde.atlas.cote),
+        }
+    });
     let mut temps = Vec::with_capacity(images);
     let mut arrivees = 0;
+    let mut envoyes = 0u64;
+    let mut temps_gpu = Vec::new();
     for i in 0..images {
         let oeil = BlockPos::new(8 + i as i32 * pas, 64, 8 + COTE as i32 * 8);
         let t = Instant::now();
         let f = p
             .image(&mut o, oeil, EST, CELLULES_PAR_IMAGE)
             .expect("une image");
+        if let Some(c) = &mut cote {
+            if f.a_change() {
+                let g = Instant::now();
+                envoyes += c.regarnir(mode, &mut o);
+                temps_gpu.push(ms(g.elapsed()));
+            }
+            // Une soumission par image, comme la fenêtre : c'est elle qui
+            // vide les écritures en attente. Sans elle, elles
+            // s'accumuleraient et la mesure les paierait toutes à la fin.
+            c.app.queue.submit([]);
+            c.app.device.poll(wgpu::Maintain::Poll);
+        }
         let d = t.elapsed();
         temps.push(ms(d));
         arrivees += f.arrivees;
@@ -139,15 +247,33 @@ fn voler(pack: &str, monde: &str, rayon: u32, pas: i32, images: usize) -> (Profi
     }
     p.arreter();
     let resident = o.octets_residents();
-    (profil(temps, 8.0), arrivees, resident)
+    Vol {
+        images: profil(temps, 8.0),
+        gpu: (!temps_gpu.is_empty()).then(|| profil(temps_gpu, 8.0)),
+        cellules: arrivees,
+        resident,
+        envoyes,
+    }
 }
 
 fn main() {
     let mut a = std::env::args().skip(1);
     let mut rayon = 6u32;
     let mut pack: Option<String> = None;
+    let mut modes = vec![Gpu::Aucun, Gpu::Refaire, Gpu::Synchro];
     while let Some(o) = a.next() {
         match o.as_str() {
+            "--gpu" => {
+                modes = match a.next().as_deref() {
+                    Some("aucun") => vec![Gpu::Aucun],
+                    Some("refaire") => vec![Gpu::Refaire],
+                    Some("synchro") => vec![Gpu::Synchro],
+                    autre => {
+                        eprintln!("--gpu {autre:?} : aucun, refaire ou synchro");
+                        return;
+                    }
+                }
+            }
             "--rayon" => {
                 if let Some(r) = a.next().and_then(|r| r.parse().ok()) {
                     rayon = r;
@@ -167,43 +293,78 @@ fn main() {
          intégrées par image.\n\
          Deux régions en x : le vol franchit une frontière de `.mca`.\n"
     );
+    let app = if modes.iter().any(|m| *m != Gpu::Aucun) {
+        match Appareil::ouvrir() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("pas d'adaptateur ({e}) : la mesure s'arrête aux arènes");
+                modes = vec![Gpu::Aucun];
+                None
+            }
+        }
+    } else {
+        None
+    };
     println!(
-        "  {:<9} {:>8} {:>9} {:>9} {:>9} {:>8} {:>10} {:>9}",
-        "fixture", "disque", "médiane", "p95", "pire", "> 8 ms", "cellules", "résident"
+        "  {:<9} {:<8} {:>8} {:>9} {:>9} {:>9} {:>8} {:>6} {:>9} {:>9}  {:>16}",
+        "fixture",
+        "gpu",
+        "disque",
+        "médiane",
+        "p95",
+        "pire",
+        "> 8 ms",
+        "cell.",
+        "résident",
+        "envoyé",
+        "étape GPU méd/pire"
     );
 
     for (nom, bati) in [("Terrain", false), ("Build", true)] {
         let dir = racine.join(nom);
         let _ = std::fs::remove_dir_all(&dir);
         let disque = semer(&dir, bati);
-        let (p, cellules, resident) = voler(
-            &pack,
-            dir.to_str().expect("chemin lisible"),
-            rayon,
-            // Quatre blocs par image : 1 600 blocs, soit cent chunks, ce qui
-            // traverse les deux régions.
-            4,
-            400,
-        );
-        // **La prémisse, vérifiée.** Une mesure sans cellule posée ne dit
-        // rien du coût d'une image de vol — c'est ce qu'a rendu le premier
-        // essai, et il avait l'air excellent.
-        assert!(
-            cellules > 100,
-            "{nom} : seulement {cellules} cellules posées — la mesure ne mesure pas le vol"
-        );
-        println!(
-            "  {:<9} {:>5.1} Mo {:>6.2} ms {:>6.2} ms {:>6.1} ms {:>4}/{:<3} {:>10} {:>6.1} Mo",
-            nom,
-            disque as f64 / 1e6,
-            p.mediane,
-            p.p95,
-            p.pire,
-            p.au_dela,
-            p.n,
-            cellules,
-            resident as f64 / 1e6
-        );
+        for &mode in &modes {
+            let v = voler(
+                &pack,
+                dir.to_str().expect("chemin lisible"),
+                rayon,
+                // Quatre blocs par image : 1 600 blocs, soit cent chunks, ce
+                // qui traverse les deux régions.
+                4,
+                400,
+                app.as_ref()
+                    .filter(|_| mode != Gpu::Aucun)
+                    .map(|a| (a, mode)),
+            );
+            // **La prémisse, vérifiée.** Une mesure sans cellule posée ne dit
+            // rien du coût d'une image de vol — c'est ce qu'a rendu le premier
+            // essai, et il avait l'air excellent.
+            assert!(
+                v.cellules > 100,
+                "{nom} : seulement {} cellules posées — la mesure ne mesure pas le vol",
+                v.cellules
+            );
+            let p = &v.images;
+            let gpu = v.gpu.as_ref().map_or("—".to_string(), |g| {
+                format!("{:.2} / {:.1} ms", g.mediane, g.pire)
+            });
+            println!(
+                "  {:<9} {:<8} {:>5.1} Mo {:>6.2} ms {:>6.2} ms {:>6.1} ms {:>4}/{:<3} {:>6} {:>6.1} Mo {:>6.0} Mo  {:>16}",
+                nom,
+                format!("{mode:?}").to_lowercase(),
+                disque as f64 / 1e6,
+                p.mediane,
+                p.p95,
+                p.pire,
+                p.au_dela,
+                p.n,
+                v.cellules,
+                v.resident as f64 / 1e6,
+                v.envoyes as f64 / 1e6,
+                gpu
+            );
+        }
     }
     println!();
     println!(

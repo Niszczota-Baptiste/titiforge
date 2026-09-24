@@ -1098,20 +1098,20 @@ impl Ouvert {
         visees.dedup();
         let avant = self.rechargements;
         self.refaire(&visees, connus)?;
+        // **Une arrivée ne recharge JAMAIS la zone.** Elle le faisait quand
+        // une texture neuve dépassait le côté de l'atlas, et sous le streaming
+        // ça bouclait : la zone rechargée ne contenait plus la cellule, la
+        // caméra la redemandait, et tout recommençait. L'atlas grandit
+        // maintenant sur place ; ce qui reste ici garde la porte fermée.
+        debug_assert_eq!(
+            self.rechargements, avant,
+            "une intégration ne recharge jamais la zone"
+        );
         // **La pesée vient APRÈS le maillage**, et l'éviction qu'elle
         // déclenche part au prochain appel : voir `a_degager`.
-        //
-        // Sauf si le remaillage a fini par RECHARGER — le repli du cas où
-        // l'atlas ne peut pas s'étendre. Le rechargement remplace le monde
-        // par la seule zone, donc les cellules qu'on vient de poser n'y sont
-        // plus : les inscrire les ferait compter pour zéro octet, et la
-        // fenêtre croirait tenir des cellules absentes. `recharger` a déjà
-        // réinscrit ce qui reste.
-        if self.rechargements == avant {
-            let t = std::time::Instant::now();
-            self.peser(arrivees, &visees);
-            phase("peser    ", t);
-        }
+        let t = std::time::Instant::now();
+        self.peser(arrivees, &visees);
+        phase("peser    ", t);
         self.monde.quads = self.monde.chantier.quads();
         self.monde.poses = self.monde.chantier.poses();
         Ok(posees)
@@ -1146,8 +1146,8 @@ impl Ouvert {
         // par `StateId` dans l'ORDRE d'internement : les états neufs portent
         // les identifiants suivants, donc s'ajoutent à la fin. Rien de ce qui
         // est déjà maillé ne change de sens.
-        if self.monde.interner.len() > connus && !self.etendre_atlas(connus) {
-            return self.recharger();
+        if self.monde.interner.len() > connus {
+            self.etendre_atlas(connus);
         }
         let t1 = std::time::Instant::now();
         // Sur tous les cœurs : le chargement complet le faisait déjà, et le
@@ -1201,12 +1201,11 @@ impl Ouvert {
 
     /// **Accueille les états découverts depuis `connus`**, sans rien rebâtir.
     ///
-    /// Rend `false` quand l'extension n'est pas possible — une texture neuve
-    /// plus grande que le côté du tableau, qu'on ne veut pas réduire — et
-    /// l'appelant recharge alors. Jamais silencieux : réduire une tuile
-    /// perdrait la moitié de ses pixels, et la règle du dépôt est d'agrandir
-    /// les petites.
-    fn etendre_atlas(&mut self, connus: usize) -> bool {
+    /// Toujours possible : une texture neuve plus grande que le côté du
+    /// tableau le fait grandir sur place (`Atlas::etendre`). Ce cas
+    /// RECHARGEAIT la zone, et sous le streaming il rechargeait en boucle —
+    /// voir `une_texture_plus_grande_qui_arrive_en_volant_ne_recharge_pas`.
+    fn etendre_atlas(&mut self, connus: usize) {
         let neuves: Vec<String> = (connus..self.monde.interner.len())
             .map(|i| {
                 self.monde
@@ -1220,9 +1219,8 @@ impl Ouvert {
         let ajout = self.monde.atlas.etendre(&self.assets.src, voulues, &|n| {
             self.assets.disposition.chemins_texture(n)
         });
-        if let Some(nom) = ajout.trop_grande {
-            eprintln!("texture « {nom} » plus grande que l'atlas : rechargement");
-            return false;
+        if let Some((avant, apres)) = ajout.agrandi {
+            phase_texte(&format!("atlas agrandi : {avant} → {apres} px"));
         }
         // La table et l'habillage se prolongent par les états neufs, DANS
         // l'ordre d'internement : c'est ce qui garde `StateId` valide comme
@@ -1241,7 +1239,6 @@ impl Ouvert {
             self.monde.interner.len(),
             "l'habillage est indexé par StateId : il doit couvrir tous les états"
         );
-        true
     }
 
     /// Tout relire et tout remailler — y compris l'atlas.
@@ -1405,12 +1402,17 @@ pub fn balayer_les_abandons() -> usize {
 /// je venais d'écrire passait 18 ms sur 18,3 à RELIRE — le maillage optimisé
 /// pesait 0,2. La ligne reste pour que la prochaine mesure soit une commande et
 /// pas une réécriture.
-pub(crate) fn phase(quoi: &str, depuis: std::time::Instant) {
+pub fn phase(quoi: &str, depuis: std::time::Instant) {
+    phase_texte(&format!(
+        "{quoi} : {:.1} ms",
+        depuis.elapsed().as_secs_f64() * 1000.0
+    ));
+}
+
+/// Une ligne de la même découpe, qui n'est pas un temps.
+pub fn phase_texte(quoi: &str) {
     if std::env::var_os("TF_PHASES").is_some() {
-        eprintln!(
-            "  {quoi} : {:.1} ms",
-            depuis.elapsed().as_secs_f64() * 1000.0
-        );
+        eprintln!("  {quoi}");
     }
 }
 

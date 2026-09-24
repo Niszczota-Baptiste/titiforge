@@ -15,7 +15,9 @@ struct Origine {
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var atlas: texture_2d_array<f32>;
 @group(0) @binding(2) var echantillonneur: sampler;
-@group(0) @binding(3) var<storage, read> origines: array<Origine>;
+// Les origines ont leur PROPRE groupe : la table grandit quand des sections
+// arrivent, et la relier ne doit pas obliger à relier l'atlas avec elle.
+@group(1) @binding(0) var<storage, read> origines: array<Origine>;
 
 struct Instance {
     // `x | y<<5 | z<<10 | (l−1)<<15 | (h−1)<<19 | face<<23`, en BLOCS et

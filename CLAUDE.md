@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (850 tests aujourd’hui)
+cargo test            # tous les crates (856 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -228,8 +228,10 @@ cargo run --release -p tf-ops --example compression        # ce que coûte chaqu
 cargo run --release -p tf-ops --example empreinte
 cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
-# ce qu'une IMAGE DE VOL coûte, cadencée à 60 i/s, par le chemin de la coque
+# ce qu'une IMAGE DE VOL coûte, cadencée à 60 i/s, par le chemin de la coque —
+# arènes seules, puis avec la scène GPU refaite, puis synchronisée
 cargo run --release -p tf-app --example vol
+cargo run --release -p tf-app --example vol -- --gpu synchro
 # ce qu'une RÉGION coûte à rendre résidente — le budget de la phase 5
 cargo run --release -p tf-app --example residence
 # ce que DÉCIDER coûte : le croisement demande × résidence, à l'échelle
@@ -415,6 +417,7 @@ couvriront le même terrain.
 | Une capacité de la coque | `etat.rs` si ça DÉCIDE (pur, testable sans écran), `interface.rs` si ça dessine. L'interface ne décide rien |
 | Une FORME (sphère, cylindre…) | `Volume` (`tf-ops/src/forme.rs`) — sa variante, son rang dans `rang` (exhaustif), son entrée dans `TOUS`, son cas dans `forme()`, puis son bras dans `interface::volume`. Les deux hôtes la voient aussitôt |
 | Un OUTIL de Conception | `Outil` (`tf-app/src/etat.rs`) : sa variante, son `nom`, sa `legende`, et son cas dans le `match` du clic (`coque.rs`). Un test exige que chaque outil dise ce que font les DEUX boutons |
+| Un tampon que la scène GPU TIENT | un `Tampon` dans `Scene` (`tf-render/src/scene.rs`), rempli par `Scene::envoyer` depuis les plages sales de l'arène — jamais une reconstruction. Un tampon lu par `arrayLength` se lie à sa taille EXACTE, et sa liaison se refait quand son nombre change, pas seulement quand il grandit |
 | Une chose que la scène TIENT en mémoire | son terme dans `Ouvert::peser` (`tf-app/src/scene.rs`) ET dans `octets_residents`, jamais dans l'un seul : c'est leur ÉGALITÉ qu'un test vérifie à l'octet près, et une comptabilité qui ne se compare à rien est une comptabilité qu'on peut tenir en se trompant |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
@@ -1868,3 +1871,38 @@ propres à ce dépôt.
   et le premier qui finissait effaçait le pack de l'autre. Troisième fois du
   même piège — un nom unique à l'échelle du processus ne l'est pas. Il n'y a
   plus qu'un `Jetable`, celui de `commun`, et il porte un compteur.
+- **Refaire la scène GPU à chaque arrivée, c'est renvoyer le monde.**
+  `regarnir` reconstruisait tout — tampons remplis de la scène entière,
+  pipelines recompilés, atlas remonté avec ses mips — à chaque image où une
+  cellule arrivait. Invisible sur un rastériseur logiciel, et c'est pour ça
+  que personne ne l'avait mesuré : `--example vol -- --gpu refaire` l'a
+  chiffré à 18 ms par image en médiane sur du bâti, 56 au pire, et QUINZE
+  gigaoctets envoyés pour un vol de 400 images. Les arènes savaient déjà ce
+  qui avait changé ; `Scene::synchroniser` s'en sert : 0,4 ms, 196 Mo.
+- **`write_buffer` passe AVANT les commandes de sa soumission.** Un tampon
+  qui grandit recopie l'ancien dans le neuf par une copie GPU ; si cette
+  copie part avec le dessin, les écritures de l'image — exécutées au début
+  de la même soumission — sont écrasées par l'ancien contenu. La copie est
+  donc soumise SEULE, avant toute écriture. Un test fait grandir et réécrire
+  en place dans la même synchronisation, et c'est la mutation qu'il tue.
+- **Un tampon plus grand que son contenu ment à `arrayLength`.** La passe de
+  modèles dichotomise ses poses jusqu'à `arrayLength(&poses)` ; un tampon
+  qui a grandi d'avance porte au-delà des zéros, que la recherche prend pour
+  des poses. Liées à leur taille EXACTE, et reliées quand leur NOMBRE change
+  — pas seulement quand le tampon grandit. Les deux mutations passaient tous
+  les tests tant que les tampons grandissaient pile à la taille demandée :
+  il a fallu une petite croissance, qui laisse de la marge, puis des poses
+  DANS la marge. Et, encore, une case (0, 0, 0) vide : c'est là qu'une pose
+  de zéros dessine.
+- **Un repli qui recharge la zone boucle dès qu'on streame.** Une texture
+  plus grande que l'atlas le faisait « rebâtir » — c'est-à-dire recharger la
+  ZONE. Sous le streaming, la zone rechargée ne contient pas la cellule qui
+  avait amené la texture : l'atlas renaît au même côté, la caméra redemande
+  la cellule, et tout recommence. Cinquante-trois rechargements en trente
+  secondes sur le vrai codex, dont les crânes d'oiseau sont en 32 × 32 —
+  attrapé en ouvrant la FENÊTRE, aucun test ne volait avec une texture plus
+  grande. Le refus protégeait de « réécrire tous les pixels de l'atlas »,
+  soit quelques mégaoctets ; il coûtait la zone, 867 ms sur du bâti, en
+  boucle. L'atlas grandit maintenant sur place, et une arrivée ne peut plus
+  recharger (`debug_assert` dans `integrer`). Le prix d'un repli se chiffre
+  AVANT de le choisir.

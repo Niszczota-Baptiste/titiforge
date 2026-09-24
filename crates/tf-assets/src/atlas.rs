@@ -48,10 +48,10 @@ pub struct Atlas {
 pub struct Ajout {
     /// Couches réellement ajoutées.
     pub ajoutees: usize,
-    /// Une texture neuve dépasse le côté courant : rien n'a été ajouté, et
-    /// l'atlas doit être REBÂTI pour ne pas la réduire. Porte son nom, parce
-    /// qu'un refus qui ne dit pas de quoi il parle envoie chercher ailleurs.
-    pub trop_grande: Option<String>,
+    /// Une texture neuve dépassait le côté courant : le tableau a GRANDI,
+    /// `(avant, après)`. Toutes les couches ont été réécrites — au GPU, c'est
+    /// l'atlas entier qui remonte.
+    pub agrandi: Option<(u32, u32)>,
 }
 
 impl Atlas {
@@ -162,13 +162,21 @@ impl Atlas {
     /// propriété qui rend l'extension sûre, puisque le maillage déjà produit
     /// les porte. Un test l'exige.
     ///
-    /// **Rend `trop_grande` quand une texture neuve dépasse le côté courant.**
-    /// Un tableau n'a qu'une taille de couche, et la règle du dépôt est
-    /// d'agrandir les petites plutôt que de réduire les grandes — réduire
-    /// perdrait la moitié des pixels. Accueillir une tuile plus grande
-    /// demanderait donc de réécrire TOUS les pixels : on le dit, et
-    /// l'appelant rebâtit. Rare (92,7 % du pack du serveur est en 16 × 16) et
-    /// jamais silencieux.
+    /// **Une texture neuve plus grande que le côté courant fait GRANDIR le
+    /// tableau, sur place.** Un tableau n'a qu'une taille de couche, et la
+    /// règle du dépôt est d'agrandir les petites plutôt que de réduire les
+    /// grandes : les couches déjà montées sont agrandies au plus proche
+    /// voisin — sans perte, et sans changer d'indice — puis la neuve entre à
+    /// sa taille. Le résultat est celui qu'un bâti direct aurait donné.
+    ///
+    /// Cela réécrit tous les pixels, et c'est ce qui faisait refuser :
+    /// l'appelant REBÂTISSAIT alors en rechargeant la zone. Mais réécrire
+    /// l'atlas coûte quelques mégaoctets de recopie, et recharger la zone
+    /// coûte la zone — 867 ms sur une région bâtie. Pire : sous le streaming,
+    /// la zone rechargée ne contient pas la cellule qui avait amené la
+    /// texture, l'atlas renaît au même côté, la caméra redemande la cellule,
+    /// et tout recommence. Mesuré sur le vrai codex, dont les crânes d'oiseau
+    /// sont en 32 × 32 : cinquante-trois rechargements en trente secondes.
     pub fn etendre<S: Source + ?Sized>(
         &mut self,
         src: &S,
@@ -177,9 +185,16 @@ impl Atlas {
     ) -> Ajout {
         let (lues, manquantes) = Self::lire_tuiles(src, noms, chemin, &self.index);
         let mut ajout = Ajout::default();
-        if let Some((nom, _)) = lues.iter().find(|(_, t)| t.cote > self.cote) {
-            ajout.trop_grande = Some(nom.clone());
-            return ajout;
+        // Le côté qu'un bâti aurait pris : le plus grand, plafonné.
+        let voulu = lues
+            .iter()
+            .map(|(_, t)| t.cote)
+            .max()
+            .unwrap_or(0)
+            .min(COTE_MAX);
+        if voulu > self.cote {
+            ajout.agrandi = Some((self.cote, voulu));
+            self.agrandir(voulu);
         }
         let par_couche = (self.cote * self.cote * 4) as usize;
         self.pixels.reserve(par_couche * lues.len());
@@ -203,6 +218,21 @@ impl Atlas {
         // Un trou doit se VOIR, à l'extension comme au bâti.
         self.manquantes.extend(manquantes);
         ajout
+    }
+
+    /// Agrandit chaque couche au plus proche voisin. Les indices ne bougent
+    /// pas : le maillage déjà produit les porte.
+    fn agrandir(&mut self, vers: u32) {
+        let de = self.cote;
+        if de > 0 && !self.pixels.is_empty() {
+            let par_couche = (de * de * 4) as usize;
+            let mut pixels = Vec::with_capacity((vers * vers * 4) as usize * self.couches.len());
+            for c in self.pixels.chunks_exact(par_couche) {
+                pixels.extend_from_slice(&Tuile::agrandir(c, de, vers));
+            }
+            self.pixels = pixels;
+        }
+        self.cote = vers;
     }
 
     pub fn couche(&self, nom: &str) -> Option<u32> {

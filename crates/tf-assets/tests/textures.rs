@@ -230,6 +230,90 @@ fn le_tableau_prend_la_plus_grande_taille_et_agrandit_les_autres() {
     assert!(couche.chunks_exact(4).all(|p| p == [1, 2, 3, 255]));
 }
 
+/// Une tuile où chaque pixel est DIFFÉRENT : un agrandissement qui décale
+/// d'un pixel ou lisse se voit, là où une tuile unie ne montrerait rien.
+fn distincte(cote: u32, graine: u8) -> Vec<u8> {
+    let px: Vec<u8> = (0..cote * cote)
+        .flat_map(|i| {
+            let i = i as u8;
+            [i.wrapping_mul(7) ^ graine, i.wrapping_mul(13), graine, 255]
+        })
+        .collect();
+    png_rgba(cote, cote, &px)
+}
+
+/// Les pixels de chaque couche, par NOM : deux atlas se comparent ainsi, pas
+/// par indice — l'extension ajoute à la fin, le bâti range dans son ordre.
+fn par_nom(a: &Atlas) -> BTreeMap<String, Vec<u8>> {
+    let n = (a.cote * a.cote * 4) as usize;
+    a.couches
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.nom.clone(), a.pixels[i * n..(i + 1) * n].to_vec()))
+        .collect()
+}
+
+#[test]
+fn etendre_par_une_plus_grande_donne_l_atlas_d_un_bati_direct() {
+    // Ce cas RECHARGEAIT la zone de l'application, en boucle sous le
+    // streaming. L'atlas grandit maintenant sur place ; il doit alors être
+    // exactement celui qu'un bâti direct aurait donné — sinon agrandir sur
+    // place perdrait quelque chose que le rechargement gardait.
+    let d = TempDir::new("agrandir");
+    d.png("a", &distincte(4, 1));
+    d.png("b", &distincte(4, 2));
+    d.png("c", &distincte(8, 3));
+    d.png("d", &distincte(2, 4));
+    let src = Dossier::ouvrir(d.path()).unwrap();
+
+    let mut a = Atlas::batir(&src, ["a".to_string(), "b".to_string()], &chemins);
+    assert_eq!(a.cote, 4);
+    let ajout = a.etendre(&src, ["c".to_string(), "d".to_string()], &chemins);
+    assert_eq!(
+        ajout.agrandi,
+        Some((4, 8)),
+        "le tableau a grandi, et le dit"
+    );
+    assert_eq!(ajout.ajoutees, 2);
+    assert_eq!(
+        (a.couche("a"), a.couche("b")),
+        (Some(0), Some(1)),
+        "agrandir ne déplace aucune couche"
+    );
+
+    let direct = Atlas::batir(&src, ["a", "b", "c", "d"].map(String::from), &chemins);
+    assert_eq!(a.cote, direct.cote);
+    assert_eq!(
+        par_nom(&a),
+        par_nom(&direct),
+        "étendre par une plus grande doit donner, couche par couche, les pixels d'un bâti direct"
+    );
+
+    // Une plus PETITE ensuite : elle s'agrandit au côté courant, qui ne bouge
+    // plus.
+    d.png("e", &distincte(4, 5));
+    let ajout = a.etendre(&src, ["e".to_string()], &chemins);
+    assert_eq!(ajout.agrandi, None);
+    assert_eq!(a.cote, 8);
+}
+
+#[test]
+fn etendre_ne_depasse_pas_le_plafond() {
+    // Le même plafond que le bâti : une tuile au-delà est ramenée au côté
+    // maximal, comme `batir` le fait déjà. Un plafond que l'extension
+    // ignorerait ferait monter un tableau que le GPU refuse.
+    let d = TempDir::new("plafond");
+    d.png("a", &distincte(4, 1));
+    let geante = tf_assets::atlas::COTE_MAX * 2;
+    d.png("g", &distincte(geante, 2));
+    let src = Dossier::ouvrir(d.path()).unwrap();
+    let mut a = Atlas::batir(&src, ["a".to_string()], &chemins);
+    let ajout = a.etendre(&src, ["g".to_string()], &chemins);
+    assert_eq!(ajout.agrandi, Some((4, tf_assets::atlas::COTE_MAX)));
+    let direct = Atlas::batir(&src, ["a", "g"].map(String::from), &chemins);
+    assert_eq!(par_nom(&a), par_nom(&direct));
+}
+
 #[test]
 fn agrandir_au_plus_proche_voisin_ne_lisse_pas() {
     // Minecraft est en pixels NETS. Une interpolation ferait baver chaque bord
