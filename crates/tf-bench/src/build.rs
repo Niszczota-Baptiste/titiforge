@@ -307,13 +307,17 @@ fn section_payload(b: &Build, cx: i32, cz: i32, sy: i8) -> Vec<u8> {
     tf_nbt::block_states_payload(&entrees, &data)
 }
 
-fn chunk_nbt(b: &Build, cx: i32, cz: i32) -> Vec<u8> {
+/// `cx`/`cz` sont LOCAUX à la région — c'est eux qui décident du contenu —
+/// et `(mx, mz)` sont les coordonnées MONDE annoncées par le chunk. Les deux
+/// coïncident pour `r.0.0` et divergent partout ailleurs : le même bâtiment,
+/// posé à un autre endroit du monde.
+fn chunk_nbt(b: &Build, cx: i32, cz: i32, mx: i32, mz: i32) -> Vec<u8> {
     let mut w = Writer::with_capacity(96 * 1024);
     w.field(tag::COMPOUND, "");
     w.field(tag::INT, "DataVersion").i32_payload(2975); // 1.18.2 — la cible
-    w.field(tag::INT, "xPos").i32_payload(cx);
+    w.field(tag::INT, "xPos").i32_payload(mx);
     w.field(tag::INT, "yPos").i32_payload(-4);
-    w.field(tag::INT, "zPos").i32_payload(cz);
+    w.field(tag::INT, "zPos").i32_payload(mz);
     w.field(tag::STRING, "Status").raw_str("minecraft:full");
 
     w.field(tag::COMPOUND, "Heightmaps");
@@ -345,8 +349,24 @@ fn zlib(bytes: &[u8]) -> Vec<u8> {
     e.finish().unwrap()
 }
 
-/// Construit le `.mca` d'un build.
+/// Construit le `.mca` d'un build, comme s'il était `r.0.0`.
 pub fn region(b: &Build) -> Vec<u8> {
+    region_en(b, 0, 0)
+}
+
+/// **Le même build, mais POSÉ quelque part dans le monde.**
+///
+/// `region` écrit `xPos`/`zPos` comme si la région était `r.0.0` : ses chunks
+/// annoncent (0, 0), (1, 0)… quel que soit le fichier où on la range. C'est
+/// sans conséquence tant qu'on n'a qu'une région, et c'est un piège dès qu'on
+/// en a deux — le contenu d'un `.mca` porte ses propres coordonnées, et tout
+/// ce qui les lit trouverait quatre régions empilées au même endroit. Même
+/// histoire, même remède que `Terrain::region_en`.
+///
+/// Le CONTENU, lui, ne bouge pas : c'est le même bâtiment à chaque région, ce
+/// qui est exactement ce qu'on veut d'une fixture — deux mesures prises à
+/// deux endroits du monde doivent être comparables.
+pub fn region_en(b: &Build, rx: i32, rz: i32) -> Vec<u8> {
     let mut locations = vec![0u8; 4096];
     let mut timestamps = vec![0u8; 4096];
     let mut body: Vec<u8> = Vec::new();
@@ -354,7 +374,13 @@ pub fn region(b: &Build) -> Vec<u8> {
 
     for cz in 0..b.side {
         for cx in 0..b.side {
-            let payload = zlib(&chunk_nbt(b, cx as i32, cz as i32));
+            let payload = zlib(&chunk_nbt(
+                b,
+                cx as i32,
+                cz as i32,
+                rx * 32 + cx as i32,
+                rz * 32 + cz as i32,
+            ));
             let len = payload.len() + 1;
             let total = 4 + len;
             let sectors = total.div_ceil(SECTOR);

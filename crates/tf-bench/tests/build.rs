@@ -245,3 +245,50 @@ fn un_bloc_modele_n_est_jamais_opaque() {
         );
     }
 }
+
+/// **Un build posé ailleurs annonce où il est, et reste le MÊME bâtiment.**
+///
+/// Le contenu d'un `.mca` porte ses propres coordonnées. Écrire la même région
+/// dans `r.2.-1.mca` sans corriger `xPos`/`zPos` ferait trouver, à tout ce qui
+/// lit le contenu, plusieurs régions empilées au même endroit — le piège déjà
+/// fermé pour `Terrain::region_en`, et qu'un vol mesuré sur deux régions
+/// bâties aurait rouvert. Mais le bâtiment lui-même ne doit pas bouger : deux
+/// mesures prises à deux endroits du monde doivent rester comparables.
+#[test]
+fn un_build_pose_ailleurs_annonce_sa_place_et_garde_son_contenu() {
+    let b = Build::minuscule();
+    let (rx, rz) = (2, -1);
+    let (octets_ici, octets_la) = (build::region(&b), build::region_en(&b, rx, rz));
+    let ici = read(&octets_ici, 0, 0).unwrap();
+    let la = read(&octets_la, rx, rz).unwrap();
+
+    let mut vus = 0;
+    for cz in 0..b.side as i32 {
+        for cx in 0..b.side as i32 {
+            let (Some(a), Some(z)) = (ici.get(cx, cz), la.get(cx, cz)) else {
+                continue;
+            };
+            let a = inflate(&a.payload, a.compression).unwrap();
+            let z = inflate(&z.payload, z.compression).unwrap();
+            let (sa, sz) = (scan(&a).unwrap(), scan(&z).unwrap());
+            assert_eq!(
+                (sz.x_pos, sz.z_pos),
+                (Some(rx * 32 + cx), Some(rz * 32 + cz)),
+                "le chunk ({cx}, {cz}) de r.{rx}.{rz} doit annoncer sa place MONDE"
+            );
+            assert_eq!((sa.x_pos, sa.z_pos), (Some(cx), Some(cz)));
+            // Le même contenu, section par section, dans une même table d'états.
+            let mut i = Interner::new();
+            for (x, y) in sa.sections.iter().zip(sz.sections.iter()) {
+                let p = decode_section(&a, &sa, x, &mut i).unwrap();
+                let q = decode_section(&z, &sz, y, &mut i).unwrap();
+                assert_eq!(
+                    p, q,
+                    "le chunk ({cx}, {cz}) a changé de contenu en changeant de place"
+                );
+            }
+            vus += 1;
+        }
+    }
+    assert_eq!(vus, (b.side * b.side) as usize, "tous les chunks comparés");
+}

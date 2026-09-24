@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (839 tests aujourd’hui)
+cargo test            # tous les crates (840 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -228,6 +228,8 @@ cargo run --release -p tf-ops --example compression        # ce que coûte chaqu
 cargo run --release -p tf-ops --example empreinte
 cargo run --release -p tf-ops --example empreinte --no-default-features
 cargo run --release -p tf-mesh --example mailler_build     # la chaîne complète, quads contre instances
+# ce qu'une IMAGE DE VOL coûte, cadencée à 60 i/s, par le chemin de la coque
+cargo run --release -p tf-app --example vol
 # ce qu'une RÉGION coûte à rendre résidente — le budget de la phase 5
 cargo run --release -p tf-app --example residence
 # ce que DÉCIDER coûte : le croisement demande × résidence, à l'échelle
@@ -1788,3 +1790,13 @@ propres à ce dépôt.
   borné rend l'arrêt délicat, le fil pouvant être bloqué dans un `send`. On
   LÂCHE le récepteur avant de joindre, ce qui fait échouer son envoi ; sonder
   avec un délai aurait marché « presque toujours ».
+- **Une mesure qui ne mesure rien a l'air excellente.** Le premier essai de
+  `--example vol` rendait 0,01 ms par image : quatre cents images enchaînées
+  sans attendre durent 4 ms en tout, et le fil n'avait pas eu le temps de
+  lire une seule région. ZÉRO cellule posée, et le meilleur chiffre de tout le
+  dépôt. Une vraie fenêtre attend la synchronisation verticale entre deux
+  images — c'est pendant ce temps-là que le fil travaille. La mesure est
+  cadencée à 60 images par seconde, et elle REFUSE de rendre un chiffre si
+  moins de cent cellules sont arrivées : une prémisse se vérifie, elle ne
+  s'espère pas. Une fois juste, elle a dit ce que personne n'avait mesuré :
+  35 ms par image sur du bâti, 396 images sur 400 au-delà du budget.

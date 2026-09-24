@@ -525,10 +525,22 @@ pouvait voir seule, et qui étaient tous silencieux :
 
 Six tests de vol, six mutations, zéro survivant.
 
-**Ce qui reste** : l'arène GPU par SECTION, dernière dépense en O(scène) du
-chemin d'édition (27 ms pour recopier 276 k instances) — c'est elle qui fixe
-aujourd'hui les deux cellules par image, et la même pièce permettrait de
-lâcher un maillage sans recopier le reste.
+**Mesuré ensuite, et la sortie n'est PAS atteinte** (`--example vol`, cadencé
+à 60 images par seconde) : sur du terrain, 3,9 ms par image en médiane ; sur
+du BÂTI, **35 ms en médiane, 104 au pire, et 396 images sur 400 au-delà de
+8 ms**. 26 de ces 35 ms sont la recopie des deux arènes, qui est en O(scène)
+et GRANDIT à mesure que la scène se remplit.
+
+**Ce qui reste, donc, et dans cet ordre** :
+
+1. **L'arène par SECTION** — des emplacements stables par lot, un
+   remplacement qui n'écrit que ce qui change, un envoi GPU partiel. C'est ce
+   qui bloque la sortie, pas une finition.
+2. **Le maillage incrémental en parallèle** : 12 ms pour deux cellules et
+   leur marge, en séquence, là où le chargement complet maille déjà sur tous
+   les cœurs.
+3. Remesurer, et seulement alors décider si les deux cellules par image
+   peuvent monter.
 
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.

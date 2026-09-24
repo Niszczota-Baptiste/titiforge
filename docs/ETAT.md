@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **839**, zéro échec |
+| Tests | **840**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-839 tests, répartis par ce qu'ils PROUVENT :
+840 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -85,7 +85,7 @@ cargo test --workspace
 | `tf-app` pilote | 6 | la caméra qui PILOTE : que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
 | `tf-app` residence | 5 | que la MÉMOIRE est bornée : que ce que la fenêtre compte est ce que la scène porte À L'OCTET PRÈS, qu'un vol continu tient sous son budget sans jamais recharger la zone, que ce qui survit à l'éviction est quad pour quad ce qu'un chargement direct donnerait (la marge du dégagement, que rien d'autre ne voit), que corriger le poids d'une voisine n'en fait pas la plus récente, et qu'une cellule de RÉGION est pesée sur ses 32 × 32 colonnes |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
-| `tf-bench` fixture/build | 12 | l'échantillon reste représentatif du pack |
+| `tf-bench` fixture/build | 13 | l'échantillon reste représentatif du pack |
 
 Trois propriétés valent d'être nommées :
 
@@ -618,6 +618,48 @@ Le second chiffre est celui qui compte : borner la mémoire ne ressuscite PAS
 le rechargement de zone, qui est le défaut ayant coûté le plus cher aux deux
 applications précédentes.
 
+### Ce qu'une image de VOL coûte — et la promesse n'est pas tenue
+
+```bash
+cargo run --release -p tf-app --example vol                 # codex écrit à la volée
+cargo run --release -p tf-app --example vol -- --pack <assets>
+TF_PHASES=1 cargo run --release -p tf-app --example vol     # le détail par phase
+```
+
+Une caméra vole sur deux régions écrites sur disque, par le MÊME chemin que la
+coque (`tf_app::pilote`), cadencée à 60 images par seconde — rayon 6, deux
+cellules intégrées par image, 400 images :
+
+| | médiane | p95 | pire | images > 8 ms | cellules posées |
+|---|---:|---:|---:|---:|---:|
+| `Terrain` | 3,9 ms | 5,7 ms | 13,6 ms | 4 / 400 | 796 |
+| `Build` | **35,1 ms** | **76,6 ms** | **103,6 ms** | **396 / 400** | 794 |
+
+**Sur du bâti, la promesse « aucune pause > 8 ms » n'est pas tenue**, et de
+loin : quatre images sur quatre la ratent. Or Minefield est du bâti. Le détail
+par phase (`TF_PHASES`) dit où part le temps, sur `Build` :
+
+| | médiane | pire |
+|---|---:|---:|
+| recopie des deux arènes | **26,2 ms** | 81,4 ms |
+| maillage (deux cellules et leur marge) | 12,3 ms | 41,8 ms |
+
+Deux conclusions, et elles décident la suite :
+
+1. **C'est la recopie d'arène, et elle GRANDIT avec la scène.** Le vol ne
+   remplit que 178 Mo — le budget par défaut est de 1,5 Go, donc rien n'est
+   évincé. Une scène qui remplit son budget pèse huit fois plus, et la même
+   image coûterait plusieurs centaines de millisecondes. Les tampons par
+   SECTION ne sont donc pas une finition : c'est ce qui bloque la phase.
+2. **Le maillage, lui, est borné par image** — il ne dépend que des deux
+   cellules intégrées et de leur marge — mais il se fait en SÉQUENCE, là où
+   le chargement complet maille en parallèle (× 2,4 sur du bâti).
+
+Le premier essai de cette mesure rendait **0,01 ms par image pour zéro
+cellule posée** : les quatre cents images s'enchaînaient en 4 ms, avant que le
+fil ait lu une seule région. Elle est maintenant cadencée comme une fenêtre,
+et elle REFUSE de rendre un chiffre si moins de cent cellules sont arrivées.
+
 ---
 
 ## 7. Ce qui n'est pas fait, et ce qui n'est pas mesuré
@@ -630,7 +672,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
-| **Deux cellules intégrées par image** | le grain vient de la recopie d'arène, pas du décodage : une région bâtie de 1 024 chunks met donc plusieurs secondes à s'afficher entièrement. Des tampons GPU par section le supprimeraient |
+| **Une image de vol sur du bâti coûte 35 ms** | médiane, 104 au pire — la promesse de 8 ms n'est pas tenue sur 396 images sur 400 (`--example vol`). 26 ms sont la recopie des arènes, en O(scène) : elle grandit à mesure que la scène se remplit. Des tampons par SECTION la supprimeraient ; c'est le prochain chantier |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **L'arène GPU se reconstruit en ENTIER** | le remaillage est incrémental jusqu'aux arènes, qui se rebâtissent en O(quads de la scène). Mesuré sur 64 chunks : 3,5 ms sur 4,4 — sous le budget de 8 ms de la phase 5, donc pas encore le bon combat, mais c'est le prochain. Les `tranches` de l'arène sont déjà par section |
 | **L'arène GPU n'est pas par SECTION** | c'est la dernière dépense en O(scène) du chemin d'édition : 27 ms pour recopier 276 k instances et 178 k poses, là où le geste est en O(édition). Des tampons GPU par section la supprimeraient — et c'est la même pièce dont la résidence a besoin pour lâcher un maillage sans recopier le reste |
