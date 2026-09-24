@@ -191,7 +191,14 @@ impl Chargeur {
             }
             match depuis.try_recv() {
                 Ok(r) => {
-                    self.en_vol = self.en_vol.saturating_sub(1);
+                    // Seule une CELLULE rendue sort du vol : un message
+                    // d'échec l'accompagne, il ne la remplace pas. Le
+                    // décompter ferait croire le fil libre une cellule trop
+                    // tôt, et la demande repartirait chercher celle qui est
+                    // encore en route.
+                    if matches!(r, Reponse::Prete { .. }) {
+                        self.en_vol = self.en_vol.saturating_sub(1);
+                    }
                     out.push(r);
                 }
                 Err(TryRecvError::Empty) => break,
@@ -342,6 +349,21 @@ fn servir<S: RegionSource + ?Sized>(
             }
         }
         return true;
+    }
+
+    // **Ce qui ne s'est pas lu se DIT.** Une région ou un chunk illisible
+    // rend ses cellules vides — elles sont inscrites, donc jamais relues en
+    // boucle — mais sans ce message l'utilisateur verrait du vide sans savoir
+    // pourquoi. Une fois par lecture : la région n'est pas redemandée.
+    if let Ok(bilan) = &lu {
+        if bilan.illisibles > 0 {
+            let _ = reponses.send(Reponse::Echec(format!(
+                "la région {} porte {} chunk(s) illisible(s) : ce qu'ils \
+                 contenaient n'est pas affiché",
+                lot.region.file_name(),
+                bilan.illisibles
+            )));
+        }
     }
 
     // **Un interner par CELLULE**, taillé sur ses seules sections. Envoyer

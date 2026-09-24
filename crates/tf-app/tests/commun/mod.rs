@@ -477,6 +477,18 @@ impl RegionSource for Comptee {
     }
 }
 
+impl Comptee {
+    /// Pose une région telle quelle — y compris des octets qui n'en sont pas.
+    pub fn poser_region(&self, x: i32, z: i32, octets: Vec<u8>) {
+        self.dessous.put_region(
+            Dimension::Overworld,
+            Folder::Region,
+            RegionPos { x, z },
+            octets,
+        );
+    }
+}
+
 /// Une source de `cote × cote` régions de terrain, avec biomes.
 pub fn monde(cote: i32, chunks: u32) -> Arc<Comptee> {
     let s = Comptee::neuve();

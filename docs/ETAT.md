@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **863**, zéro échec |
+| Tests | **866**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,12 +42,12 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-863 tests, répartis par ce qu'ils PROUVENT :
+866 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
 | `tf-nbt` reader/writer | 29 | longueurs signées, profondeur, charges forgées |
-| `tf-anvil` region/section/lossless/versions/external/robustesse | 102 | round-trip octet pour octet, 1.13→1.21, `.mcc` |
+| `tf-anvil` region/section/lossless/versions/external/robustesse | 103 | round-trip octet pour octet, 1.13→1.21, `.mcc` ; et qu'un emplacement qui pointe hors du fichier est laissé vide ET COMPTÉ |
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
@@ -81,9 +81,9 @@ cargo test --workspace
 | `tf-app` rechargement | 11 | qu'éditer une cellule STREAMÉE ne la retire pas de la scène ni n'y fait naître ce qui n'est pas chargé ; qu'un état jamais vu au bord d'une cellule qui arrive cache bien la face de sa voisine ; qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
 | `tf-render` pages | 5 | le tableau par PAGES : que grandir ne déplace aucune page existante, qu'il se comporte comme un `Vec` sur une suite tirée d'une graine, qu'une case recréée vaut `vide` et pas son ancien contenu, et qu'une plage se découpe aux frontières de page |
 | `tf-render` arene | 7 | les PLACES STABLES : que ce qui est dessiné — la passe de modèles rejouée comme le shader la dichotomise — est ce qu'une arène rebâtie dessinerait, après des milliers d'arrivées, de départs et d'éditions tirés d'une graine ; qu'un remplacement COMPTE ce qu'il écrit et paie ce qu'il change, pas la scène ; qu'un trou se réemploie ; qu'il y a un emplacement par lot et pas un de plus ; et que tasser ne change rien à l'image |
-| `tf-app` chargeur | 8 | le FIL de chargement : qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
+| `tf-app` chargeur | 9 | le FIL de chargement : qu'une région corrompue se DIT et ne libère pas le fil avant que ses cellules soient rendues ; qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
-| `tf-app` pilote | 6 | la caméra qui PILOTE : que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
+| `tf-app` pilote | 7 | la caméra qui PILOTE : qu'une région ILLISIBLE n'est lue qu'une fois sur six cents images immobiles, et que l'échec se dit ; que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
 | `tf-app` residence | 5 | que la MÉMOIRE est bornée : que ce que la fenêtre compte est ce que la scène porte À L'OCTET PRÈS, qu'un vol continu tient sous son budget sans jamais recharger la zone, que ce qui survit à l'éviction est quad pour quad ce qu'un chargement direct donnerait (la marge du dégagement, que rien d'autre ne voit), que corriger le poids d'une voisine n'en fait pas la plus récente, et qu'une cellule de RÉGION est pesée sur ses 32 × 32 colonnes |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
 | `tf-bench` fixture/build | 13 | l'échantillon reste représentatif du pack |

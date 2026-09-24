@@ -139,6 +139,11 @@ pub struct Region<'a> {
     pub region_z: i32,
     /// 1024 emplacements, indexés par `localX + localZ * 32`.
     pub slots: Vec<Option<RawChunk<'a>>>,
+    /// Emplacements qui annonçaient un chunk qu'on n'a pas pu repérer —
+    /// offset hors du fichier, longueur incohérente. Laissés vides pour
+    /// sauver les autres, et COMPTÉS : sans ce nombre, une région corrompue
+    /// se lisait exactement comme une région vide.
+    pub illisibles: usize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -191,6 +196,7 @@ pub fn read<'a>(buf: &'a [u8], region_x: i32, region_z: i32) -> Result<Region<'a
         return Err(ReadError::TooShort);
     }
     let mut slots: Vec<Option<RawChunk<'a>>> = vec![None; CHUNKS];
+    let mut illisibles = 0;
 
     for i in 0..CHUNKS {
         let loc = u32::from_be_bytes(buf[i * 4..i * 4 + 4].try_into().unwrap());
@@ -200,15 +206,18 @@ pub fn read<'a>(buf: &'a [u8], region_x: i32, region_z: i32) -> Result<Region<'a
             continue; // chunk absent — le cas normal pour une région de bordure
         }
         let Some(off) = sector_off.checked_mul(SECTOR) else {
+            illisibles += 1;
             continue;
         };
         if off + 5 > buf.len() {
+            illisibles += 1;
             continue;
         }
         let len = u32::from_be_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
         // `len` compte l'octet de compression : 1 signifie « charge vide »,
         // 0 est incohérent.
         if len == 0 || off + 4 + len > buf.len() {
+            illisibles += 1;
             continue;
         }
         let timestamp = u32::from_be_bytes(
@@ -240,6 +249,7 @@ pub fn read<'a>(buf: &'a [u8], region_x: i32, region_z: i32) -> Result<Region<'a
         region_x,
         region_z,
         slots,
+        illisibles,
     })
 }
 

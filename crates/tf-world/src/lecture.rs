@@ -84,6 +84,10 @@ pub fn sections_de<S: RegionSource + ?Sized>(
             continue;
         };
         bilan.regions += 1;
+        // Les emplacements que l'en-tête annonçait et qu'on n'a pas su
+        // repérer : la région les laisse vides pour sauver les autres, le
+        // bilan les dit.
+        bilan.illisibles += region.illisibles;
         for brut in region.iter() {
             // **On filtre AVANT d'inflater.** Le filtre était posé après le
             // scan : une région bâtie porte 256 chunks, donc lire UNE section

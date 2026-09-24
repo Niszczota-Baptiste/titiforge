@@ -402,3 +402,38 @@ fn un_indice_hors_palette_ne_tue_pas_le_compactage() {
         );
     }
 }
+
+#[test]
+fn un_emplacement_qui_pointe_hors_du_fichier_est_compte_pas_tu() {
+    // Un emplacement illisible est laissé vide pour sauver les 1023 autres —
+    // et il est COMPTÉ : sans ce nombre, une région corrompue se lisait
+    // exactement comme une région vide, et l'utilisateur voyait du vide sans
+    // savoir pourquoi.
+    let mut buf = vec![0u8; 8192 + 4096];
+    // L'emplacement 0 : un chunk sain d'un secteur, au secteur 2.
+    buf[0..4].copy_from_slice(&((2u32 << 8) | 1).to_be_bytes());
+    buf[8192..8196].copy_from_slice(&2u32.to_be_bytes());
+    buf[8196] = 2; // zlib
+                   // L'emplacement 1 : un secteur bien au-delà de la fin du fichier.
+    buf[4..8].copy_from_slice(&((900u32 << 8) | 1).to_be_bytes());
+    // L'emplacement 2 : au secteur 2 aussi, mais une longueur qui déborde.
+    buf[8..12].copy_from_slice(&((2u32 << 8) | 1).to_be_bytes());
+    let r = tf_anvil::region::read(&buf, 0, 0).expect("en-tête lisible");
+    assert!(r.slots[0].is_some(), "le sain est repéré");
+    assert!(
+        r.slots[1].is_none(),
+        "l'offset hors fichier est laissé vide"
+    );
+    assert_eq!(r.illisibles, 1, "et compté");
+
+    let mut debordant = buf.clone();
+    debordant[8192..8196].copy_from_slice(&100_000u32.to_be_bytes());
+    let r = tf_anvil::region::read(&debordant, 0, 0).expect("en-tête lisible");
+    assert_eq!(
+        r.illisibles, 3,
+        "une longueur qui déborde rend illisibles les emplacements qui la partagent"
+    );
+
+    let saine = vec![0u8; 8192];
+    assert_eq!(tf_anvil::region::read(&saine, 0, 0).unwrap().illisibles, 0);
+}

@@ -491,3 +491,64 @@ fn le_champ_protege_suit_la_camera_sans_rien_demander() {
         o.residentes()
     );
 }
+
+/// **Une région ILLISIBLE n'est lue qu'une fois.**
+///
+/// Le défaut que les deux applications précédentes ont payé sous toutes ses
+/// formes : relire en boucle ce qui ne se lit pas. Ici, une région qui ne se
+/// décode pas rend quand même une réponse par cellule — vide — et ses
+/// cellules sont inscrites : la demande ne les redemande pas. Le compteur le
+/// vérifie sur six cents images immobiles, là où une boucle relirait le
+/// fichier soixante fois par seconde. Et l'échec se DIT, une fois.
+#[test]
+fn une_region_illisible_n_est_lue_qu_une_fois() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &[]);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 32);
+
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 0, 0]).expect("monde ouvert");
+    let src = monde(1, 32);
+    // La région voisine, en x : des octets qui ne sont pas une région.
+    src.poser_region(
+        1,
+        0,
+        (0..20_000u32)
+            .map(|i| i.wrapping_mul(2_654_435_761) as u8)
+            .collect(),
+    );
+    let mut p = Pilote::neuf(src.clone(), Dimension::Overworld, Niveau::Chunk, 4, HAUTEUR);
+
+    // L'œil au bord : le disque déborde sur la région illisible.
+    let oeil = BlockPos::new(32 * 16 - 8, 64, 200);
+    let disque = tf_world::demande::voulues(oeil, EST, 4, Niveau::Chunk, HAUTEUR).len();
+    let mut echecs = 0;
+    for _ in 0..600 {
+        if p.image(&mut o, oeil, EST, 2).is_err() {
+            echecs += 1;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    p.arreter();
+
+    assert!(
+        o.residentes() > disque,
+        "la prémisse : tout le disque a répondu, lisible ou non ({} pour {disque})",
+        o.residentes()
+    );
+    assert!(
+        echecs >= 1,
+        "l'illisible doit se DIRE : du vide sans explication ressemble à un bug"
+    );
+    assert!(
+        src.lectures() <= 2,
+        "{} lectures de .mca en six cents images immobiles — une par région \
+         suffit ; au-delà, l'illisible est relue en boucle",
+        src.lectures()
+    );
+    println!(
+        "{} lectures, {echecs} échecs signalés, {} cellules résidentes",
+        src.lectures(),
+        o.residentes()
+    );
+}

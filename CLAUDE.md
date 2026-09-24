@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (863 tests aujourd’hui)
+cargo test            # tous les crates (866 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1952,3 +1952,14 @@ propres à ce dépôt.
   prise à UNE taille de scène ne voit pas une pente ; une mesure découpée
   dans le temps, si. `tf_mesh::Maillages` tient le maillage par section :
   plat, 0,2 ms pour les deux.
+- **Une région corrompue se lisait comme une région vide.** `tf_anvil::read`
+  laisse vide un emplacement illisible pour sauver les 1023 autres — c'est
+  voulu — mais sans le compter : un `.mca` abîmé s'affichait comme du vide,
+  sans un mot. Il est compté (`Region::illisibles`), le bilan de lecture
+  l'additionne, et le fil le DIT une fois par lecture. Vérifié au passage,
+  parce que c'était la crainte : une région illisible n'est PAS relue en
+  boucle — ses cellules reviennent vides et sont inscrites, deux lectures
+  pour six cents images immobiles. Corollaire trouvé en écrivant le message :
+  le compteur d'en-vol décomptait toute réponse, donc un message d'échec
+  aurait fait croire le fil libre une cellule trop tôt, et la demande serait
+  repartie chercher celle qui était encore en route.

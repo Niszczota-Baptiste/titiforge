@@ -316,3 +316,54 @@ fn une_region_absente_rend_des_cellules_vides() {
     }
     c.arreter();
 }
+
+#[test]
+fn une_region_corrompue_se_dit_et_ne_libere_pas_le_fil_trop_tot() {
+    // La région (0, 0) : des octets qui ne sont pas une région. Ses cellules
+    // reviennent vides — c'est ce qui les empêche d'être relues en boucle —
+    // et l'échec se DIT, une fois. Mais le message n'est pas une cellule :
+    // le compter comme telle ferait croire le fil libre alors que la
+    // cellule est encore en route, et la demande repartirait la chercher.
+    let src = commun::Comptee::neuve();
+    let src = std::sync::Arc::new(src);
+    let mut garbage = vec![0u8; 16_384];
+    for (i, o) in garbage.iter_mut().enumerate() {
+        *o = (i as u32).wrapping_mul(2_654_435_761) as u8;
+    }
+    src.poser_region(0, 0, garbage);
+    let mut c = Chargeur::lancer(src.clone(), Dimension::Overworld);
+    c.demander(demande(BlockPos::new(8, 64, 8), 0));
+
+    // Une réponse à la fois : le message d'abord.
+    let debut = Instant::now();
+    let premiere = loop {
+        if let Some(r) = c.recevoir(1).into_iter().next() {
+            break r;
+        }
+        assert!(
+            debut.elapsed() < Duration::from_secs(20),
+            "rien n'est revenu"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let texte = match &premiere {
+        Reponse::Echec(e) => e.clone(),
+        Reponse::Prete { .. } => "une cellule".into(),
+    };
+    assert!(
+        texte.contains("illisible"),
+        "la corruption doit se DIRE, et d'abord : {texte}"
+    );
+    assert!(
+        c.occupe(),
+        "la cellule n'est pas encore rendue : le fil n'est pas libre"
+    );
+    let reste = ramasser(&mut c, 1, Duration::from_secs(20));
+    c.arreter();
+    assert!(
+        matches!(&reste[..], [Reponse::Prete { sections, .. }] if sections.is_empty()),
+        "puis la cellule, vide : {} réponse(s)",
+        reste.len()
+    );
+    assert_eq!(src.lectures(), 1, "lue une fois");
+}
