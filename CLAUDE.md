@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (870 tests aujourd’hui)
+cargo test            # tous les crates (872 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -1985,3 +1985,15 @@ propres à ce dépôt.
   Mesuré avant d'écrire : `RAYON_NUM_THREADS=3` ramenait la médiane de 3,3 à
   2,7 ms et le p95 de ~9 à 5,4, pour le même nombre de cellules. La réserve
   du maillage (`reserve_de_maillage`) garde un cœur libre.
+- **Réécrire les blocs sans l'éclairage, c'est laisser la lumière d'avant.**
+  Le splice ne remplaçait que les champs de blocs : `SkyLight`, `BlockLight`
+  et les `Heightmaps` décrivaient toujours l'ancien contenu. En jeu, une salle
+  creusée sortait noire, un mur neuf ne portait pas d'ombre, la pluie
+  traversait un toit posé — tant que le joueur ne modifiait pas un bloc à
+  côté. Rien ne le signalait, et aucun test ne regardait ces champs : ils
+  étaient « ce que le lecteur ne touche pas, donc ne peut pas abîmer ». On ne
+  recalcule rien soi-même — ce serait réécrire le moteur d'éclairage du jeu
+  pour se tromper là où lui ne se trompe pas : on lui DEMANDE de le faire,
+  par ses propres mécanismes de chargement (`isLightOn` à 0, `Heightmaps`
+  retiré), sur les seuls chunks dont les BLOCS changent. Le journal enregistre
+  ces éditions avec les autres : annuler rend aussi l'éclairage d'origine.

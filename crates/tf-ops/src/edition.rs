@@ -499,6 +499,10 @@ fn un_chunk(
         }
     }
 
+    // Les BLOCS ont-ils changé ? Seuls eux changent la lumière et les cartes
+    // de hauteur — un biome ou une entité ne jettent pas d'ombre.
+    let blocs_changes = !edits.is_empty();
+
     // ── Les biomes, quand l'opération les touche.
     //
     // Indépendant du chemin des blocs, et volontairement : un biome vit dans
@@ -552,6 +556,15 @@ fn un_chunk(
         if let Some(e) = edition_entites(&avant, &balayage.entites, balayage.layout, &voulues) {
             edits.push(e);
         }
+    }
+
+    // ── L'éclairage et les cartes de hauteur, que le JEU recalculera.
+    //
+    // Ils décrivent les blocs d'AVANT : laissés tels quels, une salle creusée
+    // sortait noire en jeu et la pluie traversait un toit neuf. Le journal
+    // enregistre ces éditions avec les autres, donc annuler les rend aussi.
+    if blocs_changes {
+        edits.extend(tf_anvil::chunk::faire_recalculer(&balayage));
     }
 
     if !edits.is_empty() {

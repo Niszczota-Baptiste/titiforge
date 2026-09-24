@@ -48,6 +48,12 @@ pub struct ChunkScan {
     /// jour où elle cesse d'être homogène — une corruption silencieuse, et
     /// dans le seul cas que personne ne pense à tester.
     pub packing: Packing,
+    /// La CHARGE de `isLightOn` — un octet — et sa valeur, quand le chunk en
+    /// porte un (1.14+ : à la racine, ou sous `Level` avant 1.18).
+    pub lumiere: Option<(Span, i8)>,
+    /// Le CHAMP `Heightmaps` entier — type, nom et charge — pour pouvoir le
+    /// faire disparaître.
+    pub hauteurs: Option<Span>,
 }
 
 impl Default for ChunkScan {
@@ -60,6 +66,8 @@ impl Default for ChunkScan {
             sections: Vec::new(),
             entites: ListeEntites::default(),
             packing: Packing::NoStraddle,
+            lumiere: None,
+            hauteurs: None,
         }
     }
 }
@@ -151,6 +159,24 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
             (tag::INT, "DataVersion") => out.data_version = c.i32()?,
             (tag::INT, "xPos") => out.x_pos = Some(c.i32()?),
             (tag::INT, "zPos") => out.z_pos = Some(c.i32()?),
+            (tag::BYTE, "isLightOn") => {
+                let debut = c.pos();
+                let v = c.i8()?;
+                out.lumiere = Some((
+                    Span {
+                        start: debut,
+                        end: c.pos(),
+                    },
+                    v,
+                ));
+            }
+            (tag::COMPOUND, "Heightmaps") => {
+                c.skip_payload(t)?;
+                out.hauteurs = Some(Span {
+                    start: avant,
+                    end: c.pos(),
+                });
+            }
             (tag::LIST, "sections") => {
                 out.layout = Layout::Flat;
                 out.sections = scan_section_list(&mut c, Layout::Flat)?;
@@ -188,6 +214,24 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
                 match (t, key) {
                     (tag::INT, "xPos") => out.x_pos = Some(lc.i32()?),
                     (tag::INT, "zPos") => out.z_pos = Some(lc.i32()?),
+                    (tag::BYTE, "isLightOn") => {
+                        let debut = lc.pos();
+                        let v = lc.i8()?;
+                        out.lumiere = Some((
+                            Span {
+                                start: debut,
+                                end: lc.pos(),
+                            },
+                            v,
+                        ));
+                    }
+                    (tag::COMPOUND, "Heightmaps") => {
+                        lc.skip_payload(t)?;
+                        out.hauteurs = Some(Span {
+                            start: avant,
+                            end: lc.pos(),
+                        });
+                    }
                     (tag::LIST, "Sections") => {
                         out.sections = scan_section_list(&mut lc, Layout::Legacy)?;
                     }
@@ -645,6 +689,46 @@ fn read_palette_entry(c: &mut Cur, interner: &mut Interner) -> R<StateId> {
         return Err(Trunc);
     }
     Ok(interner.intern(&state_key(name, &mut props)))
+}
+
+/// **Ce qu'il faut réécrire pour que le JEU recalcule l'éclairage et les
+/// cartes de hauteur d'un chunk dont les blocs ont changé.**
+///
+/// Le splice ne remplace que les champs de blocs. La lumière stockée
+/// (`SkyLight`, `BlockLight`) et les `Heightmaps` restaient donc celles
+/// d'AVANT l'édition : une salle creusée sortait noire, un mur neuf ne portait
+/// pas d'ombre, et la pluie tombait à travers un toit posé — tant que le jeu
+/// n'avait pas lui-même rééclairé la zone, ce qu'il ne fait que si l'on y
+/// modifie un bloc.
+///
+/// On ne recalcule rien soi-même : ce serait réécrire le moteur d'éclairage du
+/// jeu, et se tromper là où lui ne se trompe pas. On lui DEMANDE de le faire,
+/// avec les deux mécanismes qu'il a pour ça au chargement d'un chunk :
+///
+/// - `isLightOn` à 0 : le chunk n'est pas tenu pour éclairé, et le jeu le
+///   rééclaire entièrement ;
+/// - `Heightmaps` retiré : les cartes manquantes d'un chunk complet sont
+///   recalculées depuis ses blocs.
+///
+/// Rien de tout ça n'est rendu si le chunk n'en porte pas — un chunk sans
+/// `isLightOn` est déjà tenu pour non éclairé — ni si l'octet vaut déjà 0.
+pub fn faire_recalculer(scan: &ChunkScan) -> Vec<Edit> {
+    let mut out = Vec::new();
+    if let Some((span, v)) = scan.lumiere {
+        if v != 0 {
+            out.push(Edit {
+                span,
+                bytes: vec![0],
+            });
+        }
+    }
+    if let Some(span) = scan.hauteurs {
+        out.push(Edit {
+            span,
+            bytes: Vec::new(),
+        });
+    }
+    out
 }
 
 /// Remplacement d'une plage d'octets du chunk inflaté.

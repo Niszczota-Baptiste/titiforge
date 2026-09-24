@@ -335,6 +335,65 @@ fn un_chunk_hors_selection_n_est_pas_touche() {
 }
 
 #[test]
+fn une_edition_fait_reeclairer_ses_chunks_par_le_jeu() {
+    // Le splice ne remplace que les champs de blocs : la lumière stockée et
+    // les cartes de hauteur décrivaient les blocs d'AVANT. En jeu, une salle
+    // creusée sortait noire et la pluie traversait un toit neuf. On ne
+    // recalcule rien soi-même — on DEMANDE au jeu de le faire : `isLightOn`
+    // à zéro, `Heightmaps` retiré, sur les chunks dont les blocs ont changé,
+    // et seulement eux.
+    let (src, avant) = monde();
+    let interner = interner_de(&avant);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+    let sel = BBox::new(
+        BlockPos { x: 0, y: -64, z: 0 },
+        BlockPos {
+            x: 15,
+            y: 320,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+    let rap = appliquer_region(&st, &SURFACE, DOSSIER, ZERO, &sel, &plan, &interner).unwrap();
+    assert_eq!(rap.patches.len(), 1, "la prémisse : un seul chunk écrit");
+    let apres = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+
+    let (ra, rb) = (read(&avant, 0, 0).unwrap(), read(&apres, 0, 0).unwrap());
+    let balayer = |r: &tf_anvil::region::Region, x: i32, z: i32| {
+        let c = r.get(x, z).expect("le chunk existe");
+        scan(&inflate(&c.payload, c.compression).unwrap()).unwrap()
+    };
+    let (touche_avant, touche) = (balayer(&ra, 0, 0), balayer(&rb, 0, 0));
+    assert_eq!(
+        touche_avant.lumiere.map(|(_, v)| v),
+        Some(1),
+        "la prémisse : le chunk était tenu pour éclairé"
+    );
+    assert!(
+        touche_avant.hauteurs.is_some(),
+        "et portait ses cartes de hauteur"
+    );
+    assert_eq!(
+        touche.lumiere.map(|(_, v)| v),
+        Some(0),
+        "après l'édition, le jeu doit le rééclairer"
+    );
+    assert!(
+        touche.hauteurs.is_none(),
+        "et recalculer ses cartes de hauteur, qu'il reconstruit quand elles manquent"
+    );
+
+    // Le voisin que la sélection ne touche pas : octet pour octet.
+    let (va, vb) = (ra.get(1, 0).unwrap(), rb.get(1, 0).unwrap());
+    assert_eq!(
+        va.payload, vb.payload,
+        "un chunk non modifié est réémis octet pour octet, éclairage compris"
+    );
+}
+
+#[test]
 fn une_operation_qui_ne_change_rien_n_ecrit_rien() {
     // Un drapeau de propreté finit par mentir ; des octets, non. Une opération
     // dont la cible est absente ne doit ni salir le staging, ni remplir le

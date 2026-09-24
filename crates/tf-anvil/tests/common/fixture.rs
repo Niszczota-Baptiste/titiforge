@@ -255,6 +255,8 @@ pub fn chunk_nbt(chunk_x: i32, chunk_z: i32, sections: &[SectionSpec]) -> Vec<u8
     n.field(t::INT, "yPos").i32v(-4);
     n.field(t::INT, "zPos").i32v(chunk_z);
     n.field(t::STRING, "Status").strv("minecraft:full");
+    // Comme tout chunk que le jeu a éclairé.
+    n.field(t::BYTE, "isLightOn").i8v(1);
 
     // Un Heightmaps réaliste : gros, et sans le moindre intérêt pour nous.
     n.field(t::COMPOUND, "Heightmaps");
@@ -440,6 +442,12 @@ pub fn legacy_chunk_nbt(
     n.field(t::INT, "xPos").i32v(chunk_x);
     n.field(t::INT, "zPos").i32v(chunk_z);
     n.field(t::STRING, "Status").strv("full");
+    // 1.14 – 1.17 : l'éclairage et les cartes de hauteur vivent sous `Level`.
+    n.field(t::BYTE, "isLightOn").i8v(1);
+    n.field(t::COMPOUND, "Heightmaps");
+    n.field(t::LONG_ARRAY, "MOTION_BLOCKING")
+        .longs(&vec![0x0123_4567_89AB_CDEF; 37]);
+    n.end();
 
     // Un champ que le lecteur n'interprète pas, DANS Level.
     n.field(t::BYTE_ARRAY, "modtest:legacy")

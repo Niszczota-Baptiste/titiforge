@@ -246,6 +246,20 @@ fn poser_un_biome_ne_touche_pas_aux_blocs() {
     assert!(r.etages[0] > 0, "et la section a bien été traversée");
     let apres = tf_ops::edition::copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
     assert_eq!(apres.blocs, avant.blocs, "les blocs sont intacts");
+
+    // Et le jeu n'a rien à rééclairer : un biome ne jette pas d'ombre. Faire
+    // recalculer la lumière d'un chunk dont aucun bloc n'a bougé ferait payer
+    // au jeu un travail inutile à chaque coup de pinceau de biome.
+    let octets = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let mut r = tf_anvil::read(&octets, 0, 0).unwrap();
+    let c = r.get_mut(0, 0).expect("le chunk (0, 0)");
+    let s = scan(&inflate(&c.payload, c.compression).unwrap()).unwrap();
+    assert_eq!(
+        s.lumiere.map(|(_, v)| v),
+        Some(1),
+        "l'éclairage d'un chunk dont seuls les biomes ont changé reste tenu pour juste"
+    );
+    assert!(s.hauteurs.is_some(), "et ses cartes de hauteur restent");
 }
 
 #[test]

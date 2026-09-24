@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **870**, zéro échec |
+| Tests | **872**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,18 +42,18 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-870 tests, répartis par ce qu'ils PROUVENT :
+872 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
 | `tf-nbt` reader/writer | 29 | longueurs signées, profondeur, charges forgées |
-| `tf-anvil` region/section/lossless/versions/external/robustesse | 103 | round-trip octet pour octet, 1.13→1.21, `.mcc` ; et qu'un emplacement qui pointe hors du fichier est laissé vide ET COMPTÉ |
+| `tf-anvil` region/section/lossless/versions/external/robustesse | 104 | round-trip octet pour octet, 1.13→1.21, `.mcc` ; que les DEUX dispositions se font rééclairer par le jeu (`isLightOn`, `Heightmaps`, à la racine comme sous `Level`) ; et qu'un emplacement qui pointe hors du fichier est laissé vide ET COMPTÉ |
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 120 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
-| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 64 | les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
+| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 65 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
@@ -869,6 +869,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
+| **L'éclairage après une édition n'a jamais été vu EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) : c'est son propre mécanisme de chargement, mais personne ne l'a encore regardé dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |

@@ -319,6 +319,9 @@ fn chunk_nbt(b: &Build, cx: i32, cz: i32, mx: i32, mz: i32) -> Vec<u8> {
     w.field(tag::INT, "yPos").i32_payload(-4);
     w.field(tag::INT, "zPos").i32_payload(mz);
     w.field(tag::STRING, "Status").raw_str("minecraft:full");
+    // Comme tout chunk que le jeu a éclairé : c'est l'octet qu'une édition
+    // doit remettre à zéro pour que le jeu rééclaire.
+    w.field(tag::BYTE, "isLightOn").i8_payload(1);
 
     w.field(tag::COMPOUND, "Heightmaps");
     w.field(tag::LONG_ARRAY, "MOTION_BLOCKING");

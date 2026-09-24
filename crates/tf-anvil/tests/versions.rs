@@ -555,3 +555,50 @@ fn un_chunk_entierement_homogene_retombe_sur_le_dataversion() {
         "la mesure doit l'emporter sur un DataVersion qui ment"
     );
 }
+
+#[test]
+fn les_deux_dispositions_se_font_reeclairer_par_le_jeu() {
+    // `faire_recalculer` demande au jeu de rééclairer et de recalculer les
+    // cartes de hauteur d'un chunk dont les blocs ont changé. Les deux champs
+    // vivent à la RACINE depuis 1.18, sous `Level` avant : les manquer dans
+    // l'une des deux dispositions laisserait l'éclairage d'avant l'édition
+    // sur la moitié des mondes que le moteur sait lire.
+    let sections = [
+        SectionSpec::uniform(0, "minecraft:stone"),
+        SectionSpec::uniform(1, "minecraft:dirt"),
+    ];
+    for (nom, brut) in [
+        ("1.18+", fixture::chunk_nbt(0, 0, &sections)),
+        ("1.17", fixture::legacy_chunk_nbt(0, 0, &sections, false)),
+    ] {
+        let avant = tf_anvil::chunk::scan(&brut).unwrap();
+        assert_eq!(
+            avant.lumiere.map(|(_, v)| v),
+            Some(1),
+            "{nom} : la prémisse, un chunk éclairé"
+        );
+        assert!(avant.hauteurs.is_some(), "{nom} : et ses cartes de hauteur");
+
+        let mut edits = tf_anvil::chunk::faire_recalculer(&avant);
+        let apres = tf_anvil::chunk::splice(&brut, &mut edits).unwrap();
+        let s = tf_anvil::chunk::scan(&apres).unwrap();
+        assert_eq!(s.lumiere.map(|(_, v)| v), Some(0), "{nom} : à rééclairer");
+        assert!(s.hauteurs.is_none(), "{nom} : cartes de hauteur retirées");
+        // Rien d'autre n'a bougé : mêmes sections, même contenu.
+        assert_eq!(s.sections.len(), avant.sections.len(), "{nom}");
+        let mut i = tf_anvil::Interner::new();
+        for (a, b) in avant.sections.iter().zip(&s.sections) {
+            let x = tf_anvil::chunk::decode_section(&brut, &avant, a, &mut i).unwrap();
+            let y = tf_anvil::chunk::decode_section(&apres, &s, b, &mut i).unwrap();
+            assert_eq!(
+                x.map(|x| (x.unpack(), x.palette)),
+                y.map(|y| (y.unpack(), y.palette)),
+                "{nom} : la section {} n'a pas survécu",
+                a.y
+            );
+        }
+        // Déjà à zéro : plus rien à écrire pour l'éclairage.
+        let rien = tf_anvil::chunk::faire_recalculer(&s);
+        assert!(rien.is_empty(), "{nom} : rien de plus à demander");
+    }
+}
