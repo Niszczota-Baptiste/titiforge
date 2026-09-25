@@ -2124,6 +2124,7 @@ name = "tf-ops"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "flate2",
  "rayon",
  "tf-anvil",
  "tf-assets",

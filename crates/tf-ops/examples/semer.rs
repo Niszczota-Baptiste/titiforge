@@ -47,8 +47,44 @@ fn main() {
             n += 1;
         }
     }
+    // Des ENTITÉS dans le premier chunk : un porte-armure, un cadre au mur et
+    // un au sol, un tableau de deux blocs, un villageois qui se souvient de
+    // son lit. Sans elles, `--copier-vers` et `--deplacer` ne montreraient
+    // pas qu'elles suivent — et `recenser_entites` n'aurait rien à relever.
+    use tf_bench::mobiles::{region_entites, Occupant, Trait, DV_1_18_2};
+    let entites_dir = racine.join("entities");
+    std::fs::create_dir_all(&entites_dir).expect("dossier créable");
+    let occupants = vec![
+        Occupant::nouveau(
+            "minecraft:armor_stand",
+            [5.5, -30.0, 5.5],
+            30.0,
+            [1, 2, 3, 4],
+        )
+        .avec(Trait::Pose),
+        Occupant::cadre([8, -29, 3], 3, "minecraft:filled_map", 3, [5, 6, 7, 8]),
+        Occupant::cadre([9, -30, 9], 1, "minecraft:diamond", 1, [9, 10, 11, 12]),
+        Occupant::tableau([12, -28, 4], 0, "minecraft:pool", [13, 14, 15, 16]),
+        Occupant::nouveau(
+            "minecraft:villager",
+            [3.5, -30.0, 10.5],
+            -90.0,
+            [17, 18, 19, 20],
+        )
+        .avec(Trait::Dort([3, -30, 11]))
+        .avec(Trait::Souvenir(
+            "minecraft:home",
+            [3, -30, 11],
+            "minecraft:overworld",
+        )),
+    ];
+    let n_entites = occupants.len();
+    let brut = region_entites(0, 0, &[(0, 0, DV_1_18_2, occupants)]);
+    std::fs::write(entites_dir.join("r.0.0.mca"), &brut).expect("écriture");
+
     println!(
-        "{n} régions écrites dans {} · {:.1} Mo · {} coffres par chunk",
+        "{n} régions écrites dans {} · {:.1} Mo · {} coffres par chunk · {n_entites} entités \
+         dans le chunk (0, 0)",
         region_dir.display(),
         octets as f64 / 1e6,
         t.coffres

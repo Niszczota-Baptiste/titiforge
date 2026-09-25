@@ -16,6 +16,7 @@ pub mod chunk;
 pub mod codec;
 pub mod entites;
 pub mod format;
+pub mod mobiles;
 pub mod region;
 pub mod section;
 pub mod state;
@@ -31,6 +32,10 @@ pub use entites::{Ancrage, Entite, EntiteReperee, ListeEntites};
 pub use format::{
     detect_packing, longs_for, pack, packing_de_repli, unpack_into, version_label, Layout, Packing,
     DV_SANS_CHEVAUCHEMENT,
+};
+pub use mobiles::{
+    balayer_chunk, champ_mobiles, chunk_neuf, edition_mobiles, Case, Champ, ChunkMobiles, Corps,
+    Mobile, MobileRepere, CHAMP_ENTITES,
 };
 pub use region::{
     chunk_of_block, external_file_name, floor_div, read, region_coords_from_name, region_file_name,

@@ -32,7 +32,9 @@ use tf_anvil::chunk::{
 };
 use tf_anvil::codec::{deflate_level, inflate, CodecError};
 use tf_anvil::entites::Entite;
-use tf_anvil::region::{external_file_name, read, write, ReadError, WriteError};
+use tf_anvil::region::{
+    external_file_name, read, write, Compression, RawChunk, ReadError, Region, WriteError,
+};
 use tf_anvil::{edition_entites, Interner, StateId};
 use tf_world::coords::{BBox, BlockPos, ChunkPos, RegionPos, SectionPos};
 use tf_world::journal::{ChunkPatch, Cible, Correction, Genre, Journal};
@@ -74,6 +76,16 @@ pub struct RapportRegion {
     /// le piège d'`ExeWorldEdit` reproche au format.
     pub entites_posees: u64,
     pub entites_retirees: u64,
+    /// Entités (celles du dossier `entities/` — cadres, tableaux, bêtes)
+    /// posées, et retirées de leur ancienne place par un déplacement.
+    pub mobiles_poses: u64,
+    pub mobiles_retires: u64,
+    /// Entités qu'on n'a PAS pu poser, et pourquoi : pas de terrain à
+    /// l'arrivée (un collage n'engendre pas de chunk), ou un chunk d'une autre
+    /// version du jeu. Rendues d'office, comme les block entities : une
+    /// entité laissée derrière ne doit pas être un événement silencieux.
+    pub mobiles_sans_terrain: u64,
+    pub mobiles_autre_version: u64,
     /// Sections dont les BIOMES ont changé.
     ///
     /// Compté en sections et pas en blocs, parce qu'un biome ne se pose pas
@@ -162,6 +174,10 @@ impl RapportRegion {
         self.bornes = unir(self.bornes, autre.bornes);
         self.entites_posees += autre.entites_posees;
         self.entites_retirees += autre.entites_retirees;
+        self.mobiles_poses += autre.mobiles_poses;
+        self.mobiles_retires += autre.mobiles_retires;
+        self.mobiles_sans_terrain += autre.mobiles_sans_terrain;
+        self.mobiles_autre_version += autre.mobiles_autre_version;
         self.biomes += autre.biomes;
     }
 }
@@ -334,7 +350,7 @@ pub fn verifier_materialisable(sel: &BBox, octets_par_case: u64) -> Result<u64, 
 /// plus, et si elle est validée telle quelle, la save aussi — jusqu'à ce que le
 /// jeu réécrive ces chunks à son propre niveau. C'est **le seul endroit** à
 /// changer pour en décider autrement.
-const NIVEAU_STAGING: u32 = 2;
+pub(crate) const NIVEAU_STAGING: u32 = 2;
 
 /// Ce qu'il y a à faire sur UN chunk : sa charge, telle qu'elle est sur disque.
 struct Travail {
@@ -717,7 +733,7 @@ fn unir(a: Option<BBox>, b: Option<BBox>) -> Option<BBox> {
 /// un monde Minefield la sélection peut faire des milliers de régions ; c'est
 /// le genre de coût qui ne se voit pas sur une fixture et qui rend l'outil
 /// inutilisable chez l'utilisateur.
-fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
+pub(crate) fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
     let (a, b) = (sel.min.chunk(), sel.max.chunk());
     let x0 = a.x.max(pos.x * 32);
     let x1 = b.x.min(pos.x * 32 + 31);
@@ -726,12 +742,8 @@ fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
     (z0..=z1).flat_map(move |z| (x0..=x1).map(move |x| ChunkPos::new(x, z)))
 }
 
-/// Applique un plan à une sélection, sur UNE région, à travers le staging.
-///
-/// Rend les correctifs à pousser dans le journal. Ne les pousse pas lui-même :
-/// une opération qui porte sur plusieurs régions doit faire UNE entrée de
-/// journal, pas une par région — sinon `Ctrl+Z` défait un tiers du travail.
-/// Copie une sélection dans un presse-papiers.
+/// Copie une sélection dans un presse-papiers — blocs, block entities ET
+/// entités.
 ///
 /// C'est `//copy`, et c'est la seule opération du crate qui n'écrit RIEN :
 /// elle lit la source à travers le staging et rend un extrait détaché. Le
@@ -747,7 +759,30 @@ fn chunks_de(sel: &BBox, pos: RegionPos) -> impl Iterator<Item = ChunkPos> {
 /// **Une charge illisible, en revanche, est une ERREUR.** La confondre avec de
 /// l'air ferait coller un trou à la place d'un mur, en silence — c'est le
 /// piège `cold_read` de l'étage bloc, sous une autre forme.
+///
+/// **Les entités du dossier `entities/` viennent avec** — cadres, tableaux,
+/// porte-armures, bêtes — quand on copie des BLOCS (`Folder::Region`) : c'est
+/// là qu'elles sont ancrées. Voir `mobiles.rs`.
 pub fn copier<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+    interner: &mut Interner,
+) -> Result<Presse, Erreur> {
+    let mut presse = copier_blocs(staging, dim, folder, sel, interner)?;
+    if folder == Folder::Region {
+        presse.mobiles = crate::mobiles::copier_mobiles(staging, dim, sel)?;
+    }
+    Ok(presse)
+}
+
+/// La grille et les block entities seules, SANS les entités.
+///
+/// Pour ce qui repose un extrait à sa propre place (`//hollow`) ou déplace les
+/// entités par son propre chemin (`//move`, qui doit les RETIRER de la source
+/// et garder leur `UUID`) : leur faire suivre le presse-papiers les doublerait.
+pub(crate) fn copier_blocs<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
     folder: Folder,
@@ -910,21 +945,46 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
 
     let mut touches = 0;
     for (dim, folder, pos) in ordre {
-        let bytes = staging.read_region(&dim, folder, pos)?;
-        let mut region = read(&bytes, pos.x, pos.z)?;
+        // Une région qui n'existe pas se lit VIDE : c'est l'état d'avant d'un
+        // correctif qui y crée le premier chunk — la première entité posée
+        // dans un `entities/r.X.Z.mca` qui n'existait pas.
+        let bytes = match staging.read_region(&dim, folder, pos) {
+            Ok(b) => Some(b),
+            Err(SourceError::NotFound) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let mut region = match &bytes {
+            Some(b) => read(b, pos.x, pos.z)?,
+            None => Region::vide(pos.x, pos.z),
+        };
+        let mut orphelins: Vec<String> = Vec::new();
         let mut n = 0;
         for p in patches
             .iter()
             .filter(|p| p.cible.dim == dim && p.cible.folder == folder && p.cible.region == pos)
         {
             let (lx, lz) = ((p.cible.chunk % 32) as i32, (p.cible.chunk / 32) as i32);
-            let Some(c) = region.get_mut(lx, lz) else {
-                return Err(Erreur::Divergence {
-                    region: pos,
-                    chunk: p.cible.chunk,
-                });
+            let (cx, cz) = (pos.x * 32 + lx, pos.z * 32 + lz);
+            // Un chunk ABSENT se lit comme vide, lui aussi : l'état d'avant
+            // d'une création, et l'état d'après de son annulation.
+            let courant = match region.get_mut(lx, lz) {
+                Some(c) => {
+                    // Une charge déportée arrive VIDE. Sans la résoudre,
+                    // l'empreinte ne correspondait jamais et l'annulation d'un
+                    // chunk de plus d'un mégaoctet refusait de se faire.
+                    if c.needs_external() {
+                        let charge =
+                            staging.read_external(&dim, folder, &external_file_name(cx, cz))?;
+                        c.resolve_external(charge);
+                    }
+                    if c.payload.is_empty() {
+                        Vec::new()
+                    } else {
+                        inflate(&c.payload, c.compression)?
+                    }
+                }
+                None => Vec::new(),
             };
-            let courant = inflate(&c.payload, c.compression)?;
             let attendu = match sens {
                 Sens::Annuler => p.apres_hash,
                 Sens::Refaire => p.avant_hash,
@@ -940,20 +1000,64 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
                 Sens::Refaire => p.refaire.clone(),
             };
             let neuf = splice(&courant, &mut edits)?;
-            // Le niveau de la copie de travail, pas celui par défaut : elle se
-            // réécrit à chaque action pendant que l'utilisateur attend, et
-            // s'optimise donc pour le TEMPS. Mesuré : 230 ms contre 550.
-            c.payload = Cow::Owned(deflate_level(&neuf, c.compression, NIVEAU_STAGING)?);
+            let index = p.cible.chunk as usize;
+            if neuf.is_empty() {
+                // Annuler une CRÉATION rend le chunk absent — pas une coquille
+                // vide que le jeu n'aurait jamais écrite. Sa charge déportée
+                // éventuelle part avec lui.
+                if region.slots[index].as_ref().is_some_and(|c| c.external) {
+                    orphelins.push(external_file_name(cx, cz));
+                }
+                region.slots[index] = None;
+            } else {
+                // Le niveau de la copie de travail, pas celui par défaut : elle
+                // se réécrit à chaque action pendant que l'utilisateur attend,
+                // et s'optimise donc pour le TEMPS. Mesuré : 230 ms contre 550.
+                match region.get_mut(lx, lz) {
+                    Some(c) => {
+                        c.payload = Cow::Owned(deflate_level(&neuf, c.compression, NIVEAU_STAGING)?)
+                    }
+                    None => {
+                        region.slots[index] = Some(RawChunk {
+                            index: index as u16,
+                            timestamp: 0,
+                            compression: Compression::Zlib,
+                            payload: Cow::Owned(deflate_level(
+                                &neuf,
+                                Compression::Zlib,
+                                NIVEAU_STAGING,
+                            )?),
+                            external: false,
+                        })
+                    }
+                }
+            }
             n += 1;
         }
         if n > 0 {
-            staging.write_region(&dim, folder, pos, &write(&region)?.region)?;
+            // Les charges déportées, écrites et retirées comme le fait
+            // `appliquer_region` : un chunk qui repasse au-delà d'un mégaoctet
+            // en rejouant part en `.mcc`, et n'écrire que la région laisserait
+            // un talon qui désigne un fichier absent — le chunk perdu.
+            let out = write(&region)?;
+            staging.write_region(&dim, folder, pos, &out.region)?;
+            for f in out.external {
+                staging.write_external(&dim, folder, &f.name, &f.bytes)?;
+            }
+            for nom in out.removed_external.into_iter().chain(orphelins) {
+                staging.remove_external(&dim, folder, &nom)?;
+            }
             touches += n;
         }
     }
     Ok(touches)
 }
 
+/// Applique un plan à une sélection, sur UNE région, à travers le staging.
+///
+/// Rend les correctifs à pousser dans le journal. Ne les pousse pas lui-même :
+/// une opération qui porte sur plusieurs régions doit faire UNE entrée de
+/// journal, pas une par région — sinon `Ctrl+Z` défait un tiers du travail.
 pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
@@ -1136,7 +1240,7 @@ const REGIONS_AVANT_DE_DEMANDER: u64 = 1024;
 /// que là — un build vierge matérialisé, une région déjà écrite par une
 /// opération précédente — serait invisible à la carte de la source seule, et
 /// l'opération sauterait précisément ce qu'on vient de créer.
-fn regions_a_visiter<S: RegionSource, O: RegionStore>(
+pub(crate) fn regions_a_visiter<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
     folder: Folder,
@@ -1196,6 +1300,11 @@ pub struct Pas {
 ///
 /// Les block entities suivent : le collage les repose, et l'effacement retire
 /// celles dont la case a changé d'état. Un coffre déplacé garde son contenu.
+///
+/// Les ENTITÉS suivent par leur propre chemin (`deplacer_mobiles`) : elles
+/// quittent leur chunk et gardent leur `UUID`, parce que c'est la même entité.
+/// Passer par le presse-papiers les aurait COPIÉES — l'original restait, et la
+/// copie changeait d'identité.
 pub fn deplacer<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
@@ -1209,7 +1318,7 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
     remplissage: StateId,
     interner: &mut Interner,
 ) -> Result<RapportRegion, Erreur> {
-    let presse = copier(staging, dim, folder, sel, interner)?;
+    let presse = copier_blocs(staging, dim, folder, sel, interner)?;
     let mut total = RapportRegion::default();
 
     let efface = crate::plan::Plan::nouveau(crate::Masque::Tout, crate::Motif::Bloc(remplissage));
@@ -1222,6 +1331,9 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
     total.absorber(coller(
         staging, dim, folder, &presse, sel.min, pas, interner,
     )?);
+    if folder == Folder::Region {
+        total.absorber(crate::mobiles::deplacer_mobiles(staging, dim, sel, pas.d)?);
+    }
     Ok(total)
 }
 
@@ -1262,7 +1374,10 @@ pub fn empiler<S: RegionSource, O: RegionStore>(
 ///
 /// Une opération ne paie que sa PORTÉE : la sélection passée à `appliquer` est
 /// celle de l'extrait posé, jamais celle d'où il vient.
-fn coller<S: RegionSource, O: RegionStore>(
+///
+/// Les entités de l'extrait suivent, avec des `UUID` NEUFS : l'original reste
+/// où il est, la copie est une autre entité (`mobiles::poser_mobiles`).
+pub fn coller<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
     folder: Folder,
@@ -1282,7 +1397,16 @@ fn coller<S: RegionSource, O: RegionStore>(
         air: pas.air,
         compter: pas.compter,
     };
-    appliquer(staging, dim, folder, &c.bornes(), &c, interner)
+    let mut rap = appliquer(staging, dim, folder, &c.bornes(), &c, interner)?;
+    if folder == Folder::Region && !presse.mobiles.is_empty() {
+        rap.absorber(crate::mobiles::poser_mobiles(
+            staging,
+            dim,
+            &presse.mobiles,
+            c.coin,
+        )?);
+    }
+    Ok(rap)
 }
 
 #[cfg(test)]

@@ -752,8 +752,8 @@ fn main() {
     // un nombre que l'autre a juste.
     if let Some([tx, ty, tz]) = cr.extrait {
         println!(
-            "extrait : {tx} × {ty} × {tz} · {} block entities",
-            cr.entites_copiees
+            "extrait : {tx} × {ty} × {tz} · {} block entities · {} entité(s)",
+            cr.entites_copiees, cr.mobiles_copies
         );
     }
     if cr.cases_materialisees > 0 {
@@ -809,6 +809,30 @@ fn main() {
             "block entities : {} posée(s) · {} retirée(s) (leur bloc a disparu)",
             rap.entites_posees, rap.entites_retirees
         );
+    }
+    if rap.mobiles_poses > 0 || rap.mobiles_retires > 0 {
+        println!(
+            "entités : {} posée(s) · {} retirée(s) de leur ancienne place",
+            rap.mobiles_poses, rap.mobiles_retires
+        );
+    }
+    // Une entité laissée derrière ne doit pas être un événement silencieux.
+    if rap.mobiles_sans_terrain > 0 {
+        println!(
+            "ATTENTION : {} entité(s) laissée(s) à leur place — pas de terrain \
+             généré à l'arrivée",
+            rap.mobiles_sans_terrain
+        );
+    }
+    if rap.mobiles_autre_version > 0 {
+        println!(
+            "ATTENTION : {} entité(s) laissée(s) à leur place — le chunk d'arrivée \
+             a été écrit par une autre version du jeu",
+            rap.mobiles_autre_version
+        );
+    }
+    for a in &cr.approches {
+        println!("approché : {} — {}", a.id, a.raison);
     }
     if rap.biomes > 0 {
         println!(

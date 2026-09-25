@@ -24,7 +24,8 @@
 use crate::catalogue::{Composee, Travail};
 use crate::creuser::{creuser, extrait_creuse};
 use crate::edition::{
-    appliquer, copier, deplacer, empiler, Erreur, Pas, RapportRegion, OCTETS_CREUSAGE,
+    appliquer, coller, copier, copier_blocs, deplacer, empiler, Erreur, Pas, RapportRegion,
+    OCTETS_CREUSAGE,
 };
 use crate::forme::Forme;
 use crate::masque::Masque;
@@ -90,6 +91,10 @@ pub struct CompteRendu {
     /// La taille de l'extrait, quand l'opération en a copié un.
     pub extrait: Option<[u32; 3]>,
     pub entites_copiees: usize,
+    /// Les ENTITÉS copiées — cadres, tableaux, bêtes.
+    pub mobiles_copies: usize,
+    /// Ce que la transformation des entités n'a pas su porter exactement.
+    pub approches: Vec<crate::mobiles::Approche>,
     /// Les états qu'une rotation n'a pas su réécrire, laissés TELS QUELS.
     ///
     /// **Rendus plutôt que tus** : à moitié tourné, un build est faux d'une
@@ -238,27 +243,26 @@ pub fn executer<S: RegionSource, O: RegionStore>(
             let mut p = copier(staging, dim, folder, sel, interner)?;
             cr.extrait = Some(p.taille);
             cr.entites_copiees = p.entites.len();
+            cr.mobiles_copies = p.mobiles.len();
             if let Some(t) = transfo {
                 cr.sans_regle = opts.regle.is_none();
                 let r = p.transformer(*t, interner, &|cle, t| opts.regle.and_then(|f| f(cle, t)));
                 cr.intacts = r.intacts;
+                cr.approches = r.approches;
                 p = r.presse;
             }
-            let collage = Collage {
-                presse: &p,
-                coin: BlockPos {
-                    x: sel.min.x + decalage[0],
-                    y: sel.min.y + decalage[1],
-                    z: sel.min.z + decalage[2],
-                },
-                avec_air: opts.avec_air,
-                air,
-                compter: opts.compter,
-            };
-            // Une opération ne paie que sa PORTÉE : un collage paie son
-            // extrait, pas la sélection d'où il vient.
-            let portee = collage.bornes();
-            cr.rapport = appliquer(staging, dim, folder, &portee, &collage, interner)?;
+            // `coller` et non un `Collage` nu : c'est lui qui pose AUSSI les
+            // entités de l'extrait. Un collage monté ici les aurait perdues
+            // en route — la jonction s'écrit une fois.
+            cr.rapport = coller(
+                staging,
+                dim,
+                folder,
+                &p,
+                sel.min,
+                pas(*decalage, opts, air),
+                interner,
+            )?;
         }
         Composee::Creuser { epaisseur } => {
             // Le creusage a son PROPRE appétit — la copie, les quatre tampons
@@ -267,7 +271,10 @@ pub fn executer<S: RegionSource, O: RegionStore>(
             // refusée ABANDONNE le processus au lieu de rendre une erreur.
             cr.cases_materialisees =
                 crate::edition::verifier_materialisable(sel, OCTETS_CREUSAGE)? * OCTETS_CREUSAGE;
-            let p = copier(staging, dim, folder, sel, interner)?;
+            // Les blocs SEULS : l'extrait creusé se repose à sa propre place,
+            // et des entités qui le suivraient seraient reposées par-dessus
+            // elles-mêmes avec d'autres `UUID` — des doublons.
+            let p = copier_blocs(staging, dim, folder, sel, interner)?;
             cr.extrait = Some(p.taille);
             let solide = Masque::Non(Box::new(Masque::Etat(air)));
             let c = creuser(&p, &solide, (*epaisseur).max(1));

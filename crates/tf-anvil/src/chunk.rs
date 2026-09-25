@@ -887,7 +887,7 @@ pub fn section_edits(
 /// Il stocke les octets d'avant ET d'après ; les resserrer divise sa taille par
 /// le même facteur, et une annulation se paie alors pour ce qu'une opération a
 /// écrit, pas pour ce qu'elle a survolé.
-fn trim_edit(inflated: &[u8], e: &mut Edit) -> bool {
+pub(crate) fn trim_edit(inflated: &[u8], e: &mut Edit) -> bool {
     let ancien = &inflated[e.span.start..e.span.end];
     if ancien == e.bytes.as_slice() {
         return false;

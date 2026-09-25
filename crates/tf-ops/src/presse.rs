@@ -23,7 +23,10 @@
 //! moitié tournée, l'autre non, et rien à l'écran pour le dire.
 
 use tf_anvil::entites::Entite;
+use tf_anvil::mobiles::Mobile;
 use tf_anvil::{Interner, StateId};
+
+use crate::mobiles::Approche;
 use tf_blocks::Transfo;
 
 /// Un extrait de monde, en coordonnées LOCALES.
@@ -31,7 +34,7 @@ use tf_blocks::Transfo;
 /// Les cases sont rangées en **YZX**, comme partout ailleurs dans le dépôt :
 /// `i = (y × sz + z) × sx + x`. Une seconde convention d'ordre ici ferait
 /// sortir les builds en miroir un jour sur deux.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Presse {
     /// Dimensions en blocs, dans l'ordre X, Y, Z.
     pub taille: [u32; 3],
@@ -52,10 +55,13 @@ pub struct Presse {
     /// avec ses propres coordonnées. Les oublier fait qu'un build pivoté
     /// abandonne ses coffres, et rien ne le signale avant qu'on en ouvre un.
     pub entites: Vec<Entite>,
+    /// Les ENTITÉS de l'extrait — cadres, tableaux, porte-armures, bêtes —
+    /// elles aussi en LOCAL : position continue relative au même coin.
+    pub mobiles: Vec<Mobile>,
 }
 
 /// Ce qu'une transformation a produit, et ce qu'elle n'a pas su faire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Transforme {
     pub presse: Presse,
     /// Les états que la règle n'a pas su transformer, laissés TELS QUELS.
@@ -63,6 +69,9 @@ pub struct Transforme {
     /// Rendus plutôt que tus : à moitié tourné, un build est faux d'une façon
     /// qu'aucune capture d'écran ne montre.
     pub intacts: Vec<StateId>,
+    /// Ce que la transformation des ENTITÉS n'a pas su porter exactement —
+    /// une pose de porte-armure sous miroir, un tableau de mod. Même raison.
+    pub approches: Vec<Approche>,
 }
 
 impl Presse {
@@ -73,6 +82,7 @@ impl Presse {
             taille,
             ancre: [0, 0, 0],
             entites: Vec::new(),
+            mobiles: Vec::new(),
         }
     }
 
@@ -171,14 +181,28 @@ impl Presse {
             })
             .collect();
 
+        // ── 4. les entités
+        //
+        // Elles, si : leur position est continue, leur lacet tourne, un cadre
+        // change de face et un tableau de mur. Ce qui ne se transforme pas
+        // exactement est NOMMÉ, jamais deviné.
+        let mut approches = Vec::new();
+        let mobiles = self
+            .mobiles
+            .iter()
+            .map(|m| crate::mobiles::transformer_mobile(m, t, self.taille, &mut approches))
+            .collect();
+
         Transforme {
             presse: Presse {
                 taille,
                 blocs,
                 ancre: t.point_apres(self.ancre, self.taille),
                 entites,
+                mobiles,
             },
             intacts,
+            approches,
         }
     }
 }

@@ -326,6 +326,19 @@ pub fn write(region: &Region<'_>) -> Result<WriteOutput, WriteError> {
 }
 
 impl<'a> Region<'a> {
+    /// Une région sans aucun chunk — celle d'un fichier qui n'existe pas.
+    ///
+    /// Un dossier `entities/` ne porte un `.mca` que là où il y a des
+    /// entités : y poser la première, c'est partir de rien.
+    pub fn vide(region_x: i32, region_z: i32) -> Region<'a> {
+        Region {
+            region_x,
+            region_z,
+            slots: vec![None; CHUNKS],
+            illisibles: 0,
+        }
+    }
+
     pub fn get(&self, local_x: i32, local_z: i32) -> Option<&RawChunk<'a>> {
         if !(0..32).contains(&local_x) || !(0..32).contains(&local_z) {
             return None;

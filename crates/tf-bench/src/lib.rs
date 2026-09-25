@@ -16,6 +16,7 @@
 
 pub mod build;
 pub mod catalogue;
+pub mod mobiles;
 
 pub use build::Build;
 pub use catalogue::{Forme, BLOCS};

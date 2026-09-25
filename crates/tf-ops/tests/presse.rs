@@ -50,6 +50,7 @@ fn extrait(interner: &mut Interner) -> Presse {
         blocs,
         ancre: [0, 0, 0],
         entites: Vec::new(),
+        mobiles: Vec::new(),
     }
 }
 
@@ -161,6 +162,7 @@ fn un_etat_inconnu_reste_intact_et_est_signale() {
         blocs: vec![connu, mystere],
         ancre: [0, 0, 0],
         entites: Vec::new(),
+        mobiles: Vec::new(),
     };
     let r = p.transformer(Transfo::Rot90, &mut i, &regle_jouet);
     assert_eq!(r.intacts, vec![mystere], "l'état inconnu doit être nommé");
@@ -193,6 +195,7 @@ fn la_regle_n_est_appelee_qu_une_fois_par_etat() {
         blocs,
         ancre: [0, 0, 0],
         entites: Vec::new(),
+        mobiles: Vec::new(),
     };
     let appels = RefCell::new(0usize);
     let r = p.transformer(Transfo::Rot90, &mut i, &|cle, t| {

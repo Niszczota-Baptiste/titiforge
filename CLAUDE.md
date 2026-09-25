@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (872 tests aujourd’hui)
+cargo test            # tous les crates (906 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -262,6 +262,9 @@ cargo run --release -p tf-blocks --example deriver -- ../titisite/public/codex
 # dilue tout), --mailler maille pour de vrai ce qui a été relevé.
 cargo run --release -p tf-assets --example recenser_monde -- D:\monde ../titisite/public/codex
 cargo run --release -p tf-assets --example recenser_monde -- D:\monde ../titisite/public/codex --zone "4,7,10,12" --mailler
+# les ENTITÉS d'un vrai monde, et ce que le moteur en ferait (rotation + miroir)
+cargo run --release -p tf-ops --example recenser_entites -- D:\monde
+cargo run --release -p tf-ops --example recenser_entites -- D:\monde --zone "4,7,10,12"
 # les deux invariants porteurs, sur des fichiers que MINECRAFT a écrits
 cargo run --release -p tf-ops --example verite_terrain -- D:\monde minecraft:dirt
 
@@ -343,7 +346,7 @@ rejoue chaque chiffre**. C'est là qu'on regarde avant de dire « c'est rapide �
 crates/
   tf-nbt/      lecteur zéro-copie CIBLÉ, écrivain  ✅ phase 0
   tf-anvil/    .mca lecture/écriture, splice lossless, 1.13→1.21, .mcc ✅
-               block entities ✅ · biomes 1.18+ ✅
+               block entities ✅ · entités (`entities/`) ✅ · biomes 1.18+ ✅
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
@@ -358,6 +361,9 @@ crates/
                journal sur la copie de travail (annuler / refaire)
                jonction rapport → entrée de journal ✅
                presse-papiers ✅ · rotation/miroir ✅ · block entities ✅
+               ENTITÉS ✅ : cadres, tableaux, bêtes suivent copie, rotation,
+               déplacement ; nouveaux UUID pour une copie, les mêmes pour un
+               déplacement ; ce qui ne se transforme pas est NOMMÉ
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
                //naturalize ✅ · //setbiome ✅ · //smooth ✅ · //hollow ✅
   tf-formats/  .schem · .schematic · .litematic · .nbt
@@ -419,6 +425,8 @@ couvriront le même terrain.
 | Un OUTIL de Conception | `Outil` (`tf-app/src/etat.rs`) : sa variante, son `nom`, sa `legende`, et son cas dans le `match` du clic (`coque.rs`). Un test exige que chaque outil dise ce que font les DEUX boutons |
 | Un tampon que la scène GPU TIENT | un `Tampon` dans `Scene` (`tf-render/src/scene.rs`), rempli par `Scene::envoyer` depuis les plages sales de l'arène — jamais une reconstruction. Un tampon lu par `arrayLength` se lie à sa taille EXACTE, et sa liaison se refait quand son nombre change, pas seulement quand il grandit |
 | Une chose que la scène TIENT en mémoire | son terme dans `Ouvert::peser` (`tf-app/src/scene.rs`) ET dans `octets_residents`, jamais dans l'un seul : c'est leur ÉGALITÉ qu'un test vérifie à l'octet près, et une comptabilité qui ne se compare à rien est une comptabilité qu'on peut tenir en se trompant |
+| Une case dont une ENTITÉ se souvient (lit, ruche, laisse…) | les tables de `tf-anvil/src/mobiles.rs` (`TRIPLETS`, `COMPOUNDS_CASE`, `TABLEAUX_CASE`) — par son NOM et sa forme exacte, jamais devinée sur l'allure d'un `{X, Y, Z}` — et un cas dans `tf-ops/tests/mobiles.rs`. Elle ne suivra que si le bloc qu'elle désigne suit |
+| Un type d'entité ORIENTÉ (`Facing` qu'on sait lire) | `genre` dans `tf-ops/src/mobiles.rs`. Sans ça, son orientation reste telle quelle et elle est annoncée APPROCHÉE — jamais devinée |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -1997,3 +2005,34 @@ propres à ce dépôt.
   par ses propres mécanismes de chargement (`isLightOn` à 0, `Heightmaps`
   retiré), sur les seuls chunks dont les BLOCS changent. Le journal enregistre
   ces éditions avec les autres : annuler rend aussi l'éclairage d'origine.
+- **Une copie qui garde l'`UUID` de l'original en perd UN des deux.** Le jeu
+  jette au chargement toute entité dont l'`UUID` existe déjà, avec un simple
+  avertissement dans son journal — donc l'original OU la copie, selon celui
+  des deux chunks qui se charge en second. Une copie reçoit un `UUID` neuf,
+  haché sur l'ancien et la position d'arrivée (rejouable, et deux collages
+  identiques rendent les mêmes, que la pose remplace) ; un déplacement garde
+  le sien, c'est la même entité.
+- **Une entité accrochée suit le bloc qui la PORTE, pas la case où elle
+  flotte.** Un cadre sur la face extérieure d'un mur occupe la case d'à côté,
+  hors du bâtiment — parfois dans le chunk d'à côté. Choisir par la position
+  laissait tous les cadres de façade derrière un mur déplacé ; d'où aussi une
+  lecture qui déborde d'un bloc. Même règle, un cran plus loin, pour ce dont
+  une entité se SOUVIENT : un lit suit s'il est dans la sélection, un poste de
+  travail resté dans l'atelier d'en face non.
+- **Le jeu n'écrit pas de chunk d'entités VIDE : il le supprime.** Poser la
+  première entité d'un chunk, c'est en CRÉER un — et l'annuler doit le faire
+  disparaître, pas laisser une coquille. Le journal ne savait parler que de
+  chunks existants ; un chunk absent se lit maintenant comme un tampon vide,
+  dans les deux sens.
+- **Le rejeu était le seul chemin d'écriture qui ignorait les `.mcc`.**
+  Trouvé en lui apprenant à créer des chunks : il ne résolvait pas le talon
+  d'une charge déportée (l'annulation d'un chunk de plus d'un mégaoctet
+  échouait) et n'écrivait pas le `.mcc` d'un chunk qui repassait au-delà (un
+  talon vers un fichier absent : le chunk perdu). Chaque chemin qui écrit une
+  région doit porter les deux moitiés ; un chemin de plus est un endroit de
+  plus où l'oublier.
+- **Une table indexée par la clé qui devrait être unique avale le doublon
+  qu'on cherche.** Le test du déplacement relisait les entités dans une table
+  par `UUID` : un déplacement qui aurait oublié de retirer l'original passait,
+  la copie écrasant l'original DANS LA TABLE. Trouvé par mutation. On compte
+  les vues, puis les clés, et on exige l'égalité des deux.

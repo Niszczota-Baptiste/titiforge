@@ -19,6 +19,10 @@ parallele = ["dep:rayon"]
 
 [dev-dependencies]
 tf-bench = { path = "../tf-bench" }
+# Pour relire ce que la pose écrit avec le décodeur GELÉ de `tf-anvil` : un
+# test qui relirait avec le balayage du moteur ne prouverait que son accord
+# avec lui-même.
+flate2.workspace = true
 # Pour le seul exemple `editer` : les règles de rotation se DÉRIVENT d'un pack,
 # elles ne sont pas écrites. Le crate n'en dépend pas — une opération reçoit sa
 # règle par injection, ce qui la laisse testable sans pack.

@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **872**, zéro échec |
+| Tests | **906**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-872 tests, répartis par ce qu'ils PROUVENT :
+906 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -50,11 +50,13 @@ cargo test --workspace
 | `tf-anvil` region/section/lossless/versions/external/robustesse | 104 | round-trip octet pour octet, 1.13→1.21, `.mcc` ; que les DEUX dispositions se font rééclairer par le jeu (`isLightOn`, `Heightmaps`, à la racine comme sous `Level`) ; et qu'un emplacement qui pointe hors du fichier est laissé vide ET COMPTÉ |
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
+| `tf-anvil` mobiles | 7 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 120 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 65 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
+| `tf-ops` mobiles | 27 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
 | `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
 | `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
@@ -411,6 +413,67 @@ Deux règles tiennent ce zéro, et chacune a coûté une faute :
 - **le retrait se déduit de la CASE, jamais de la boîte.** Une entité dont la
   case a changé d'état part avec son bloc ; juger sur les `bornes` de
   l'opération détruirait le coffre qu'un `//replace` n'a pas touché.
+
+### Les entités suivent les builds — cadres, tableaux, bêtes
+
+```bash
+cargo run --release -q -p tf-ops --example semer  -- /tmp/monde-essai 1
+cargo run --release -q -p tf-ops --example recenser_entites -- /tmp/monde-essai
+cargo run --release -q -p tf-ops --example editer -- /tmp/monde-essai --sel "0,-40,0,15,-20,15" --copier-vers "32,0,0" --tourner 90
+cargo run --release -q -p tf-ops --example editer -- /tmp/monde-essai --sel "0,-40,0,15,-20,15" --deplacer "32,0,0"
+```
+
+Depuis 1.17 les entités vivent dans `entities/`, un dossier que rien ne relie
+aux blocs. Même principe que les coffres : une entité voyage par ses OCTETS,
+et seuls les champs qui la SITUENT sont réécrits, à taille fixe et en place —
+`Pos`, `Rotation`, `Motion`, `UUID`, la case et la face d'un cadre ou d'un
+tableau, la rotation de l'objet d'un cadre, et les cases dont elle se
+SOUVIENT (lit, ruche, laisse nouée, poste de travail). Une table nommée, pas
+une heuristique : un `{X, Y, Z}` qu'on ne nomme pas n'est pas une position.
+
+```text
+extrait : 16 × 21 × 16 · 2 block entities · 5 entité(s)
+entités : 5 posée(s) · 5 retirée(s) de leur ancienne place           ← //move
+ATTENTION : 5 entité(s) laissée(s) à leur place — pas de terrain généré à l'arrivée
+```
+
+Quatre règles, chacune pour une perte qu'on paierait sinon :
+
+- **une copie reçoit de NOUVEAUX `UUID`**, un déplacement garde les siens.
+  Le jeu jette au chargement une entité dont l'`UUID` existe déjà : une copie
+  à l'identique ferait disparaître l'original OU la copie, au hasard du
+  chargement ;
+- **le nouvel `UUID` se hache sur l'ancien et la position d'arrivée** : deux
+  collages au même endroit rendent les mêmes entités, que la pose REMPLACE —
+  zéro correctif au second ;
+- **une entité accrochée suit le bloc qui la PORTE.** Un cadre sur la face
+  extérieure d'un mur occupe une case hors du bâtiment ;
+- **une entité qu'on ne peut pas poser reste où elle est** — pas de terrain à
+  l'arrivée, ou un chunk écrit par une autre version du jeu — et le compte
+  rendu le dit. Un chunk d'entités qui n'existait pas naît de ce qu'on y pose,
+  et l'annuler le fait DISPARAÎTRE, pas une coquille vide.
+
+Chemin faisant, **le rejeu d'une entrée de journal ignorait les charges
+déportées** — le seul chemin d'écriture du dépôt à le faire. Annuler une
+opération sur un chunk de plus d'un mégaoctet (une ferme à objets suffit dans
+`entities/`) échouait sur une empreinte fausse, et refaire une opération qui
+y faisait repasser un chunk n'écrivait pas son `.mcc` : un talon qui désigne un
+fichier absent, donc le chunk perdu. Corrigé et tenu par un test.
+
+Ce que le moteur ne sait pas porter exactement est **nommé** : la pose d'un
+porte-armure sous miroir, un tableau de mod dont la largeur est inconnue, une
+orientation d'un type qu'on ne sait pas lire. `recenser_entites` compte ces
+cas sur une vraie save en faisant passer chaque entité par le code même des
+opérations.
+
+35 mutations : 34 tuées, et la 35ᵉ a survécu parce qu'elle avait raison —
+normaliser `−0,0` ne servait à rien, quatre quarts de tour y ramènent seuls.
+La ligne est partie, et le commentaire qui la justifiait était faux. Une autre
+n'était tuée que par un test voisin : celui du déplacement indexait les
+entités par `UUID`, et une table indexée par la clé qui devrait être unique
+AVALE le doublon qu'on cherche — un original oublié derrière sa copie. Il
+compte maintenant les vues. Trois mutations recréent enfin les défauts
+préexistants du rejeu (ci-dessous) : toutes trois meurent.
 
 ---
 
@@ -870,6 +933,12 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
 | **L'éclairage après une édition n'a jamais été vu EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) : c'est son propre mécanisme de chargement, mais personne ne l'a encore regardé dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
+| **Le suivi des entités n'a jamais été vu EN JEU** | tout est vérifié contre le FORMAT et contre les formules du jeu (placement d'un tableau, dessin d'un cadre), relu par un décodeur indépendant — mais personne n'a encore ouvert une partie après un `--copier-vers --tourner 90`. La règle la plus fragile est celle de l'objet d'un cadre AU SOL ou au PLAFOND, dérivée du code de rendu |
+| **Ce qu'un vrai build Minefield porte comme entités n'est pas mesuré** | pas de vraie save dans l'environnement de travail. `recenser_entites` le dit en une commande : types, cadres au sol tournés, et ce que le moteur annoncerait comme approché |
+| **Les entités d'avant 1.17 ne suivent pas** | dans un monde converti, un chunk jamais rechargé depuis porte encore ses entités sous `Level.Entities`, dans la région de BLOCS. Elles restent à leur place |
+| **La pose d'un porte-armure n'est pas reflétée sous miroir** | annoncée comme approchée : il faudrait échanger bras et jambes gauches et droits, donc réécrire le compound au lieu de quelques octets |
+| **`//move` vers du terrain non généré efface la source** | préexistant, mis au jour par ce travail : un collage n'engendre pas de chunk, donc la source part et rien n'arrive — coffres compris. Les entités, elles, restent (et flottent). À refuser AVANT d'effacer |
+| **Les POI ne sont pas invalidés** | un lit ou un poste de travail déplacé reste inconnu à sa nouvelle place tant que le jeu fait confiance à `poi/` (`Valid` à 1) |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |

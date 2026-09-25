@@ -343,10 +343,26 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             return Reponse::Rien(label);
         }
         let n = cr.rapport.patches.len();
-        let blocs = match cr.rapport.blocs {
+        let mut blocs = match cr.rapport.blocs {
             Some(b) => format!("{b} blocs"),
             None => format!("{n} chunk(s)"),
         };
+        let r = &cr.rapport;
+        if r.mobiles_poses > 0 {
+            blocs.push_str(&format!(" · {} entité(s)", r.mobiles_poses));
+        }
+        // Une entité laissée derrière se DIT : elle flotte à l'ancienne place,
+        // et rien d'autre à l'écran ne l'expliquerait.
+        let laissees = r.mobiles_sans_terrain + r.mobiles_autre_version;
+        if laissees > 0 {
+            blocs.push_str(&format!(
+                " · {laissees} entité(s) laissée(s) (pas de terrain à l'arrivée, \
+                 ou chunk d'une autre version)"
+            ));
+        }
+        if !cr.approches.is_empty() {
+            blocs.push_str(&format!(" · {} entité(s) approchée(s)", cr.approches.len()));
+        }
         Reponse::Fait {
             op: label,
             resume: blocs,

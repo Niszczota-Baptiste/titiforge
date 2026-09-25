@@ -111,6 +111,19 @@ impl Dimension {
     }
 
     pub const VANILLA: [Dimension; 3] = [Dimension::Overworld, Dimension::Nether, Dimension::End];
+
+    /// L'identifiant que le JEU écrit dans ses données — `minecraft:overworld`
+    /// et non `Surface`. C'est lui qu'une position globale porte (le lit d'un
+    /// villageois, son poste de travail) : comparer au nom lisible ne
+    /// trouverait jamais rien.
+    pub fn id(&self) -> String {
+        match self {
+            Dimension::Overworld => "minecraft:overworld".to_string(),
+            Dimension::Nether => "minecraft:the_nether".to_string(),
+            Dimension::End => "minecraft:the_end".to_string(),
+            Dimension::Custom { namespace, path } => format!("{namespace}:{path}"),
+        }
+    }
 }
 
 impl fmt::Display for Dimension {
