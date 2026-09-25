@@ -17,6 +17,7 @@ pub mod codec;
 pub mod entites;
 pub mod format;
 pub mod mobiles;
+pub mod poi;
 pub mod region;
 pub mod section;
 pub mod state;

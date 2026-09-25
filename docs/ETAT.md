@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **910**, zéro échec |
+| Tests | **916**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-910 tests, répartis par ce qu'ils PROUVENT :
+916 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -57,6 +57,7 @@ cargo test --workspace
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 65 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
+| `tf-ops` poi | 6 | qu'une édition fait relire au jeu les POINTS D'INTÉRÊT de ses chunks — toutes leurs sections, et rien d'autre, pas même un `Valid` de mod glissé dans un enregistrement ; qu'un biome n'en fait relire aucun (sur un terrain qui PORTE des biomes, sans quoi le test ne prouvait rien) ; qu'une section déjà invalide ne salit rien ; et qu'annuler rend la table d'origine |
 | `tf-ops` deplacer | 9 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes ; qu'un `//move` vers du terrain jamais généré est REFUSÉ avant d'effacer quoi que ce soit — un chunk à charge vide compte comme absent — mais qu'un extrait bordé d'air peut déborder sur du vide |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
 | `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
@@ -945,12 +946,11 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
-| **L'éclairage après une édition n'a jamais été vu EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) : c'est son propre mécanisme de chargement, mais personne ne l'a encore regardé dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
+| **L'éclairage et les points d'intérêt après une édition n'ont jamais été vus EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) et de relire leurs points d'intérêt (`Valid` à 0 dans `poi/`) : ce sont ses propres mécanismes de chargement, mais personne ne les a encore regardés dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
 | **Le suivi des entités n'a jamais été vu EN JEU** | tout est vérifié contre le FORMAT et contre les formules du jeu (placement d'un tableau, dessin d'un cadre), relu par un décodeur indépendant — mais personne n'a encore ouvert une partie après un `--copier-vers --tourner 90`. La règle la plus fragile est celle de l'objet d'un cadre AU SOL ou au PLAFOND, dérivée du code de rendu |
 | **Ce qu'un vrai build Minefield porte comme entités n'est pas mesuré** | pas de vraie save dans l'environnement de travail. `recenser_entites` le dit en une commande : types, cadres au sol tournés, et ce que le moteur annoncerait comme approché |
 | **Les entités d'avant 1.17 ne suivent pas** | dans un monde converti, un chunk jamais rechargé depuis porte encore ses entités sous `Level.Entities`, dans la région de BLOCS. Elles restent à leur place |
 | **La pose d'un porte-armure n'est pas reflétée sous miroir** | annoncée comme approchée : il faudrait échanger bras et jambes gauches et droits, donc réécrire le compound au lieu de quelques octets |
-| **Les POI ne sont pas invalidés** | un lit ou un poste de travail déplacé reste inconnu à sa nouvelle place tant que le jeu fait confiance à `poi/` (`Valid` à 1) |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |

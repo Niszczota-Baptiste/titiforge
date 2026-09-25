@@ -76,6 +76,12 @@ pub struct RapportRegion {
     /// le piège d'`ExeWorldEdit` reproche au format.
     pub entites_posees: u64,
     pub entites_retirees: u64,
+    /// Les chunks dont les BLOCS ont changé — pas seulement un biome ou une
+    /// entité. C'est sur eux que le jeu doit refaire éclairage, cartes de
+    /// hauteur et points d'intérêt.
+    pub chunks_blocs: Vec<ChunkPos>,
+    /// Chunks de `poi/` que le jeu relira depuis leurs blocs (`Valid` à 0).
+    pub poi: u64,
     /// Entités (celles du dossier `entities/` — cadres, tableaux, bêtes)
     /// posées, et retirées de leur ancienne place par un déplacement.
     pub mobiles_poses: u64,
@@ -174,6 +180,8 @@ impl RapportRegion {
         self.bornes = unir(self.bornes, autre.bornes);
         self.entites_posees += autre.entites_posees;
         self.entites_retirees += autre.entites_retirees;
+        self.chunks_blocs.extend(autre.chunks_blocs);
+        self.poi += autre.poi;
         self.mobiles_poses += autre.mobiles_poses;
         self.mobiles_retires += autre.mobiles_retires;
         self.mobiles_sans_terrain += autre.mobiles_sans_terrain;
@@ -396,6 +404,8 @@ struct Fait {
     entites_posees: u64,
     entites_retirees: u64,
     biomes: u64,
+    /// Les BLOCS de ce chunk ont-ils changé ?
+    blocs_changes: bool,
 }
 
 /// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
@@ -429,6 +439,7 @@ fn un_chunk(
         entites_posees: 0,
         entites_retirees: 0,
         biomes: 0,
+        blocs_changes: false,
     };
     let mut edits = Vec::new();
 
@@ -543,6 +554,7 @@ fn un_chunk(
     // Les BLOCS ont-ils changé ? Seuls eux changent la lumière et les cartes
     // de hauteur — un biome ou une entité ne jettent pas d'ombre.
     let blocs_changes = !edits.is_empty();
+    fait.blocs_changes = blocs_changes;
 
     // ── Les biomes, quand l'opération les touche.
     //
@@ -1060,18 +1072,10 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
             n += 1;
         }
         if n > 0 {
-            // Les charges déportées, écrites et retirées comme le fait
-            // `appliquer_region` : un chunk qui repasse au-delà d'un mégaoctet
-            // en rejouant part en `.mcc`, et n'écrire que la région laisserait
-            // un talon qui désigne un fichier absent — le chunk perdu.
-            let out = write(&region)?;
-            staging.write_region(&dim, folder, pos, &out.region)?;
-            for f in out.external {
-                staging.write_external(&dim, folder, &f.name, &f.bytes)?;
-            }
-            for nom in out.removed_external.into_iter().chain(orphelins) {
-                staging.remove_external(&dim, folder, &nom)?;
-            }
+            // Par le chemin COMMUN : un chunk qui repasse au-delà d'un
+            // mégaoctet en rejouant part en `.mcc`, et n'écrire que la région
+            // laisserait un talon vers un fichier absent — le chunk perdu.
+            ecrire_region(staging, &dim, folder, pos, &region, orphelins)?;
             touches += n;
         }
     }
@@ -1185,6 +1189,12 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
         rap.entites_posees += f.entites_posees;
         rap.entites_retirees += f.entites_retirees;
         rap.biomes += f.biomes;
+        if f.blocs_changes {
+            rap.chunks_blocs.push(ChunkPos::new(
+                pos.x * 32 + (f.index % 32) as i32,
+                pos.z * 32 + (f.index / 32) as i32,
+            ));
+        }
         if let Some((patch, charge)) = f.ecrit {
             let (lx, lz) = ((f.index % 32) as i32, (f.index / 32) as i32);
             if let Some(brut) = region.get_mut(lx, lz) {
@@ -1195,20 +1205,42 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     }
 
     if !rap.patches.is_empty() {
-        let out = write(&region)?;
-        staging.write_region(dim, folder, pos, &out.region)?;
-        for f in out.external {
-            staging.write_external(dim, folder, &f.name, &f.bytes)?;
-        }
-        // Un `.mcc` devenu inutile qu'on laisserait occuperait le disque pour
-        // toujours — et une save qui grossit sans raison finit par être
-        // signalée comme un bug.
-        for n in out.removed_external {
-            staging.remove_external(dim, folder, &n)?;
-        }
+        ecrire_region(staging, dim, folder, pos, &region, Vec::new())?;
     }
     rap.blocs = compte;
     Ok(rap)
+}
+
+/// Écrit une région dans la copie de travail, **charges déportées comprises**.
+///
+/// Le SEUL chemin d'écriture d'une région — la jonction, le rejeu, les
+/// entités, les points d'intérêt y passent tous. Le rejeu avait le sien, qui
+/// n'écrivait pas les `.mcc` : un chunk qui repassait au-delà d'un mégaoctet
+/// y laissait un talon vers un fichier absent, donc un chunk perdu. Un chemin
+/// de plus est un endroit de plus où oublier une moitié.
+///
+/// `orphelins` : des `.mcc` à retirer en plus de ceux que `write` désigne —
+/// ceux des chunks SUPPRIMÉS, que `write` ne voit plus.
+pub(crate) fn ecrire_region<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    pos: RegionPos,
+    region: &Region<'_>,
+    orphelins: Vec<String>,
+) -> Result<(), Erreur> {
+    let out = write(region)?;
+    staging.write_region(dim, folder, pos, &out.region)?;
+    for f in out.external {
+        staging.write_external(dim, folder, &f.name, &f.bytes)?;
+    }
+    // Un `.mcc` devenu inutile qu'on laisserait occuperait le disque pour
+    // toujours — et une save qui grossit sans raison finit par être signalée
+    // comme un bug.
+    for n in out.removed_external.into_iter().chain(orphelins) {
+        staging.remove_external(dim, folder, &n)?;
+    }
+    Ok(())
 }
 
 /// Applique un plan à une sélection, sur TOUTES les régions qu'elle touche.
@@ -1231,6 +1263,17 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         total.absorber(appliquer_region(
             staging, dim, folder, pos, sel, op, interner,
         )?);
+    }
+    // ── Les points d'intérêt, que le JEU relira.
+    //
+    // Un lit ou un poste de travail qu'on déplace reste inconnu à sa nouvelle
+    // place tant que `poi/` dit ses sections à jour. Même principe que
+    // l'éclairage : on ne recalcule rien, on demande au jeu de le faire — sur
+    // les seuls chunks dont les blocs ont changé. Dans le journal avec le
+    // reste : annuler rend aussi la table d'origine.
+    if folder == Folder::Region && !total.chunks_blocs.is_empty() {
+        let chunks = total.chunks_blocs.clone();
+        total.absorber(crate::poi::invalider(staging, dim, &chunks)?);
     }
     Ok(total)
 }

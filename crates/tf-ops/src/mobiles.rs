@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tf_anvil::chunk::{splice, Edit};
 use tf_anvil::codec::{deflate_level, inflate};
 use tf_anvil::mobiles::{balayer_chunk, chunk_neuf, edition_mobiles, ChunkMobiles, Corps, Mobile};
-use tf_anvil::region::{external_file_name, read, write, Compression, RawChunk, Region};
+use tf_anvil::region::{external_file_name, read, Compression, RawChunk, Region};
 use tf_blocks::Transfo;
 use tf_nbt::Span;
 use tf_world::coords::{BBox, BlockPos, ChunkPos, RegionPos};
@@ -43,7 +43,9 @@ use tf_world::journal::{ChunkPatch, Cible};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
-use crate::edition::{chunks_de, regions_a_visiter, Erreur, RapportRegion, NIVEAU_STAGING};
+use crate::edition::{
+    chunks_de, ecrire_region, regions_a_visiter, Erreur, RapportRegion, NIVEAU_STAGING,
+};
 use crate::presse::TransfoBoite;
 
 // ── ce que les entités veulent dire ─────────────────────────────────────────
@@ -842,7 +844,7 @@ fn ecrire<S: RegionSource, O: RegionStore>(
             modifie = true;
         }
         if modifie {
-            ecrire_region(staging, dim, pos, &region)?;
+            ecrire_region(staging, dim, Folder::Entities, pos, &region, Vec::new())?;
         }
     }
     Ok(rap)
@@ -912,21 +914,4 @@ fn lire<S: RegionSource, O: RegionStore>(
         Err(SourceError::NotFound) => Ok(None),
         Err(e) => Err(e.into()),
     }
-}
-
-fn ecrire_region<S: RegionSource, O: RegionStore>(
-    staging: &Staging<S, O>,
-    dim: &Dimension,
-    pos: RegionPos,
-    region: &Region<'_>,
-) -> Result<(), Erreur> {
-    let out = write(region)?;
-    staging.write_region(dim, Folder::Entities, pos, &out.region)?;
-    for f in out.external {
-        staging.write_external(dim, Folder::Entities, &f.name, &f.bytes)?;
-    }
-    for n in out.removed_external {
-        staging.remove_external(dim, Folder::Entities, &n)?;
-    }
-    Ok(())
 }

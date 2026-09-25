@@ -17,6 +17,7 @@
 pub mod build;
 pub mod catalogue;
 pub mod mobiles;
+pub mod poi;
 
 pub use build::Build;
 pub use catalogue::{Forme, BLOCS};
@@ -392,6 +393,43 @@ pub fn region_en(t: &Terrain, rx: i32, rz: i32) -> Vec<u8> {
         }
     }
 
+    let mut out = Vec::with_capacity(8192 + body.len());
+    out.extend_from_slice(&locations);
+    out.extend_from_slice(&timestamps);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Un `.mca` fait de chunks DÉJÀ encodés — `(cx, cz, nbt inflaté)`, en
+/// coordonnées MONDE, tous dans la région `(rx, rz)`.
+///
+/// Écrit à la main, comme `region_en` : les fixtures n'empruntent pas
+/// l'écrivain qu'elles servent à vérifier.
+pub fn region_de_chunks(rx: i32, rz: i32, chunks: &[(i32, i32, Vec<u8>)]) -> Vec<u8> {
+    let mut locations = vec![0u8; 4096];
+    let mut timestamps = vec![0u8; 4096];
+    let mut body: Vec<u8> = Vec::new();
+    let mut next = 2u32;
+    for (cx, cz, nbt) in chunks {
+        assert_eq!(
+            (cx.div_euclid(32), cz.div_euclid(32)),
+            (rx, rz),
+            "chunk hors de sa région"
+        );
+        let payload = zlib(nbt);
+        let len = payload.len() + 1;
+        let total = 4 + len;
+        let secteurs = total.div_ceil(SECTOR);
+        body.extend_from_slice(&(len as u32).to_be_bytes());
+        body.push(2);
+        body.extend_from_slice(&payload);
+        body.resize(body.len() + (secteurs * SECTOR - total), 0);
+        let i = (cx.rem_euclid(32) + cz.rem_euclid(32) * 32) as usize;
+        let loc = (next << 8) | secteurs as u32;
+        locations[i * 4..i * 4 + 4].copy_from_slice(&loc.to_be_bytes());
+        timestamps[i * 4..i * 4 + 4].copy_from_slice(&1_700_000_000u32.to_be_bytes());
+        next += secteurs as u32;
+    }
     let mut out = Vec::with_capacity(8192 + body.len());
     out.extend_from_slice(&locations);
     out.extend_from_slice(&timestamps);

@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (910 tests aujourd’hui)
+cargo test            # tous les crates (916 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -2045,3 +2045,14 @@ propres à ce dépôt.
   écrivent autre chose que de l'air : un extrait bordé de vide doit pouvoir
   déborder au bord d'un monde. Un chunk à charge vide compte comme absent,
   puisque le collage le saute.
+- **Un lit déplacé restait inconnu du jeu.** `poi/` dit, section par
+  section, où sont les lits, postes de travail, cloches et ruches — et à
+  `Valid` = 1 le jeu lui fait CONFIANCE sans relire les blocs : un villageois
+  se couchait là où le lit n'était plus. Même remède que l'éclairage : on met
+  `Valid` à 0 sur les chunks dont les BLOCS changent, et le jeu refait la
+  table au chargement en gardant les tickets des enregistrements encore
+  justes. D'où `RapportRegion::chunks_blocs` — un biome ou une entité ne
+  déplacent aucun lit. Corollaire trouvé par mutation : le test « un biome ne
+  fait rien relire » tournait sur une fixture SANS biomes, donc son
+  `//setbiome` n'écrivait rien et la prémisse n'était jamais en jeu. Il exige
+  maintenant qu'un biome ait changé.

@@ -26,6 +26,7 @@ pub mod mobiles;
 pub mod motif;
 pub mod naturaliser;
 pub mod plan;
+pub mod poi;
 pub mod presse;
 pub mod relief;
 

@@ -810,6 +810,13 @@ fn main() {
             rap.entites_posees, rap.entites_retirees
         );
     }
+    if rap.poi > 0 {
+        println!(
+            "points d'intérêt : le jeu relira ceux de {} chunk(s) depuis leurs blocs \
+             (lits, postes de travail)",
+            rap.poi
+        );
+    }
     if rap.mobiles_poses > 0 || rap.mobiles_retires > 0 {
         println!(
             "entités : {} posée(s) · {} retirée(s) de leur ancienne place",

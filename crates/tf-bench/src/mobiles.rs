@@ -373,33 +373,9 @@ pub fn chunk_entites(dv: i32, cx: i32, cz: i32, occupants: &[Occupant]) -> Vec<u
 /// Un `.mca` d'entités : un chunk par entrée `(cx, cz, dv, occupants)`, en
 /// coordonnées MONDE, tous dans la région `(rx, rz)`.
 pub fn region_entites(rx: i32, rz: i32, chunks: &[(i32, i32, i32, Vec<Occupant>)]) -> Vec<u8> {
-    let mut locations = vec![0u8; 4096];
-    let mut timestamps = vec![0u8; 4096];
-    let mut body: Vec<u8> = Vec::new();
-    let mut next = 2u32;
-    for (cx, cz, dv, occ) in chunks {
-        assert_eq!(
-            (cx.div_euclid(32), cz.div_euclid(32)),
-            (rx, rz),
-            "chunk hors de sa région"
-        );
-        let payload = crate::zlib(&chunk_entites(*dv, *cx, *cz, occ));
-        let len = payload.len() + 1;
-        let total = 4 + len;
-        let secteurs = total.div_ceil(tf_anvil::SECTOR);
-        body.extend_from_slice(&(len as u32).to_be_bytes());
-        body.push(2);
-        body.extend_from_slice(&payload);
-        body.resize(body.len() + (secteurs * tf_anvil::SECTOR - total), 0);
-        let i = (cx.rem_euclid(32) + cz.rem_euclid(32) * 32) as usize;
-        let loc = (next << 8) | secteurs as u32;
-        locations[i * 4..i * 4 + 4].copy_from_slice(&loc.to_be_bytes());
-        timestamps[i * 4..i * 4 + 4].copy_from_slice(&1_700_000_000u32.to_be_bytes());
-        next += secteurs as u32;
-    }
-    let mut out = Vec::with_capacity(8192 + body.len());
-    out.extend_from_slice(&locations);
-    out.extend_from_slice(&timestamps);
-    out.extend_from_slice(&body);
-    out
+    let encodes: Vec<(i32, i32, Vec<u8>)> = chunks
+        .iter()
+        .map(|(cx, cz, dv, occ)| (*cx, *cz, chunk_entites(*dv, *cx, *cz, occ)))
+        .collect();
+    crate::region_de_chunks(rx, rz, &encodes)
 }
