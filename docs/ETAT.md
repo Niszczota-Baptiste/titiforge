@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **906**, zéro échec |
+| Tests | **910**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-906 tests, répartis par ce qu'ils PROUVENT :
+910 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -56,8 +56,8 @@ cargo test --workspace
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 65 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
-| `tf-ops` mobiles | 27 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
-| `tf-ops` deplacer | 6 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes |
+| `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
+| `tf-ops` deplacer | 9 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes ; qu'un `//move` vers du terrain jamais généré est REFUSÉ avant d'effacer quoi que ce soit — un chunk à charge vide compte comme absent — mais qu'un extrait bordé d'air peut déborder sur du vide |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
 | `tf-ops` relief | 10 | la carte de hauteurs, et l'unité qui traverse la frontière |
 | `tf-ops` naturaliser | 11 | la portée `Colonne`, et qu'une colonne n'a qu'UNE surface |
@@ -434,7 +434,6 @@ une heuristique : un `{X, Y, Z}` qu'on ne nomme pas n'est pas une position.
 ```text
 extrait : 16 × 21 × 16 · 2 block entities · 5 entité(s)
 entités : 5 posée(s) · 5 retirée(s) de leur ancienne place           ← //move
-ATTENTION : 5 entité(s) laissée(s) à leur place — pas de terrain généré à l'arrivée
 ```
 
 Quatre règles, chacune pour une perte qu'on paierait sinon :
@@ -459,6 +458,20 @@ opération sur un chunk de plus d'un mégaoctet (une ferme à objets suffit dans
 `entities/`) échouait sur une empreinte fausse, et refaire une opération qui
 y faisait repasser un chunk n'écrivait pas son `.mcc` : un talon qui désigne un
 fichier absent, donc le chunk perdu. Corrigé et tenu par un test.
+
+**Et un `//move` vers du terrain jamais généré perdait le build.** Mis au
+jour par ce travail, préexistant : la première passe efface la source, et un
+collage n'engendre pas de chunk — mesuré sur le monde d'essai, « 2 coffres
+retirés, 0 posé », et les entités laissées flottant à l'ancienne place. Le
+déplacement décide maintenant AVANT d'effacer, sur l'extrait déjà en mémoire,
+quels chunks d'arrivée recevraient autre chose que de l'air, et refuse
+l'opération entière si l'un manque :
+
+```text
+opération refusée : le déplacement arriverait dans 1 chunk(s) jamais générés
+(dont le chunk 250, 0 — blocs 4000, 0) : un collage n'engendre pas de terrain,
+et la source aurait été effacée pour rien. Rien n'a été écrit. […]
+```
 
 Ce que le moteur ne sait pas porter exactement est **nommé** : la pose d'un
 porte-armure sous miroir, un tableau de mod dont la largeur est inconnue, une
@@ -937,7 +950,6 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Ce qu'un vrai build Minefield porte comme entités n'est pas mesuré** | pas de vraie save dans l'environnement de travail. `recenser_entites` le dit en une commande : types, cadres au sol tournés, et ce que le moteur annoncerait comme approché |
 | **Les entités d'avant 1.17 ne suivent pas** | dans un monde converti, un chunk jamais rechargé depuis porte encore ses entités sous `Level.Entities`, dans la région de BLOCS. Elles restent à leur place |
 | **La pose d'un porte-armure n'est pas reflétée sous miroir** | annoncée comme approchée : il faudrait échanger bras et jambes gauches et droits, donc réécrire le compound au lieu de quelques octets |
-| **`//move` vers du terrain non généré efface la source** | préexistant, mis au jour par ce travail : un collage n'engendre pas de chunk, donc la source part et rien n'arrive — coffres compris. Les entités, elles, restent (et flottent). À refuser AVANT d'effacer |
 | **Les POI ne sont pas invalidés** | un lit ou un poste de travail déplacé reste inconnu à sa nouvelle place tant que le jeu fait confiance à `poi/` (`Valid` à 1) |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |

@@ -652,28 +652,43 @@ fn une_entite_qui_reste_dans_son_chunk_garde_sa_place_dans_la_liste() {
     );
 }
 
+/// Une COPIE vers du terrain jamais généré ne pose pas ses entités — elles
+/// apparaîtraient, le jour où le jeu générera ces chunks, debout dans une
+/// forêt qui n'a rien à voir — et le compte rendu le dit.
 #[test]
-fn sans_terrain_a_l_arrivee_une_entite_reste_a_sa_place() {
+fn sans_terrain_a_l_arrivee_une_copie_ne_pose_pas_ses_entites() {
     let st = monde();
-    let avant = par_uuid(&entites(&st));
+    let avant = contenu(&st);
     // La fixture de terrain ne va que jusqu'au chunk 15 : +320 tombe au-delà.
-    let cr = lancer(&st, "deplacer", &deplacer([320, 0, 0]), &sel());
+    let cr = lancer(&st, "copier-vers", &copier_vers([320, 0, 0], None), &sel());
     assert_eq!(cr.rapport.mobiles_sans_terrain, 7);
     assert_eq!(cr.rapport.mobiles_poses, 0);
-    assert_eq!(
-        cr.rapport.mobiles_retires, 0,
-        "rien n'est retiré sans arriver"
+    assert_eq!(contenu(&st), avant);
+}
+
+/// Un `//move` vers du terrain absent est refusé AVANT d'effacer : ni les
+/// blocs ni les entités ne bougent d'un octet.
+#[test]
+fn un_deplacement_refuse_ne_touche_pas_aux_entites() {
+    let st = monde();
+    let avant = contenu(&st);
+    let mut i = Interner::new();
+    let t = construire("deplacer", &deplacer([320, 0, 0]), &mut i).unwrap();
+    let r = executer(
+        &t,
+        &st,
+        &SURFACE,
+        Folder::Region,
+        &sel(),
+        &mut i,
+        &Options::default(),
     );
-    assert_eq!(
-        par_uuid(&entites(&st))
-            .into_iter()
-            .map(|(u, v)| (u, v.tag))
-            .collect::<Vec<_>>(),
-        avant
-            .into_iter()
-            .map(|(u, v)| (u, v.tag))
-            .collect::<Vec<_>>()
+    assert!(
+        matches!(r, Err(tf_ops::edition::Erreur::TerrainAbsent { .. })),
+        "{r:?}"
     );
+    assert_eq!(contenu(&st), avant);
+    assert!(st.is_clean());
 }
 
 #[test]

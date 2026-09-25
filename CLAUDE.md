@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (906 tests aujourd’hui)
+cargo test            # tous les crates (910 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -2036,3 +2036,12 @@ propres à ce dépôt.
   par `UUID` : un déplacement qui aurait oublié de retirer l'original passait,
   la copie écrasant l'original DANS LA TABLE. Trouvé par mutation. On compte
   les vues, puis les clés, et on exige l'égalité des deux.
+- **Une opération qui EFFACE puis colle doit savoir d'avance que tout peut
+  arriver.** `//move` efface la source, puis colle ; un collage n'engendre pas
+  de chunk. Vers du terrain jamais généré, le build disparaissait — mesuré sur
+  le monde d'essai, « 2 coffres retirés, 0 posé » — sans erreur, parce que
+  chaque passe avait raison séparément. La garde se décide sur l'extrait déjà
+  en mémoire, AVANT la première écriture, et ne compte que les colonnes qui
+  écrivent autre chose que de l'air : un extrait bordé de vide doit pouvoir
+  déborder au bord d'un monde. Un chunk à charge vide compte comme absent,
+  puisque le collage le saute.

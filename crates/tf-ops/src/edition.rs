@@ -219,6 +219,19 @@ pub enum Erreur {
         region: RegionPos,
         chunk: u16,
     },
+    /// Un `//move` arriverait dans du terrain JAMAIS généré.
+    ///
+    /// Un collage n'engendre pas de chunk — on ne sait pas générer le terrain
+    /// du jeu, et poser un build dans le vide d'un chunk inexistant ne
+    /// l'écrirait nulle part. Pour `//move`, dont la première passe EFFACE la
+    /// source, c'était une perte sèche : le build disparaissait, coffres
+    /// compris, et rien n'arrivait. Refusé AVANT la moindre écriture.
+    TerrainAbsent {
+        /// Combien de chunks d'arrivée manquent.
+        absents: usize,
+        /// Le premier d'entre eux, en coordonnées de chunk.
+        exemple: ChunkPos,
+    },
 }
 
 macro_rules! de {
@@ -255,6 +268,18 @@ impl std::fmt::Display for Erreur {
                 "le chunk {chunk} de la région r.{}.{} a changé depuis : \
                  l'annulation ne s'applique plus. Rien n'a été écrit",
                 region.x, region.z
+            ),
+            Erreur::TerrainAbsent { absents, exemple } => write!(
+                f,
+                "le déplacement arriverait dans {absents} chunk(s) jamais générés \
+                 (dont le chunk {}, {} — blocs {}, {}) : un collage n'engendre pas \
+                 de terrain, et la source aurait été effacée pour rien. Rien n'a été \
+                 écrit. Générer le terrain en jeu (y passer) avant de déplacer, ou \
+                 déplacer ailleurs",
+                exemple.x,
+                exemple.z,
+                exemple.x * 16,
+                exemple.z * 16
             ),
             Erreur::TropGros { octets, plafond } => write!(
                 f,
@@ -1319,6 +1344,33 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
     interner: &mut Interner,
 ) -> Result<RapportRegion, Erreur> {
     let presse = copier_blocs(staging, dim, folder, sel, interner)?;
+
+    // **Rien n'est effacé tant qu'on ne sait pas que tout peut arriver.** La
+    // première passe efface la source ; si le collage tombe ensuite dans un
+    // chunk jamais généré, il n'y écrit rien et le build est PERDU. On le
+    // décide ici, sur l'extrait déjà en mémoire, avant la moindre écriture.
+    // Seuls comptent les chunks qui recevraient autre chose que de l'air : un
+    // extrait bordé de vide peut déborder sur du terrain absent sans rien y
+    // perdre.
+    let arrivee = crate::presse::Collage {
+        presse: &presse,
+        coin: BlockPos {
+            x: sel.min.x + pas.d[0],
+            y: sel.min.y + pas.d[1],
+            z: sel.min.z + pas.d[2],
+        },
+        avec_air: pas.avec_air,
+        air: pas.air,
+        compter: false,
+    };
+    let absents = chunks_absents(staging, dim, folder, &arrivee.chunks_ecrits())?;
+    if let Some(&exemple) = absents.first() {
+        return Err(Erreur::TerrainAbsent {
+            absents: absents.len(),
+            exemple,
+        });
+    }
+
     let mut total = RapportRegion::default();
 
     let efface = crate::plan::Plan::nouveau(crate::Masque::Tout, crate::Motif::Bloc(remplissage));
@@ -1335,6 +1387,47 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
         total.absorber(crate::mobiles::deplacer_mobiles(staging, dim, sel, pas.d)?);
     }
     Ok(total)
+}
+
+/// Ceux de ces chunks qui n'existent pas, dans l'ordre (z, x).
+///
+/// Un chunk dont la charge est vide compte comme absent : `appliquer_region`
+/// le saute, donc un collage n'y écrirait rien non plus.
+fn chunks_absents<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    chunks: &std::collections::BTreeSet<ChunkPos>,
+) -> Result<Vec<ChunkPos>, Erreur> {
+    let mut par_region: std::collections::BTreeMap<RegionPos, Vec<ChunkPos>> =
+        std::collections::BTreeMap::new();
+    for c in chunks {
+        par_region.entry(c.region()).or_default().push(*c);
+    }
+    let mut absents = Vec::new();
+    for (pos, cs) in par_region {
+        let octets = match staging.read_region(dim, folder, pos) {
+            Ok(b) => Some(b),
+            Err(SourceError::NotFound) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let region = match &octets {
+            Some(b) => Some(read(b, pos.x, pos.z)?),
+            None => None,
+        };
+        for c in cs {
+            let (lx, lz) = (c.x.rem_euclid(32), c.z.rem_euclid(32));
+            let present = region
+                .as_ref()
+                .and_then(|r| r.get(lx, lz))
+                .is_some_and(|brut| brut.external || !brut.payload.is_empty());
+            if !present {
+                absents.push(c);
+            }
+        }
+    }
+    absents.sort_by_key(|c| (c.z, c.x));
+    Ok(absents)
 }
 
 /// `//stack` : répéter le contenu d'une sélection `fois` fois.

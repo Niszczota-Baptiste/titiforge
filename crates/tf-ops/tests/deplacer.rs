@@ -59,6 +59,128 @@ fn pas(d: [i32; 3], air: tf_anvil::StateId) -> Pas {
 
 // ── déplacer ────────────────────────────────────────────────────────────────
 
+/// **Un `//move` vers du terrain jamais généré est refusé AVANT d'effacer.**
+///
+/// Sa première passe efface la source ; un collage n'engendre pas de chunk.
+/// Sans la garde, le build disparaissait — coffres compris — et rien
+/// n'arrivait : mesuré sur le monde d'essai avant correction, « 2 coffres
+/// retirés, 0 posé ». Le refus doit être TOTAL : pas un octet écrit.
+#[test]
+fn un_deplacement_vers_du_terrain_absent_est_refuse_sans_rien_ecrire() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    // La fixture couvre les chunks 0..15 ; +256 fait tomber la source dans le
+    // chunk 16, qui n'existe pas.
+    let sel = boite((0, -40, 0), (15, -35, 15));
+    match deplacer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &sel,
+        pas([256, 0, 0], air),
+        air,
+        &mut i,
+    ) {
+        Err(tf_ops::edition::Erreur::TerrainAbsent { absents, exemple }) => {
+            assert_eq!(absents, 1, "la source tient dans un chunk, l'arrivée aussi");
+            assert_eq!((exemple.x, exemple.z), (16, 0), "{exemple:?}");
+        }
+        autre => panic!("refus attendu, obtenu {autre:?}"),
+    }
+    assert!(st.is_clean(), "pas un octet écrit — la source est intacte");
+}
+
+/// Un emplacement de région PRÉSENT mais à charge vide — un chunk corrompu —
+/// compte comme absent : le collage le saute, donc n'y écrirait rien, et la
+/// source serait partie quand même.
+#[test]
+fn un_chunk_a_charge_vide_compte_comme_absent() {
+    use tf_anvil::region::{read, write, Compression, RawChunk};
+    let brut = region(&Terrain::peuplee(2));
+    let mut r = read(&brut, 0, 0).unwrap();
+    r.slots[16] = Some(RawChunk {
+        index: 16,
+        timestamp: 0,
+        compression: Compression::Zlib,
+        payload: std::borrow::Cow::Owned(Vec::new()),
+        external: false,
+    });
+    let m = MemorySource::new();
+    m.put_region(SURFACE, DOSSIER, ZERO, write(&r).unwrap().region);
+    let st = staging(m);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let sel = boite((0, -40, 0), (15, -35, 15));
+    assert!(matches!(
+        deplacer(
+            &st,
+            &SURFACE,
+            DOSSIER,
+            &sel,
+            pas([256, 0, 0], air),
+            air,
+            &mut i
+        ),
+        Err(tf_ops::edition::Erreur::TerrainAbsent { .. })
+    ));
+    assert!(st.is_clean());
+}
+
+/// Mais un extrait BORDÉ D'AIR peut déborder sur du terrain absent : sans
+/// `avec_air`, une colonne d'air n'écrit rien, donc ne demande rien. Refuser
+/// ici rendrait `//move` inutilisable au bord d'un monde, où la sélection
+/// déborde presque toujours.
+#[test]
+fn un_extrait_borde_d_air_peut_deborder_sur_du_terrain_absent() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let marque = i.intern("minecraft:bedrock");
+    // De l'air au-dessus du terrain — la fixture est pleine jusqu'à y = 79, la
+    // section 64..79 comprise —, et une marque posée à gauche.
+    let marquee = boite((224, 80, 0), (231, 85, 5));
+    let poser = Plan::nouveau(Masque::Tout, Motif::Bloc(marque));
+    appliquer(&st, &SURFACE, DOSSIER, &marquee, &poser, &i).unwrap();
+
+    // x 224..255 : la marque arrive à 240..247 (chunk 15, qui existe) ; l'air
+    // arrive jusqu'à 271, dans le chunk 16, qui n'existe pas.
+    let sel = boite((224, 80, 0), (255, 90, 15));
+    let sans_air = Pas {
+        avec_air: false,
+        ..pas([16, 0, 0], air)
+    };
+    deplacer(&st, &SURFACE, DOSSIER, &sel, sans_air, air, &mut i).unwrap();
+    let la_bas = copier(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite((240, 80, 0), (247, 85, 5)),
+        &mut i,
+    )
+    .unwrap();
+    assert!(
+        la_bas.blocs.iter().all(|&b| b == marque),
+        "la marque est arrivée"
+    );
+
+    // Le même extrait poussé de 32 de plus : la marque tomberait dans le
+    // chunk 17, qui n'existe pas — refusé, et rien ne bouge.
+    let avant = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let sel2 = boite((240, 80, 0), (255, 90, 15));
+    let loin = Pas {
+        d: [32, 0, 0],
+        ..sans_air
+    };
+    assert!(matches!(
+        deplacer(&st, &SURFACE, DOSSIER, &sel2, loin, air, &mut i),
+        Err(tf_ops::edition::Erreur::TerrainAbsent { .. })
+    ));
+    assert_eq!(st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(), avant);
+}
+
 #[test]
 fn deplacer_emporte_le_contenu_et_laisse_le_remplissage() {
     let (src, _) = monde();

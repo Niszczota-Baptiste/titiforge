@@ -304,6 +304,34 @@ pub struct Collage<'a> {
 }
 
 impl Collage<'_> {
+    /// Les chunks où ce collage écrirait QUELQUE CHOSE — une colonne d'air
+    /// sauté n'écrit rien, donc ne demande pas de terrain.
+    ///
+    /// Une colonne par (x, z) de l'extrait, et on s'arrête à sa première case
+    /// posée : le parcours ne paie le volume entier que pour un extrait fait
+    /// d'air, où il ne coûte rien d'autre.
+    pub fn chunks_ecrits(&self) -> std::collections::BTreeSet<ChunkPos> {
+        let [sx, sy, sz] = self.presse.taille;
+        let mut out = std::collections::BTreeSet::new();
+        for z in 0..sz {
+            for x in 0..sx {
+                let ecrit = self.avec_air
+                    || (0..sy).any(|y| self.presse.get(x, y, z).is_some_and(|id| id != self.air));
+                if ecrit {
+                    out.insert(
+                        BlockPos {
+                            x: self.coin.x + x as i32,
+                            y: 0,
+                            z: self.coin.z + z as i32,
+                        }
+                        .chunk(),
+                    );
+                }
+            }
+        }
+        out
+    }
+
     /// La boîte MONDE que l'extrait occupe. C'est la sélection à passer à
     /// `appliquer` — un collage ne paie que son extrait.
     pub fn bornes(&self) -> BBox {
