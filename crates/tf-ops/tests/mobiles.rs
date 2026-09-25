@@ -728,7 +728,8 @@ fn annuler_rend_les_chunks_d_entites_d_origine_et_efface_ceux_qu_on_a_crees() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0));
+        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0)
+        .is_some());
     let (e, _) = journal.annuler().unwrap();
     rejouer(&st, e, Sens::Annuler).unwrap();
     assert_eq!(
@@ -943,7 +944,8 @@ fn annuler_et_refaire_traversent_un_chunk_deporte() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0));
+        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0)
+        .is_some());
     let (e, _) = journal.annuler().unwrap();
     rejouer(&st, e, Sens::Annuler).unwrap();
     assert_eq!(lire(&st), avant);

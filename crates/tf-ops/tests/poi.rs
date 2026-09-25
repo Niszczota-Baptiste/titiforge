@@ -226,7 +226,8 @@ fn annuler_rend_la_table_d_origine() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Poser", "poser", Vec::new(), 0));
+        .journaliser(&mut journal, "Poser", "poser", Vec::new(), 0)
+        .is_some());
     let (e, _) = journal.annuler().unwrap();
     rejouer(&st, e, Sens::Annuler).unwrap();
     assert_eq!(contenu(&st), avant);

@@ -397,7 +397,9 @@ fn annuler_un_deplacement_qui_repasse_sur_le_meme_chunk() {
     // correctifs, et c'est cet ordre-là que le test doit éprouver. Recomposer
     // l'entrée ici testerait la recomposition du test.
     let mut journal = Journal::new();
-    assert!(r.journaliser(&mut journal, "Déplacer", "move", Vec::new(), 0));
+    assert!(r
+        .journaliser(&mut journal, "Déplacer", "move", Vec::new(), 0)
+        .is_some());
 
     let (entree, _) = journal.annuler().unwrap();
     let mut defait = apres.clone();

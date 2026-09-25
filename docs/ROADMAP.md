@@ -126,7 +126,8 @@ ancrage doit suivre les blocs qui les portent.
 > | Résidence (`residency.rs`) | ✅ LRU plafonnée en OCTETS, épinglage, garde d'édition |
 > | Contrat de source (`source.rs`) | ✅ suite de contrat jouée contre deux implémentations |
 > | Dossier de save (`fs_source.rs`) | ✅ écriture atomique, sonde de verrou honnête |
-> | Staging (`staging.rs`) | ✅ composition source + couche, pierres tombales, ordre du commit imposé par la signature |
+> | Staging (`staging.rs`) | ✅ composition source + couche, pierres tombales, ordre du commit imposé par la signature ; la BASE de chaque région recouverte, donc une écriture qui n'écrit que ce qui attend et REFUSE d'effacer ce que le jeu a changé |
+> | Séance (`session.rs`) | ✅ copie de travail et annulation qui survivent à la fermeture, reprises au même monde ; une séance que le jeu a contredite est mise de côté, intacte ; deux fenêtres sur un monde, refusées |
 > | Journal typé (`journal.rs`) | ✅ persistant, ajout seul, points de reprise nommés, budget + compactage |
 > | Streaming piloté par la caméra | ⬜ demande le viewport (phase 2) |
 > | Document de projet | ⬜ |

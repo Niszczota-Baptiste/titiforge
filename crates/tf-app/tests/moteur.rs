@@ -5,14 +5,15 @@
 //! l'interface garde la main pendant qu'on travaille, et qu'une commande qui
 //! échoue revient comme un échec au lieu de disparaître.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tf_app::moteur::{Commande, Moteur, Reponse};
+use tf_app::moteur::{Carnet, Commande, Moteur, Reponse};
 use tf_bench::{region, Terrain};
 use tf_ops::catalogue::{Params, Valeur};
 use tf_ops::Forme;
 use tf_world::coords::{BBox, BlockPos, RegionPos};
-use tf_world::journal::Journal;
+use tf_world::journal::{Journal, Record};
 use tf_world::source::{Dimension, Folder, MemorySource, RegionSource};
 use tf_world::Staging;
 
@@ -267,4 +268,156 @@ fn ecrire_sans_save_est_un_echec_nomme() {
     assert!(m.vivant());
     assert!(m.envoyer(poser("minecraft:dirt")));
     assert!(!attendre(&mut m).echoue());
+}
+
+// ── le carnet : ce qui survit à la fermeture ────────────────────────────────
+
+/// Un carnet qui RETIENT ce qu'on lui confie, dans l'ordre.
+#[derive(Clone, Default)]
+struct Temoin(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Temoin {
+    fn lignes(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+    fn dire(&self, l: String) {
+        self.0.lock().unwrap().push(l);
+    }
+}
+
+impl Carnet for Temoin {
+    fn commencer(&mut self, label: &str) {
+        self.dire(format!("commencer {label}"));
+    }
+    fn terminer(&mut self) {
+        self.dire("terminer".into());
+    }
+    fn noter(&mut self, _: &mut Journal, records: &[Record]) -> Result<(), String> {
+        for r in records {
+            self.dire(match r {
+                Record::Entree(e) => format!("entrée {}", e.label),
+                Record::Curseur(c) => format!("curseur {c}"),
+                Record::Troncature(t) => format!("troncature {t}"),
+            });
+        }
+        Ok(())
+    }
+    fn fermer(self: Box<Self>) -> String {
+        self.dire("fermer".into());
+        "fermé".into()
+    }
+}
+
+fn en_seance() -> (Moteur, Temoin, Arc<Staging<MemorySource, MemorySource>>) {
+    let src = MemorySource::new();
+    src.put_region(SURFACE, Folder::Region, ZERO, region(&Terrain::petite()));
+    let st = Arc::new(Staging::new(src, MemorySource::new()));
+    let t = Temoin::default();
+    let m = Moteur::lancer_en_seance(
+        st.clone(),
+        SURFACE,
+        Journal::new(),
+        None,
+        Box::new(t.clone()),
+    );
+    (m, t, st)
+}
+
+/// **Chaque action est rangée**, dans l'ordre, et la séance se ferme quand le
+/// fil s'arrête — après la dernière action, jamais pendant.
+#[test]
+fn chaque_action_est_rangee_dans_le_carnet() {
+    let (mut m, t, _) = en_seance();
+    let label = tf_ops::catalogue::descripteur("poser").unwrap().label;
+    for c in [
+        poser("minecraft:dirt"),
+        Commande::Annuler,
+        Commande::Refaire,
+    ] {
+        assert!(m.envoyer(c));
+        let r = attendre(&mut m);
+        assert!(!r.echoue(), "{}", r.texte());
+    }
+    m.arreter();
+    assert_eq!(
+        t.lignes(),
+        [
+            format!("commencer {label}"),
+            format!("entrée {label}"),
+            "terminer".into(),
+            "commencer Annuler".into(),
+            "curseur 0".into(),
+            "terminer".into(),
+            "commencer Refaire".into(),
+            "curseur 1".into(),
+            "terminer".into(),
+            "fermer".into(),
+        ]
+    );
+}
+
+/// **Une annulation refusée rend le curseur.** Resté avancé, il désignait
+/// comme défaite une entrée toujours appliquée : « refaire » la réappliquait
+/// alors par-dessus elle-même, et le journal sur disque disait autre chose que
+/// la copie de travail.
+#[test]
+fn une_annulation_refusee_ne_bouge_pas_le_curseur() {
+    let (mut m, t, st) = en_seance();
+    assert!(m.envoyer(poser("minecraft:dirt")));
+    assert!(!attendre(&mut m).echoue());
+    // La région change sous le journal — relue depuis la save, par exemple.
+    let brut = st
+        .source()
+        .read_region(&SURFACE, Folder::Region, ZERO)
+        .unwrap();
+    st.write_region(&SURFACE, Folder::Region, ZERO, &brut)
+        .unwrap();
+
+    assert!(m.envoyer(Commande::Annuler));
+    let r = attendre(&mut m);
+    assert!(r.echoue(), "{r:?}");
+    assert!(
+        !t.lignes().iter().any(|l| l.starts_with("curseur")),
+        "rien à ranger : rien n'a bougé — {:?}",
+        t.lignes()
+    );
+
+    assert!(m.envoyer(Commande::Refaire));
+    let r = attendre(&mut m);
+    assert!(
+        matches!(r, Reponse::Rien(_)),
+        "l'entrée est toujours appliquée : rien à refaire — {r:?}"
+    );
+}
+
+/// Un carnet qui ne sait pas écrire ne bloque pas l'édition, mais se DIT : un
+/// historique qui ne survivra pas à la fermeture n'est pas un détail.
+#[test]
+fn un_carnet_qui_echoue_se_dit() {
+    struct Plein;
+    impl Carnet for Plein {
+        fn commencer(&mut self, _: &str) {}
+        fn terminer(&mut self) {}
+        fn noter(&mut self, _: &mut Journal, _: &[Record]) -> Result<(), String> {
+            Err("disque plein".into())
+        }
+        fn fermer(self: Box<Self>) -> String {
+            String::new()
+        }
+    }
+    let src = MemorySource::new();
+    src.put_region(SURFACE, Folder::Region, ZERO, region(&Terrain::petite()));
+    let st = Arc::new(Staging::new(src, MemorySource::new()));
+    let mut m = Moteur::lancer_en_seance(st, SURFACE, Journal::new(), None, Box::new(Plein));
+    assert!(m.envoyer(poser("minecraft:dirt")));
+    let r = attendre(&mut m);
+    assert!(
+        matches!(r, Reponse::Fait { .. }),
+        "l'édition a eu lieu : {r:?}"
+    );
+    assert!(
+        r.texte().contains("disque plein") && r.texte().contains("fermeture"),
+        "{}",
+        r.texte()
+    );
 }

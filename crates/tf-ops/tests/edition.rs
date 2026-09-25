@@ -194,13 +194,15 @@ fn annuler_rend_le_monde_octet_pour_octet() {
     // c'est elle qui remplit `bounds` depuis ce que l'opération a vraiment
     // écrit, et c'est d'elle que le remaillage incrémental dépendra.
     let mut journal = Journal::new();
-    assert!(rap.journaliser(
-        &mut journal,
-        "Remplacer pierre → terre",
-        "replace",
-        Vec::new(),
-        0
-    ));
+    assert!(rap
+        .journaliser(
+            &mut journal,
+            "Remplacer pierre → terre",
+            "replace",
+            Vec::new(),
+            0
+        )
+        .is_some());
     assert!(journal.peut_annuler());
 
     // ── annuler
@@ -537,12 +539,129 @@ fn une_operation_sur_plusieurs_regions_fait_une_seule_entree_de_journal() {
     );
 
     let mut journal = Journal::new();
-    assert!(rap.journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0));
+    assert!(rap
+        .journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0)
+        .is_some());
     assert_eq!(journal.entrees().len(), 1, "UNE entrée, pas une par région");
     assert_eq!(
         journal.entrees()[0].regions().len(),
         regions.len(),
         "et elle nomme toutes les régions touchées"
+    );
+}
+
+/// **Une annulation qui ramène une région au contenu de la save la rend à la
+/// save** — et seulement celle-là.
+///
+/// Recompressée, la région restait différente de la save AUX OCTETS : une
+/// séance « éditer puis tout annuler » survivait à la fermeture, et le jour où
+/// le joueur jouait là, la reprise voyait un conflit avec… rien.
+#[test]
+fn une_annulation_complete_rend_la_region_a_la_save() {
+    use tf_ops::edition::{rejouer, Sens};
+
+    let (src, brut) = monde();
+    let interner = interner_de(&brut);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+    let mut journal = Journal::new();
+    // Deux opérations sur deux chunks DIFFÉRENTS de la même région.
+    for (x0, x1) in [(0, 15), (16, 31)] {
+        let sel = BBox::new(BlockPos::new(x0, -64, 0), BlockPos::new(x1, 0, 15));
+        let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+        let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &interner).unwrap();
+        assert!(rap
+            .journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0)
+            .is_some());
+    }
+
+    let (e, _) = journal.annuler().unwrap();
+    rejouer(&st, e, Sens::Annuler).unwrap();
+    assert!(
+        st.is_dirty(&SURFACE, DOSSIER, ZERO),
+        "la première opération y est toujours : la région reste"
+    );
+
+    let (e, _) = journal.annuler().unwrap();
+    rejouer(&st, e, Sens::Annuler).unwrap();
+    assert!(!st.is_dirty(&SURFACE, DOSSIER, ZERO), "tout est défait");
+    assert!(st.etats().unwrap().is_empty());
+    assert_eq!(st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(), brut);
+
+    // Et le journal n'en souffre pas : refaire relit la save, dont le
+    // contenu est celui qu'il attend.
+    let (e, _) = journal.refaire().unwrap();
+    rejouer(&st, e, Sens::Refaire).unwrap();
+    assert!(st.is_dirty(&SURFACE, DOSSIER, ZERO));
+}
+
+/// **Une annulation qui diverge dans UNE région n'écrit dans AUCUNE.**
+///
+/// Écrire région par région laissait, quand la deuxième divergeait, la
+/// première défaite et la seconde non : une entrée à moitié annulée, que plus
+/// rien ne savait rejouer. Le cas n'a rien d'exotique : une région relue
+/// depuis la save à la reprise d'une séance diverge par construction.
+#[test]
+fn une_annulation_qui_diverge_dans_une_region_n_ecrit_dans_aucune() {
+    use tf_ops::edition::{rejouer, Erreur, Sens};
+    use tf_world::journal::Correction;
+
+    let t = Terrain::petite();
+    let brut = region(&t);
+    let src = MemorySource::new();
+    for (x, z) in [(0, 0), (1, 0)] {
+        src.put_region(SURFACE, DOSSIER, RegionPos { x, z }, brut.clone());
+    }
+    let interner = interner_de(&brut);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+    let sel = BBox::new(
+        BlockPos { x: 0, y: -64, z: 0 },
+        BlockPos {
+            x: 527,
+            y: 320,
+            z: 15,
+        },
+    );
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &interner).unwrap();
+    let mut journal = Journal::new();
+    assert!(rap
+        .journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0)
+        .is_some());
+
+    // La région que l'annulation traitera EN DERNIER change sous le journal :
+    // c'est le seul ordre où l'ancienne écriture région par région avait
+    // déjà défait l'autre au moment de découvrir la divergence.
+    let (entree, _) = journal.annuler().unwrap();
+    let premiere = entree
+        .a_annuler()
+        .find_map(|c| match c {
+            Correction::Chunk(p) => Some(p.cible.region),
+            _ => None,
+        })
+        .unwrap();
+    let derniere = if premiere == ZERO {
+        RegionPos { x: 1, z: 0 }
+    } else {
+        ZERO
+    };
+    let relue = st
+        .source()
+        .read_region(&SURFACE, DOSSIER, derniere)
+        .unwrap();
+    st.write_region(&SURFACE, DOSSIER, derniere, &relue)
+        .unwrap();
+    let avant = st.read_region(&SURFACE, DOSSIER, premiere).unwrap();
+
+    let r = rejouer(&st, entree, Sens::Annuler);
+    assert!(matches!(r, Err(Erreur::Divergence { .. })), "{r:?}");
+    assert_eq!(
+        st.read_region(&SURFACE, DOSSIER, premiere).unwrap(),
+        avant,
+        "la région qui ne divergeait pas n'a pas été défaite à moitié"
     );
 }
 
@@ -1112,7 +1231,9 @@ fn la_jonction_rend_une_entree_fidele_au_rapport() {
     assert!(!rap.est_vide(), "le test ne prouve rien sans correctif");
 
     let mut journal = Journal::new();
-    assert!(rap.journaliser(&mut journal, "Remplacer", "replace", vec![1, 2, 3], 7));
+    assert!(rap
+        .journaliser(&mut journal, "Remplacer", "replace", vec![1, 2, 3], 7)
+        .is_some());
     assert_eq!(journal.entrees().len(), 1);
     let e = &journal.entrees()[0];
 
@@ -1170,7 +1291,8 @@ fn un_rapport_vide_ne_remplit_pas_le_journal() {
 
     let mut journal = Journal::new();
     assert!(
-        !rap.journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0),
+        rap.journaliser(&mut journal, "Remplacer", "replace", Vec::new(), 0)
+            .is_none(),
         "la jonction doit DIRE qu'elle n'a rien poussé"
     );
     assert!(journal.entrees().is_empty());

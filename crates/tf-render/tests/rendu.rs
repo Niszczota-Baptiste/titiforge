@@ -242,7 +242,7 @@ fn les_tranches_couvrent_toute_l_arene_sans_trou_ni_recouvrement() {
                 cz,
                 section(0, |_, _, _| {
                     n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                    if n % 3 == 0 {
+                    if n.is_multiple_of(3) {
                         CUBE
                     } else {
                         AIR

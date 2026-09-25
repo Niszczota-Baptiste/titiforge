@@ -169,7 +169,8 @@ fn appliquer_puis_annuler_rend_le_monde_octet_pour_octet() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Remplacer", "remplacer", Vec::new(), 0));
+        .journaliser(&mut journal, "Remplacer", "remplacer", Vec::new(), 0)
+        .is_some());
 
     let (entree, _) = journal.annuler().expect("il y a de quoi annuler");
     let n = rejouer(&st, entree, Sens::Annuler).unwrap();
@@ -215,7 +216,8 @@ fn un_correctif_qui_ne_colle_plus_est_refuse_sans_rien_ecrire() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Remplir", "poser", Vec::new(), 0));
+        .journaliser(&mut journal, "Remplir", "poser", Vec::new(), 0)
+        .is_some());
 
     // Une SECONDE opération passe par-dessus : le chunk n'est plus celui que
     // le premier correctif attend.
@@ -551,7 +553,8 @@ fn deplacer_sur_lui_meme_s_annule_dans_le_bon_ordre() {
     let mut journal = Journal::new();
     assert!(cr
         .rapport
-        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0));
+        .journaliser(&mut journal, "Déplacer", "deplacer", Vec::new(), 0)
+        .is_some());
 
     let (entree, _) = journal.annuler().unwrap();
     rejouer(&st, entree, Sens::Annuler)

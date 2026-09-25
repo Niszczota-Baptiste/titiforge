@@ -263,6 +263,33 @@ impl RegionSink for FsSource {
             Err(e) => Err(io(e)),
         }
     }
+
+    fn remove_region(&self, dim: &Dimension, folder: Folder, pos: RegionPos) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        match fs::remove_file(self.region_path(dim, folder, pos)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io(e)),
+        }
+    }
+
+    /// À la racine, préfixé : `titiforge-<nom>`. Le jeu n'y regarde pas, et
+    /// le préfixe dit à qui l'ouvre d'où il vient.
+    fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<()> {
+        let p = self.root.join(format!("titiforge-{}", safe_name(nom)?));
+        self.write_atomic(&p, bytes)
+    }
+
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        let p = self.root.join(format!("titiforge-{}", safe_name(nom)?));
+        match fs::read(&p) {
+            Ok(b) => Ok(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(SourceError::NotFound),
+            Err(e) => Err(io(e)),
+        }
+    }
 }
 
 fn nom(p: &Path) -> String {

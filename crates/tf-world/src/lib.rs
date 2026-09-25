@@ -16,6 +16,7 @@ pub mod journal;
 pub mod lecture;
 pub mod residency;
 pub mod selection;
+pub mod session;
 pub mod source;
 pub mod staging;
 
@@ -32,8 +33,9 @@ pub use journal::{
 pub use lecture::{sections_de, Bilan, SectionLue};
 pub use residency::{Editing, Evicted, Residency, State, Weighed};
 pub use selection::{Direction, Selection, DIRECTIONS};
+pub use session::{Fermeture, Reprise, Seance};
 pub use source::{
     Dimension, Folder, LockProbe, MemorySource, Overview, RegionInfo, RegionSink, RegionSource,
     SourceError,
 };
-pub use staging::{CommitError, CommitReport, RegionStore, Staging};
+pub use staging::{classer, CommitError, CommitReport, EtatRegion, RegionStore, Staging};

@@ -30,9 +30,54 @@ use tf_ops::edition::{rejouer, Sens};
 use tf_ops::executer::{executer, Options};
 use tf_ops::Forme;
 use tf_world::coords::BBox;
-use tf_world::journal::Journal;
+use tf_world::journal::{Journal, Record};
 use tf_world::source::{Dimension, Folder, RegionSource};
-use tf_world::staging::{RegionStore, Staging};
+use tf_world::staging::{CommitError, RegionStore, Staging};
+use tf_world::{Fermeture, Seance};
+
+/// **Ce qui garde la trace du chantier sur le disque** — la séance.
+///
+/// Un trait et pas `Seance` directement : le moteur se teste sur une copie de
+/// travail en mémoire, qui n'a pas de disque derrière elle.
+pub trait Carnet: Send {
+    /// Une action commence. Si le programme s'arrête pendant, la reprise
+    /// saura laquelle.
+    fn commencer(&mut self, label: &str);
+    /// Elle est finie, réussie ou non.
+    fn terminer(&mut self);
+    /// Range des enregistrements du journal. Le journal en mémoire est
+    /// prêté : au-delà de son plafond, le carnet l'élague.
+    fn noter(&mut self, journal: &mut Journal, records: &[Record]) -> Result<(), String>;
+    /// Le chantier s'arrête. Rend ce qu'il faut en dire.
+    fn fermer(self: Box<Self>) -> String;
+}
+
+impl Carnet for Seance {
+    fn commencer(&mut self, label: &str) {
+        // Une marque qui ne s'écrit pas n'empêche pas d'éditer : elle ne
+        // servirait qu'à DIRE une interruption qui n'a pas eu lieu.
+        let _ = Seance::commencer(self, label);
+    }
+
+    fn terminer(&mut self) {
+        let _ = Seance::terminer(self);
+    }
+
+    fn noter(&mut self, journal: &mut Journal, records: &[Record]) -> Result<(), String> {
+        Seance::noter(self, journal, records).map_err(|e| e.to_string())
+    }
+
+    fn fermer(self: Box<Self>) -> String {
+        match Seance::fermer(*self) {
+            Ok(Fermeture::Effacee) => "séance close : la save porte tout".into(),
+            Ok(Fermeture::Gardee { regions }) => format!(
+                "séance gardée : {regions} région(s) modifiée(s) pas encore écrites dans \
+                 la save — elles seront là à la prochaine ouverture de ce monde"
+            ),
+            Err(e) => format!("{e} — la séance est gardée telle quelle"),
+        }
+    }
+}
 
 /// Ce qu'on demande au moteur.
 #[derive(Debug, Clone)]
@@ -160,6 +205,37 @@ impl Moteur {
         S: RegionSource + Send + Sync + 'static,
         O: RegionStore + Send + Sync + 'static,
     {
+        Self::demarrer(staging, dim, journal, monde, None)
+    }
+
+    /// Lance le fil sur la copie de travail d'une SÉANCE : chaque action est
+    /// rangée dans son journal sur disque, et la séance se ferme quand le fil
+    /// s'arrête — dans le fil qui la tient, après la dernière écriture.
+    pub fn lancer_en_seance<S, O>(
+        staging: std::sync::Arc<Staging<S, O>>,
+        dim: Dimension,
+        journal: Journal,
+        monde: Option<std::path::PathBuf>,
+        carnet: Box<dyn Carnet>,
+    ) -> Moteur
+    where
+        S: RegionSource + Send + Sync + 'static,
+        O: RegionStore + Send + Sync + 'static,
+    {
+        Self::demarrer(staging, dim, journal, monde, Some(carnet))
+    }
+
+    fn demarrer<S, O>(
+        staging: std::sync::Arc<Staging<S, O>>,
+        dim: Dimension,
+        journal: Journal,
+        monde: Option<std::path::PathBuf>,
+        carnet: Option<Box<dyn Carnet>>,
+    ) -> Moteur
+    where
+        S: RegionSource + Send + Sync + 'static,
+        O: RegionStore + Send + Sync + 'static,
+    {
         let (vers, commandes) = channel::<Commande>();
         let (reponses, depuis) = channel::<Reponse>();
         let fil = std::thread::Builder::new()
@@ -171,6 +247,7 @@ impl Moteur {
                     journal,
                     interner: Interner::new(),
                     monde,
+                    carnet,
                 };
                 while let Ok(cmd) = commandes.recv() {
                     if matches!(cmd, Commande::Arreter) {
@@ -180,6 +257,11 @@ impl Moteur {
                     if reponses.send(r).is_err() {
                         break;
                     }
+                }
+                // Après la dernière action, jamais pendant : fermer une séance
+                // dont une écriture est en vol la jugerait sur un état faux.
+                if let Some(k) = c.carnet.take() {
+                    println!("{}", k.fermer());
                 }
             })
             .expect("le fil du moteur doit démarrer");
@@ -275,10 +357,49 @@ struct Chantier<S: RegionSource, O: RegionStore> {
     interner: Interner,
     /// Le dossier de la save, quand il y en a une. `None` = rien à écrire.
     monde: Option<std::path::PathBuf>,
+    /// La séance, quand il y en a une. `None` : rien ne survit à la
+    /// fermeture — une copie jetable, ou un test.
+    carnet: Option<Box<dyn Carnet>>,
 }
 
 impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
     fn traiter(&mut self, c: Commande) -> Reponse {
+        let quoi = match &c {
+            Commande::Appliquer { op, .. } => tf_ops::catalogue::descripteur(op)
+                .map(|d| d.label.to_string())
+                .unwrap_or_else(|| op.to_string()),
+            Commande::Annuler => "Annuler".into(),
+            Commande::Refaire => "Refaire".into(),
+            Commande::Ecrire { .. } => "Écrire dans la save".into(),
+            Commande::Arreter => "Arrêter".into(),
+        };
+        if let Some(k) = &mut self.carnet {
+            k.commencer(&quoi);
+        }
+        let r = self.executer(c);
+        if let Some(k) = &mut self.carnet {
+            k.terminer();
+        }
+        r
+    }
+
+    /// Range des enregistrements dans la séance. Rend de quoi compléter le
+    /// compte rendu — vide si tout va bien : un historique qui ne survivra
+    /// pas à la fermeture se DIT.
+    fn noter(&mut self, records: &[Record]) -> String {
+        let Some(k) = &mut self.carnet else {
+            return String::new();
+        };
+        match k.noter(&mut self.journal, records) {
+            Ok(()) => String::new(),
+            Err(e) => format!(
+                " · historique non enregistré sur le disque ({e}) : il ne survivra pas \
+                 à la fermeture"
+            ),
+        }
+    }
+
+    fn executer(&mut self, c: Commande) -> Reponse {
         match c {
             Commande::Appliquer {
                 op,
@@ -336,12 +457,13 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         // **Une opération qui n'écrit rien ne remplit pas le journal.**
         // `journaliser` le refuse déjà ; on le DIT plutôt que de laisser
         // croire à un bouton mort.
-        if !cr
-            .rapport
-            .journaliser(&mut self.journal, &label, op, Vec::new(), horodatage())
-        {
+        let Some(records) =
+            cr.rapport
+                .journaliser(&mut self.journal, &label, op, Vec::new(), horodatage())
+        else {
             return Reponse::Rien(label);
-        }
+        };
+        let note = self.noter(&records);
         let n = cr.rapport.patches.len();
         let mut blocs = match cr.rapport.blocs {
             Some(b) => format!("{b} blocs"),
@@ -363,6 +485,7 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         if !cr.approches.is_empty() {
             blocs.push_str(&format!(" · {} entité(s) approchée(s)", cr.approches.len()));
         }
+        blocs.push_str(&note);
         Reponse::Fait {
             op: label,
             resume: blocs,
@@ -396,16 +519,20 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
                 sauvegarde: ou,
             },
             Err(e) => Reponse::Echec(match e {
-                tf_world::staging::CommitError::WorldLocked => {
+                CommitError::WorldLocked => {
                     "Minecraft tient ce monde — le fermer d'abord. Rien n'a été écrit.".into()
                 }
-                tf_world::staging::CommitError::LockUnknown => {
+                CommitError::LockUnknown => {
                     "impossible de savoir si Minecraft tient ce monde (le verrou \
                      n'est consultable que sous Windows). Confirmer que le jeu est \
                      fermé, puis recommencer."
                         .into()
                 }
-                autre => format!("écriture refusée : {autre:?}"),
+                e @ CommitError::SaveModifiee(_) => format!(
+                    "{e}. Pour repartir de la save : fermer puis rouvrir ce monde — la \
+                     copie de travail sera mise de côté, intacte."
+                ),
+                autre => format!("écriture refusée : {autre}"),
             }),
         }
     }
@@ -414,11 +541,12 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         // Le journal rend l'entrée ET son enregistrement ; on ne garde de
         // l'entrée que ce dont on a besoin AVANT de rejouer, parce qu'elle
         // emprunte le journal.
+        let avant = self.journal.curseur();
         let pris = match sens {
             Sens::Annuler => self.journal.annuler(),
             Sens::Refaire => self.journal.refaire(),
         };
-        let Some((entree, _)) = pris else {
+        let Some((entree, curseur)) = pris else {
             return Reponse::Rien(match sens {
                 Sens::Annuler => "rien à annuler".into(),
                 Sens::Refaire => "rien à refaire".into(),
@@ -430,12 +558,23 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         // SENS et dans le bon ORDRE — à l'envers pour annuler, et c'est le
         // genre de détail qu'un appelant refait mal une fois sur deux.
         match rejouer(self.staging.as_ref(), entree, sens) {
-            Ok(0) => Reponse::Rien(label),
-            Ok(_) => match sens {
-                Sens::Annuler => Reponse::Defait { label, bornes },
-                Sens::Refaire => Reponse::Refait { label, bornes },
-            },
-            Err(e) => Reponse::Echec(format!("{label} : {e}")),
+            Ok(n) => {
+                let note = self.noter(&[curseur]);
+                let label = label + &note;
+                match (n, sens) {
+                    (0, _) => Reponse::Rien(label),
+                    (_, Sens::Annuler) => Reponse::Defait { label, bornes },
+                    (_, Sens::Refaire) => Reponse::Refait { label, bornes },
+                }
+            }
+            Err(e) => {
+                // Rien n'a été écrit — `rejouer` valide tout avant d'écrire —
+                // donc le curseur revient où il était. Resté avancé, il
+                // désignerait comme défaite une entrée toujours appliquée, qui
+                // ne se laisserait plus ni annuler ni refaire.
+                self.journal.poser_curseur(avant);
+                Reponse::Echec(format!("{label} : {e}"))
+            }
         }
     }
 }

@@ -592,7 +592,10 @@ pub fn empreinte(bytes: &[u8]) -> u64 {
 
 // ── sérialisation ───────────────────────────────────────────────────────────
 
-mod octets {
+/// Le lecteur et l'écrivain d'octets du format, partagés avec les autres
+/// fichiers de la couche (`staging`) : un second codec « presque pareil »
+/// finirait par diverger sur une longueur ou un boutisme.
+pub(crate) mod octets {
     use super::*;
 
     pub struct W(pub Vec<u8>);
@@ -710,7 +713,7 @@ const D_NETHER: u8 = 1;
 const D_END: u8 = 2;
 const D_CUSTOM: u8 = 3;
 
-fn ecrire_dimension(w: &mut W, d: &Dimension) {
+pub(crate) fn ecrire_dimension(w: &mut W, d: &Dimension) {
     match d {
         Dimension::Overworld => {
             w.u8(D_OVERWORLD);
@@ -727,7 +730,7 @@ fn ecrire_dimension(w: &mut W, d: &Dimension) {
     }
 }
 
-fn lire_dimension(r: &mut R) -> Result<Dimension, JournalError> {
+pub(crate) fn lire_dimension(r: &mut R) -> Result<Dimension, JournalError> {
     Ok(match r.u8()? {
         D_OVERWORLD => Dimension::Overworld,
         D_NETHER => Dimension::Nether,

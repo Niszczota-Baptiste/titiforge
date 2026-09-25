@@ -277,6 +277,24 @@ pub trait RegionSink: Send + Sync {
         bytes: &[u8],
     ) -> Result<()>;
     fn remove_external(&self, dim: &Dimension, folder: Folder, name: &str) -> Result<()>;
+
+    /// Retire une région. Déjà absente : c'est le résultat voulu, pas une
+    /// erreur.
+    ///
+    /// La copie de travail s'en sert pour OUBLIER une région — la relire
+    /// depuis la save quand le jeu l'a changée sous elle. Rien dans le
+    /// programme ne retire une région d'une save.
+    fn remove_region(&self, dim: &Dimension, folder: Folder, pos: RegionPos) -> Result<()>;
+
+    /// Un petit fichier de MÉTADONNÉES du stockage lui-même — pas une région.
+    ///
+    /// La copie de travail y range l'empreinte des régions de la save qu'elle
+    /// recouvre : c'est ce qui lui permet de savoir, des jours plus tard,
+    /// qu'une région a changé sous elle. Écrit d'un bloc, atomiquement.
+    fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<()>;
+
+    /// Relit une métadonnée, ou `NotFound`.
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>>;
 }
 
 /// État du verrou `session.lock` d'une save.
@@ -331,6 +349,7 @@ type CleExterne = (Dimension, Folder, String);
 pub struct MemorySource {
     regions: RwLock<BTreeMap<CleRegion, Vec<u8>>>,
     externals: RwLock<BTreeMap<CleExterne, Vec<u8>>>,
+    metas: RwLock<BTreeMap<String, Vec<u8>>>,
     read_only: bool,
 }
 
@@ -475,5 +494,36 @@ impl RegionSink for MemorySource {
             .unwrap()
             .remove(&(dim.clone(), folder, name.to_string()));
         Ok(())
+    }
+
+    fn remove_region(&self, dim: &Dimension, folder: Folder, pos: RegionPos) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.regions
+            .write()
+            .unwrap()
+            .remove(&(dim.clone(), folder, pos));
+        Ok(())
+    }
+
+    fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.metas
+            .write()
+            .unwrap()
+            .insert(nom.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        self.metas
+            .read()
+            .unwrap()
+            .get(nom)
+            .cloned()
+            .ok_or(SourceError::NotFound)
     }
 }

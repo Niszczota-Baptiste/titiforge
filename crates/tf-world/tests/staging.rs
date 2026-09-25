@@ -4,22 +4,25 @@
 //! n'est pas une intention, c'est une propriété qui se vérifie : à la fin de
 //! chaque test, la source doit être octet pour octet ce qu'elle était.
 
+mod commun;
+
 use std::cell::RefCell;
 
+use commun::TempDir;
 use tf_world::source::{
     Dimension, Folder, LockProbe, MemorySource, RegionInfo, RegionSink, RegionSource, Result,
     SourceError,
 };
-use tf_world::{CommitError, CommitReport, RegionPos, Staging};
+use tf_world::{
+    classer, CommitError, CommitReport, EtatRegion, FsSource, RegionPos, RegionStore, Staging,
+};
 
 const SURFACE: Dimension = Dimension::Overworld;
 const R: Folder = Folder::Region;
 
+/// Une vraie région, marquée — voir `commun::region_marquee`.
 fn octets(n: usize, marque: u8) -> Vec<u8> {
-    let mut v = vec![0u8; n];
-    v[0] = marque;
-    v[n - 1] = marque;
-    v
+    commun::region_marquee(marque, n)
 }
 
 /// Une source d'origine avec deux régions et une charge déportée.
@@ -85,7 +88,7 @@ impl RegionSink for Puits {
             dim.label(),
             folder.dir_name(),
             pos.file_name(),
-            bytes[0]
+            commun::marque(bytes)
         ));
         Ok(())
     }
@@ -111,6 +114,25 @@ impl RegionSink for Puits {
             .borrow_mut()
             .push(format!("- {} {} {name}", dim.label(), folder.dir_name()));
         Ok(())
+    }
+
+    fn remove_region(&self, dim: &Dimension, folder: Folder, pos: RegionPos) -> Result<()> {
+        self.ecrits.borrow_mut().push(format!(
+            "r {} {} {}",
+            dim.label(),
+            folder.dir_name(),
+            pos.file_name()
+        ));
+        Ok(())
+    }
+
+    fn write_meta(&self, nom: &str, _: &[u8]) -> Result<()> {
+        self.ecrits.borrow_mut().push(format!("m {nom}"));
+        Ok(())
+    }
+
+    fn read_meta(&self, _: &str) -> Result<Vec<u8>> {
+        Err(SourceError::NotFound)
     }
 }
 
@@ -151,7 +173,7 @@ fn le_staging_lit_la_couche_d_abord_puis_la_source() {
 
     // Avant modification : c'est la source qu'on lit.
     assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()[0],
+        commun::marque(&st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()),
         1
     );
 
@@ -159,12 +181,12 @@ fn le_staging_lit_la_couche_d_abord_puis_la_source() {
         .unwrap();
 
     assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()[0],
+        commun::marque(&st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()),
         99,
         "après modification, c'est la couche"
     );
     assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(1, 0)).unwrap()[0],
+        commun::marque(&st.read_region(&SURFACE, R, RegionPos::new(1, 0)).unwrap()),
         2,
         "la voisine non modifiée vient toujours de la source"
     );
@@ -192,7 +214,7 @@ fn une_region_creee_dans_le_staging_est_lisible_alors_qu_elle_n_existe_pas_en_so
         .unwrap();
 
     assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(9, 9)).unwrap()[0],
+        commun::marque(&st.read_region(&SURFACE, R, RegionPos::new(9, 9)).unwrap()),
         42,
         "étendre un monde est une écriture comme une autre"
     );
@@ -264,12 +286,13 @@ fn la_carte_est_l_union_des_deux_et_la_couche_l_emporte() {
     let mut par_pos: Vec<(RegionPos, u64)> = ov.regions.iter().map(|r| (r.pos, r.bytes)).collect();
     par_pos.sort_by_key(|(p, _)| (p.z, p.x));
 
+    let taille = |n, m| octets(n, m).len() as u64;
     assert_eq!(
         par_pos,
         vec![
-            (RegionPos::new(0, 0), 31_000),
-            (RegionPos::new(1, 0), 20_000),
-            (RegionPos::new(7, 7), 12_000),
+            (RegionPos::new(0, 0), taille(31_000, 99)),
+            (RegionPos::new(1, 0), taille(20_000, 2)),
+            (RegionPos::new(7, 7), taille(12_000, 98)),
         ],
         "(0,0) doit peser sa TAILLE COURANTE, pas celle de la source — sinon \
          un compteur d'occupation annoncerait la taille d'avant l'édition"
@@ -308,43 +331,11 @@ fn rouvrir_un_staging_retrouve_le_travail_en_cours() {
          — donc annulerait silencieusement tout le travail en cours"
     );
     assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()[0],
+        commun::marque(&st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()),
         99
     );
     assert!(st.is_dirty(&Dimension::Nether, R, RegionPos::new(0, 0)));
     assert_eq!(st.touched().len(), 2);
-}
-
-#[test]
-fn abandonner_redevient_transparent_sans_rien_effacer() {
-    let couche = MemorySource::new();
-    let st = Staging::new(origine(), couche);
-    st.write_region(&SURFACE, R, RegionPos::new(0, 0), &octets(31_000, 99))
-        .unwrap();
-    st.remove_external(&SURFACE, R, "c.5.5.mcc").unwrap();
-    assert!(!st.is_clean());
-
-    st.discard();
-
-    assert!(st.is_clean());
-    assert_eq!(
-        st.read_region(&SURFACE, R, RegionPos::new(0, 0)).unwrap()[0],
-        1,
-        "on relit la source"
-    );
-    assert_eq!(
-        st.read_external(&SURFACE, R, "c.5.5.mcc").unwrap(),
-        b"origine".to_vec(),
-        "la charge supprimée revient"
-    );
-    assert_eq!(
-        st.overlay()
-            .read_region(&SURFACE, R, RegionPos::new(0, 0))
-            .unwrap()[0],
-        99,
-        "les octets restent dans la couche : effacer serait plus propre sur le \
-         disque et irréversible pour l'utilisateur"
-    );
 }
 
 // ── l'invariant n° 5 : l'ORDRE ──────────────────────────────────────────────
@@ -518,6 +509,12 @@ fn le_commit_ecrit_les_regions_les_charges_et_les_suppressions() {
         empreinte(&origine()),
         "et la source d'origine n'a toujours pas bougé"
     );
+    assert_eq!(
+        etat(&st, ZERO),
+        EtatRegion::EnAttente,
+        "le puits n'est pas la save : la copie GARDE son travail — la rendre à \
+         la save, ce serait le perdre"
+    );
 }
 
 #[test]
@@ -541,6 +538,11 @@ fn le_commit_n_ecrit_que_ce_qui_a_ete_touche() {
 #[test]
 fn une_charge_supprimee_ne_se_reecrit_pas_pendant_le_commit() {
     let st = Staging::new(origine(), MemorySource::new());
+    // La région change AUSSI : une charge orpheline qui disparaît seule ne
+    // change pas le contenu de la région, et une région au contenu inchangé
+    // ne s'écrit pas.
+    st.write_region(&SURFACE, R, RegionPos::new(0, 0), &octets(9, 99))
+        .unwrap();
     st.remove_external(&SURFACE, R, "c.5.5.mcc").unwrap();
 
     let puits = Puits::default();
@@ -570,5 +572,427 @@ fn la_carte_de_la_source_reste_intacte_apres_un_commit() {
         attendu,
         "le commit écrit dans le PUITS, jamais dans la source — les deux \
          peuvent être le même dossier, mais c'est l'appelant qui le décide"
+    );
+}
+
+// ── la save qui change sous la copie ────────────────────────────────────────
+
+const ZERO: RegionPos = RegionPos { x: 0, z: 0 };
+const UN: RegionPos = RegionPos { x: 1, z: 0 };
+
+/// L'état d'une région de la surface, `None` si la copie ne la recouvre pas.
+fn couverte<S: RegionSource, O: RegionStore>(
+    st: &Staging<S, O>,
+    pos: RegionPos,
+) -> Option<EtatRegion> {
+    st.etats()
+        .unwrap()
+        .into_iter()
+        .find(|((d, f, p), _)| *d == SURFACE && *f == R && *p == pos)
+        .map(|(_, e)| e)
+}
+
+/// L'état d'une région de la surface, qui DOIT être recouverte.
+fn etat<S: RegionSource, O: RegionStore>(st: &Staging<S, O>, pos: RegionPos) -> EtatRegion {
+    couverte(st, pos).expect("la région devrait être recouverte")
+}
+
+#[test]
+fn la_table_de_verite_des_trois_empreintes() {
+    use EtatRegion::*;
+    let (a, b, c) = (Some(1), Some(2), Some(3));
+    // La save porte ce que porte la copie : à jour, quelle que soit la base.
+    assert_eq!(classer(None, a, a), AJour);
+    assert_eq!(classer(Some(b), a, a), AJour);
+    assert_eq!(classer(Some(None), None, None), AJour);
+    // Base inconnue : on ne sait pas si la save a bougé, on ne réécrit pas.
+    assert_eq!(classer(None, a, b), EnConflit);
+    assert_eq!(classer(None, None, b), EnConflit);
+    // La save n'a pas bougé, la copie oui — y compris une région CRÉÉE.
+    assert_eq!(classer(Some(a), a, b), EnAttente);
+    assert_eq!(classer(Some(None), None, b), EnAttente);
+    // La copie n'a pas bougé, la save oui.
+    assert_eq!(classer(Some(a), b, a), Perimee);
+    assert_eq!(classer(Some(None), a, None), Perimee);
+    // Les deux ont bougé — y compris le jeu qui génère une région que la
+    // copie créait aussi.
+    assert_eq!(classer(Some(a), b, c), EnConflit);
+    assert_eq!(classer(Some(None), a, b), EnConflit);
+
+    assert!(EnAttente.porte_du_travail() && EnConflit.porte_du_travail());
+    assert!(!AJour.porte_du_travail() && !Perimee.porte_du_travail());
+}
+
+#[test]
+fn ecrire_par_dessus_une_partie_jouee_est_refuse_avant_la_sauvegarde() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    // Le joueur joue : le jeu réécrit la région SOUS la copie.
+    st.source().put_region(SURFACE, R, ZERO, octets(20_000, 42));
+
+    let puits = Puits::default();
+    let mut sauvegardes = 0;
+    let e = st
+        .commit(&puits, libre(), false, &mut || {
+            sauvegardes += 1;
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert_eq!(e, CommitError::SaveModifiee(vec![(SURFACE, R, ZERO)]));
+    assert_eq!(
+        sauvegardes, 0,
+        "on ne prend pas une sauvegarde pour une écriture qui n'aura pas lieu"
+    );
+    assert!(puits.ecrits.borrow().is_empty(), "rien n'est écrit");
+    assert!(
+        e.to_string().contains("region/r.0.0.mca"),
+        "le message nomme ce qu'on peut aller regarder : {e}"
+    );
+}
+
+#[test]
+fn un_chunk_deporte_modifie_en_jeu_compte_comme_un_changement() {
+    // Un chunk déporté que le jeu réécrit ne change pas le `.mca` : seulement
+    // son `.mcc`. Une empreinte du seul `.mca` laisserait passer l'écrasement.
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    st.source()
+        .put_external(SURFACE, R, "c.5.5.mcc", b"jouee".to_vec());
+
+    let r = st.commit(&Puits::default(), libre(), false, &mut sauvegarde_ok());
+    assert!(matches!(r, Err(CommitError::SaveModifiee(_))), "{r:?}");
+}
+
+#[test]
+fn une_partie_jouee_ailleurs_ne_bloque_rien() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    // Le joueur joue dans une AUTRE région que celles de la copie.
+    st.source().put_region(SURFACE, R, UN, octets(20_000, 42));
+
+    let r = st
+        .commit(&Puits::default(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(r.regions_ecrites, 1);
+}
+
+#[test]
+fn une_region_deja_ecrite_ne_se_reecrit_pas() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    st.write_region(&SURFACE, R, UN, &octets(31_000, 98))
+        .unwrap();
+    // Le puits EST la save, comme dans l'application.
+    let r = st
+        .commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(r.regions_ecrites, 2);
+    assert!(
+        st.etats().unwrap().is_empty() && !st.is_dirty(&SURFACE, R, ZERO),
+        "la save porte la copie : les régions QUITTENT la copie — gardées sans \
+         travail, elles deviendraient des conflits le jour où le joueur y remet \
+         les pieds"
+    );
+    assert_eq!(
+        commun::marque(&st.read_region(&SURFACE, R, ZERO).unwrap()),
+        99
+    );
+
+    // On retouche UNE région : c'est la seule à réécrire.
+    st.write_region(&SURFACE, R, UN, &octets(31_000, 97))
+        .unwrap();
+    assert_eq!(etat(&st, UN), EtatRegion::EnAttente);
+    assert_eq!(couverte(&st, ZERO), None);
+    let r = st
+        .commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(
+        r.regions_ecrites, 1,
+        "réécrire une région que la save porte déjà, c'est risquer d'y \
+         remettre ce que le jeu a changé depuis"
+    );
+}
+
+#[test]
+fn le_jeu_qui_rejoue_une_region_ecrite_ne_fait_aucun_conflit() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    st.commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    // Le joueur va voir le résultat EN JEU, puis revient éditer.
+    st.source().put_region(SURFACE, R, ZERO, octets(25_000, 42));
+    assert_eq!(
+        commun::marque(&st.read_region(&SURFACE, R, ZERO).unwrap()),
+        42,
+        "la copie lit ce que le jeu a laissé"
+    );
+    st.write_region(&SURFACE, R, ZERO, &octets(26_000, 43))
+        .unwrap();
+    assert_eq!(
+        etat(&st, ZERO),
+        EtatRegion::EnAttente,
+        "le va-et-vient avec le jeu est le cas COURANT : il ne doit rien \
+         refuser"
+    );
+}
+
+#[test]
+fn une_region_perimee_ne_se_reecrit_pas_et_se_rafraichit() {
+    let st = Staging::new(origine(), MemorySource::new());
+    // La copie porte la région TELLE QUE la save — puis le jeu la change.
+    st.write_region(&SURFACE, R, ZERO, &octets(20_000, 1))
+        .unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::AJour);
+    st.source().put_region(SURFACE, R, ZERO, octets(25_000, 42));
+    assert_eq!(etat(&st, ZERO), EtatRegion::Perimee);
+    st.write_region(&SURFACE, R, UN, &octets(9, 97)).unwrap();
+
+    // Écrire n'est pas refusé — la copie n'a rien à y ajouter — et ne remet
+    // surtout pas la save d'avant.
+    let puits = Puits::default();
+    let r = st
+        .commit(&puits, libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(r.regions_ecrites, 1, "seulement l'autre région");
+    assert!(!puits
+        .ecrits
+        .borrow()
+        .iter()
+        .any(|l| l.contains("r.0.0.mca")));
+
+    // La vue montre encore le monde d'avant ; rafraîchir la rend à la save.
+    assert_eq!(
+        commun::marque(&st.read_region(&SURFACE, R, ZERO).unwrap()),
+        1
+    );
+    st.rafraichir(&(SURFACE, R, ZERO)).unwrap();
+    assert_eq!(
+        commun::marque(&st.read_region(&SURFACE, R, ZERO).unwrap()),
+        42
+    );
+    assert!(!st.is_dirty(&SURFACE, R, ZERO));
+    assert_eq!(couverte(&st, ZERO), None, "plus recouverte");
+}
+
+#[test]
+fn rafraichir_emporte_les_charges_deportees_et_les_pierres_tombales() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    st.write_external(&SURFACE, R, "c.8.8.mcc", b"neuve")
+        .unwrap();
+    st.remove_external(&SURFACE, R, "c.5.5.mcc").unwrap();
+    // Une charge d'une AUTRE région reste où elle est.
+    st.write_external(&SURFACE, R, "c.40.0.mcc", b"voisine")
+        .unwrap();
+
+    st.rafraichir(&(SURFACE, R, ZERO)).unwrap();
+
+    assert_eq!(
+        st.read_external(&SURFACE, R, "c.5.5.mcc").unwrap(),
+        b"origine".to_vec(),
+        "la pierre tombale est partie avec la région"
+    );
+    assert!(matches!(
+        st.read_external(&SURFACE, R, "c.8.8.mcc"),
+        Err(SourceError::NotFound)
+    ));
+    assert_eq!(
+        st.read_external(&SURFACE, R, "c.40.0.mcc").unwrap(),
+        b"voisine".to_vec()
+    );
+}
+
+#[test]
+fn une_ecriture_interrompue_se_rattrape_sans_conflit() {
+    // Le puits a écrit la région, puis l'écriture a cédé AVANT de noter la
+    // nouvelle base : la save porte déjà ce qu'on allait y mettre.
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+        .unwrap();
+    st.source().put_region(SURFACE, R, ZERO, octets(31_000, 99));
+    assert_eq!(etat(&st, ZERO), EtatRegion::AJour);
+
+    let r = st
+        .commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(
+        r.regions_ecrites, 0,
+        "une écriture qui a cédé à mi-chemin ne bloque pas la suivante pour \
+         toujours"
+    );
+}
+
+#[test]
+fn les_bases_et_les_pierres_tombales_survivent_a_une_reprise() {
+    let d = TempDir::new("reprise-bases");
+    let couche = d.sous("couche");
+    {
+        let st = Staging::new(origine(), FsSource::open(&couche).unwrap());
+        st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+            .unwrap();
+        st.remove_external(&SURFACE, R, "c.5.5.mcc").unwrap();
+    }
+
+    let st = Staging::reopen(origine(), FsSource::open(&couche).unwrap()).unwrap();
+    assert!(
+        matches!(
+            st.read_external(&SURFACE, R, "c.5.5.mcc"),
+            Err(SourceError::NotFound)
+        ),
+        "la suppression tient après la reprise"
+    );
+    assert_eq!(
+        etat(&st, ZERO),
+        EtatRegion::EnAttente,
+        "la base a survécu : la save n'a pas bougé, la copie oui"
+    );
+
+    // Et la reprise voit une partie jouée ENTRE les deux séances.
+    let jouee = origine();
+    jouee.put_region(SURFACE, R, ZERO, octets(20_000, 42));
+    let st = Staging::reopen(jouee, FsSource::open(&couche).unwrap()).unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::EnConflit);
+}
+
+#[test]
+fn une_couche_reprise_sans_ses_metadonnees_doute() {
+    // Une couche écrite par une version d'avant, ou dont la métadonnée s'est
+    // abîmée : une table à moitié lue donnerait des bases FAUSSES.
+    let couche = MemorySource::new();
+    couche.put_region(SURFACE, R, ZERO, octets(31_000, 99));
+    couche.write_meta("couche", b"TFC1\x01\x00").unwrap();
+
+    let st = Staging::reopen(origine(), couche).unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::EnConflit);
+
+    // Éditer n'y change rien : noter la base maintenant affirmerait que la
+    // copie part de la save d'aujourd'hui.
+    st.write_region(&SURFACE, R, ZERO, &octets(31_000, 98))
+        .unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::EnConflit);
+    // Une région qu'elle ne portait pas, elle, a une base.
+    st.write_region(&SURFACE, R, UN, &octets(9, 97)).unwrap();
+    assert_eq!(etat(&st, UN), EtatRegion::EnAttente);
+}
+
+#[test]
+fn une_couche_qui_n_a_ecrit_que_des_entites_se_reprend() {
+    // Une source sur disque découvre une dimension par son dossier `region/`.
+    // Une couche qui n'a écrit QUE des entités n'en a pas : sa reprise la
+    // perdait, et la première lecture retombait sur la save.
+    let d = TempDir::new("reprise-entites");
+    let couche = d.sous("couche");
+    {
+        let st = Staging::new(origine(), FsSource::open(&couche).unwrap());
+        st.write_region(&SURFACE, Folder::Entities, ZERO, &octets(500, 7))
+            .unwrap();
+    }
+    let st = Staging::reopen(origine(), FsSource::open(&couche).unwrap()).unwrap();
+    assert!(st.is_dirty(&SURFACE, Folder::Entities, ZERO));
+}
+
+#[test]
+fn une_region_recompressee_est_a_jour() {
+    // Une annulation rend un chunk identique, mais RECOMPRESSÉ : mêmes blocs,
+    // autres octets. Jugée aux octets, la région restait « modifiée » pour
+    // toujours.
+    let st = Staging::new(origine(), MemorySource::new());
+    let meme = commun::region_marquee_niveau(1, 20_000, 1);
+    assert_ne!(meme, octets(20_000, 1), "le test ne prouve rien sinon");
+    st.write_region(&SURFACE, R, ZERO, &meme).unwrap();
+
+    assert_eq!(etat(&st, ZERO), EtatRegion::AJour);
+    let puits = Puits::default();
+    let r = st
+        .commit(&puits, libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(
+        r.regions_ecrites, 0,
+        "rien à écrire : le contenu est le même"
+    );
+}
+
+#[test]
+fn une_table_de_bases_suivie_d_octets_de_trop_est_refusee() {
+    let couche = MemorySource::new();
+    {
+        let st = Staging::new(origine(), MemorySource::new());
+        st.write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+            .unwrap();
+        let mut meta = st.overlay().read_meta("couche").unwrap();
+        meta.push(0);
+        couche.write_meta("couche", &meta).unwrap();
+        couche.put_region(SURFACE, R, ZERO, octets(31_000, 99));
+    }
+    let st = Staging::reopen(origine(), couche).unwrap();
+    assert_eq!(
+        etat(&st, ZERO),
+        EtatRegion::EnConflit,
+        "une table à moitié comprise donnerait des bases FAUSSES : on la jette"
+    );
+}
+
+#[test]
+fn une_charge_portee_seule_par_une_couche_sans_metadonnees_se_voit() {
+    // Seule une charge déportée, sans région ni base : c'est pourtant ce que
+    // la vue montre, donc ce qu'une écriture devrait écrire.
+    let (region, charge) = commun::region_deportee(1);
+    let src = MemorySource::new();
+    src.put_region(SURFACE, R, ZERO, region);
+    src.put_external(SURFACE, R, "c.5.5.mcc", charge);
+    let couche = MemorySource::new();
+    couche.put_external(SURFACE, R, "c.5.5.mcc", commun::region_deportee(2).1);
+
+    let st = Staging::reopen(src, couche).unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::EnConflit);
+}
+
+#[test]
+fn rien_d_une_region_perimee_ne_s_ecrit_pas_meme_ses_charges() {
+    let (region, charge) = commun::region_deportee(1);
+    let src = MemorySource::new();
+    src.put_region(SURFACE, R, ZERO, region.clone());
+    src.put_external(SURFACE, R, "c.5.5.mcc", charge.clone());
+    let st = Staging::new(src, MemorySource::new());
+    // La copie porte la région et sa charge TELLES QUE la save, et cache une
+    // charge qu'elle avait créée puis supprimée : rien de tout ça n'est du
+    // travail.
+    st.write_region(&SURFACE, R, ZERO, &region).unwrap();
+    st.write_external(&SURFACE, R, "c.5.5.mcc", &charge)
+        .unwrap();
+    st.write_external(&SURFACE, R, "c.6.6.mcc", b"passagere")
+        .unwrap();
+    st.remove_external(&SURFACE, R, "c.6.6.mcc").unwrap();
+    assert_eq!(etat(&st, ZERO), EtatRegion::AJour);
+
+    // Le jeu réécrit la région, ses DEUX charges comprises.
+    let (region_jeu, charge_jeu) = commun::region_deportee(3);
+    st.source().put_region(SURFACE, R, ZERO, region_jeu);
+    st.source()
+        .put_external(SURFACE, R, "c.5.5.mcc", charge_jeu.clone());
+    st.source()
+        .put_external(SURFACE, R, "c.6.6.mcc", b"jeu".to_vec());
+    assert_eq!(etat(&st, ZERO), EtatRegion::Perimee);
+
+    let r = st
+        .commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(r, CommitReport::default());
+    assert_eq!(
+        st.source().read_external(&SURFACE, R, "c.5.5.mcc").unwrap(),
+        charge_jeu,
+        "écraser la charge que le jeu vient d'écrire casserait son chunk"
+    );
+    assert_eq!(
+        st.source().read_external(&SURFACE, R, "c.6.6.mcc").unwrap(),
+        b"jeu".to_vec(),
+        "et l'effacer aussi"
     );
 }

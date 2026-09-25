@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **916**, zéro échec |
+| Tests | **953**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-916 tests, répartis par ce qu'ils PROUVENT :
+953 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -52,9 +52,10 @@ cargo test --workspace
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` mobiles | 7 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
-| `tf-world` journal/staging/residency/coords/source/lecture | 120 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER |
+| `tf-world` journal/staging/residency/coords/source/lecture | 135 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
+| `tf-world` session | 16 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
-| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 65 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
+| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 67 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
 | `tf-ops` poi | 6 | qu'une édition fait relire au jeu les POINTS D'INTÉRÊT de ses chunks — toutes leurs sections, et rien d'autre, pas même un `Valid` de mod glissé dans un enregistrement ; qu'un biome n'en fait relire aucun (sur un terrain qui PORTE des biomes, sans quoi le test ne prouvait rien) ; qu'une section déjà invalide ne salit rien ; et qu'annuler rend la table d'origine |
@@ -76,7 +77,8 @@ cargo test --workspace
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
-| `tf-app` moteur | 9 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur |
+| `tf-app` moteur | 12 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; et qu'un journal qui ne s'écrit pas se DIT |
+| `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
@@ -488,6 +490,79 @@ entités par `UUID`, et une table indexée par la clé qui devrait être unique
 AVALE le doublon qu'on cherche — un original oublié derrière sa copie. Il
 compte maintenant les vues. Trois mutations recréent enfin les défauts
 préexistants du rejeu (ci-dessous) : toutes trois meurent.
+
+### Une séance survit à la fermeture — et n'écrit jamais par-dessus le jeu
+
+```bash
+cargo run --release -p tf-app -- <assets> --monde D:\monde     # une séance, reprise si elle existe
+cargo test -p tf-world --test session --test staging
+cargo test -p tf-app --test seance --test moteur
+```
+
+Fermer titiforge sans avoir écrit perdait tout : la copie de travail vivait
+dans un dossier temporaire effacé en partant, l'annulation en mémoire. Une
+**séance** range les deux à un endroit STABLE, dérivé du chemin canonique de
+la save — `%LOCALAPPDATA%\titiforge\seances\<nom>-<empreinte>` sous Windows,
+`TITIFORGE_SEANCES` pour le changer. Rouvrir le même monde reprend la copie et
+la pile d'annulation ; fermer une séance que la save porte tout entière
+l'efface.
+
+```text
+séance reprise : 1 région(s) modifiée(s) pas encore écrites dans la save, 3 action(s) dans l'historique
+```
+
+**Ce qui la rend sûre, c'est une table de vérité à trois empreintes** par
+région recouverte : la BASE (la save quand la copie s'en est écartée), la save
+d'aujourd'hui, la copie. À jour, en attente, périmée, ou **en conflit** — la
+save a changé ET la copie y porte du travail. Écrire est alors REFUSÉ, avant
+même la sauvegarde ; à la reprise, la séance entière est mise de côté, intacte,
+dans un dossier voisin, et l'on repart de la save. « À jour » se juge au
+CONTENU décompressé et pas aux octets du fichier : une annulation rend un
+chunk identique mais recompressé, et jugée aux octets, une séance « éditer
+puis tout annuler » survivait pour toujours.
+
+**Ce travail a trouvé une perte de données préexistante, dans le cas le plus
+courant.** L'écriture recopiait TOUTES les régions que la copie avait un jour
+touchées. Écrire, aller voir en jeu, revenir éditer ailleurs, écrire encore :
+la seconde écriture remettait les régions de la première telles qu'avant la
+partie — ce que le jeu y avait changé était effacé, sans un mot. L'écriture
+n'écrit maintenant que ce qui ATTEND, et une région que la save porte telle
+quelle QUITTE la copie : le va-et-vient avec le jeu ne produit plus aucun
+conflit, parce qu'il n'y a plus rien à confronter.
+
+Quatre défauts de plus, préexistants eux aussi, et chacun tenu par un test :
+
+- **une annulation qui divergeait dans sa deuxième région avait déjà défait
+  la première** — une entrée à moitié annulée que rien ne savait plus
+  rejouer. Tout se calcule en mémoire d'abord ; rien ne s'écrit tant qu'un
+  correctif diverge, dans n'importe quelle région ;
+- **une annulation refusée avançait quand même le curseur** : l'entrée,
+  toujours appliquée, passait pour défaite, et « refaire » la réappliquait
+  par-dessus elle-même ;
+- **une couche qui n'avait écrit que des entités était invisible à la
+  reprise** : une source sur disque découvre une dimension par son dossier
+  `region/` ;
+- **les pierres tombales ne survivaient pas à une reprise** — documenté comme
+  un choix tant que rien ne survivait ; devenu un défaut le jour où tout le
+  reste survit.
+
+Et un de plus, trouvé par le test qui le visait : **un enregistrement tronqué
+au bout du journal** (un arrêt brutal pendant l'écriture) arrête la lecture —
+donc tout ce qu'on AJOUTAIT derrière lui ne se relisait jamais. Il est coupé
+à la reprise, avant d'ajouter.
+
+Deux fenêtres sur le même monde s'écriraient l'une par-dessus l'autre : le
+verrou du système (`File::try_lock`) refuse la seconde, et part avec le
+processus. C'est lui qui fait passer la version minimale de Rust à **1.89**.
+
+41 mutations, 41 tuées — dont une au second tour. Elle rendait à la save
+une région écrite dans un puits qui n'EST PAS la save : aucun test ne
+vérifiait qu'une écriture qui n'atteint pas la save laisse le travail dans la
+copie. Et deux tests écrits pour cette série sont d'abord tombés sur leur
+PRÉMISSE : les charges déportées de la fixture étaient ORPHELINES — aucun
+chunk n'y renvoyait — donc hors du contenu de la région, et le jugement au
+contenu avait raison de les ignorer. Ils portent maintenant une vraie région
+dont un chunk est déporté.
 
 ---
 
@@ -956,6 +1031,9 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **Ni composants ni saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste, et les composants qu'on modifie une fois pour les mettre à jour partout, restent à écrire (phase 7) |
 | **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
+| **Une séance ne voit pas le jeu changer la save PENDANT qu'elle est ouverte** | les données restent justes — une région écrite a quitté la copie, donc la prochaine opération relit la save — mais ce qui est À L'ÉCRAN date d'avant la partie jusqu'à son prochain remaillage. Et une région où la copie porte du travail, que le jeu change entre-temps, fait refuser l'écriture sans autre issue dans l'application que fermer et rouvrir (la séance est alors mise de côté) |
+| **Pas de bouton « abandonner la copie de travail »** | tout annuler y revient, et une séance en conflit se met de côté d'elle-même ; mais on ne peut pas jeter d'un geste une séance qu'on ne veut plus. Les séances mises de côté ne s'effacent jamais seules |
+| **Rien n'est forcé sur le disque** (`fsync`) | un arrêt du PROGRAMME ne perd rien ; une coupure de courant peut perdre les dernières actions. Et une action interrompue en plein milieu peut laisser la copie à moitié écrite, sans entrée de journal pour la défaire : la reprise le DIT (« … a été interrompue »), elle ne sait pas le réparer |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 
 Et une limite de méthode : **tous les temps de rendu sont mesurés sur un

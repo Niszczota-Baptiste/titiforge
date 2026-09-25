@@ -457,7 +457,7 @@ fn le_maillage_est_deterministe() {
     let mut n = 3u32;
     v.remplir(|x, y, z| {
         n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        if Voisinage::dedans(x, y, z) && n % 4 == 0 {
+        if Voisinage::dedans(x, y, z) && n.is_multiple_of(4) {
             PIERRE
         } else {
             AIR

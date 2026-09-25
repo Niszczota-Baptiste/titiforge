@@ -85,7 +85,7 @@ fn profils() -> Vec<(&'static str, Voisinage)> {
         k = k.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let mur = x == 0 || z == 0 || y == 0 || x == n - 1 || z == n - 1;
         if mur {
-            return if k % 4 == 0 { CUBE2 } else { CUBE };
+            return if k.is_multiple_of(4) { CUBE2 } else { CUBE };
         }
         if y == 1 && k % 100 < 55 {
             return modeles[k % modeles.len()];

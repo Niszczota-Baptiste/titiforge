@@ -88,7 +88,18 @@ fn main() {
         }
     }
 
-    let ouvert = match scene::Ouvert::ouvrir(&racine, monde.as_deref(), zone) {
+    // **La séance** : la copie de travail et l'annulation, rangées à un endroit
+    // STABLE pour survivre à la fermeture. Pas pour une capture, qui n'édite
+    // rien — et qui ne doit pas prendre le verrou d'une fenêtre ouverte.
+    let seance = match (&monde, &capture) {
+        (Some(dir), None) => Some(ouvrir_seance(dir)),
+        _ => None,
+    };
+    let ouvert = match (&seance, &monde) {
+        (Some((s, _, _)), Some(dir)) => scene::Ouvert::sur_staging(&racine, s.staging(), dir, zone),
+        _ => scene::Ouvert::ouvrir(&racine, monde.as_deref(), zone),
+    };
+    let ouvert = match ouvert {
         Ok(o) => o,
         Err(e) => {
             eprintln!("{e}");
@@ -107,9 +118,39 @@ fn main() {
         }
     );
 
+    let accueil = seance.as_ref().and_then(|(_, _, r)| r.texte());
+    if let Some(t) = &accueil {
+        println!("{t}");
+    }
     match capture {
         Some(png) => capturer(&ouvert.monde, &png, larg, haut, mode, ouvert.editable()),
-        None => fenetre(ouvert, larg, haut, rayon),
+        None => fenetre(
+            ouvert,
+            seance.map(|(s, j, _)| (s, j)),
+            accueil,
+            larg,
+            haut,
+            rayon,
+        ),
+    }
+}
+
+/// Ouvre la séance d'une save, ou dit pourquoi on ne peut pas — deux fenêtres
+/// sur le même monde, une save introuvable.
+fn ouvrir_seance(dir: &str) -> (tf_world::Seance, tf_world::Journal, tf_world::Reprise) {
+    let Some(racine) = tf_world::session::racine_par_defaut() else {
+        eprintln!(
+            "aucun dossier où ranger la séance (ni LOCALAPPDATA, ni HOME) — définir \
+             TITIFORGE_SEANCES"
+        );
+        std::process::exit(1);
+    };
+    match tf_world::Seance::ouvrir(&racine, std::path::Path::new(dir)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -329,15 +370,25 @@ fn ecrire_png(chemin: &str, larg: u32, haut: u32, pixels: &[u8]) {
     e.write_header().unwrap().write_image_data(pixels).unwrap();
 }
 
+/// Ce qui survit à la fermeture : la séance et son journal relu.
+type EnSeance = Option<(tf_world::Seance, tf_world::Journal)>;
+
 #[cfg(not(feature = "fenetre"))]
-fn fenetre(_m: scene::Ouvert, _l: u32, _h: u32, _r: u32) {
+fn fenetre(_m: scene::Ouvert, _s: EnSeance, _a: Option<String>, _l: u32, _h: u32, _r: u32) {
     eprintln!("compilé sans la fenêtre — utiliser --capture");
     std::process::exit(2);
 }
 
 #[cfg(feature = "fenetre")]
-fn fenetre(o: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
-    crate::coque::lancer(o, larg, haut, rayon);
+fn fenetre(
+    o: scene::Ouvert,
+    seance: EnSeance,
+    accueil: Option<String>,
+    larg: u32,
+    haut: u32,
+    rayon: u32,
+) {
+    crate::coque::lancer(o, seance, accueil, larg, haut, rayon);
 }
 
 #[cfg(feature = "fenetre")]

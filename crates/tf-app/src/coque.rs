@@ -35,7 +35,14 @@ const PAS_AVANT: f32 = 2.0;
 /// Les bornes de hauteur du monde, telles que la scène les lit.
 const HAUTEUR: (i32, i32) = (-64, 319);
 
-pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
+pub fn lancer(
+    ouvert: scene::Ouvert,
+    seance: Option<(tf_world::Seance, tf_world::journal::Journal)>,
+    accueil: Option<String>,
+    larg: u32,
+    haut: u32,
+    rayon: u32,
+) {
     let boucle = match EventLoop::new() {
         Ok(b) => b,
         Err(e) => {
@@ -48,13 +55,22 @@ pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
     // le savoir tout de suite : une coque qui ouvre une fenêtre et découvre
     // ensuite qu'elle ne peut rien éditer aurait menti par omission.
     let chemin = std::path::PathBuf::from(&ouvert.nom);
-    let moteur = ouvert.staging.clone().map(|st| {
-        Moteur::lancer(
+    let moteur = ouvert.staging.clone().map(|st| match seance {
+        // La séance part dans le fil : c'est lui qui écrit, donc lui qui
+        // range le journal — et qui la ferme, après sa dernière écriture.
+        Some((s, journal)) => Moteur::lancer_en_seance(
+            st,
+            tf_world::Dimension::Overworld,
+            journal,
+            Some(chemin),
+            Box::new(s),
+        ),
+        None => Moteur::lancer(
             st,
             tf_world::Dimension::Overworld,
             tf_world::journal::Journal::new(),
             Some(chemin),
-        )
+        ),
     });
     let pilote = Pilote::pour(
         &ouvert,
@@ -66,6 +82,7 @@ pub fn lancer(ouvert: scene::Ouvert, larg: u32, haut: u32, rayon: u32) {
     let mut app = Coque {
         ouvert,
         moteur,
+        accueil,
         remailler: None,
         pilote,
         taille: (larg, haut),
@@ -108,7 +125,14 @@ struct Gpu {
 struct Coque {
     ouvert: scene::Ouvert,
     /// `None` pour la fixture : elle n'a pas de save derrière elle.
+    ///
+    /// **Déclaré APRÈS `ouvert`, et c'est voulu** : les champs tombent dans
+    /// l'ordre, et l'arrêt du moteur ferme la séance — qui relit la copie de
+    /// travail pour savoir si elle doit survivre. Le fil doit donc s'arrêter
+    /// en dernier.
     moteur: Option<Moteur>,
+    /// Ce que la reprise d'une séance a à dire, affiché à la première image.
+    accueil: Option<String>,
     /// Ce qui a changé, en coordonnées MONDE. `None` = rien à remailler.
     ///
     /// Les BORNES et non un drapeau : c'est ce qui rend le remaillage
@@ -141,7 +165,10 @@ impl ApplicationHandler for Coque {
             }
         };
         match preparer(&f, &mut self.ouvert) {
-            Ok(g) => {
+            Ok(mut g) => {
+                if let Some(m) = self.accueil.take() {
+                    g.etat.message = m;
+                }
                 self.gpu = Some(g);
                 self.fenetre = Some(f);
             }

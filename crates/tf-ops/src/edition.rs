@@ -34,10 +34,11 @@ use tf_anvil::codec::{deflate_level, inflate, CodecError};
 use tf_anvil::entites::Entite;
 use tf_anvil::region::{
     external_file_name, read, write, Compression, RawChunk, ReadError, Region, WriteError,
+    WriteOutput,
 };
 use tf_anvil::{edition_entites, Interner, StateId};
 use tf_world::coords::{BBox, BlockPos, ChunkPos, RegionPos, SectionPos};
-use tf_world::journal::{ChunkPatch, Cible, Correction, Genre, Journal};
+use tf_world::journal::{ChunkPatch, Cible, Correction, Genre, Journal, Record};
 use tf_world::source::{Dimension, Folder, RegionSource, SourceError};
 use tf_world::staging::{RegionStore, Staging};
 
@@ -142,10 +143,14 @@ impl RapportRegion {
     /// passes qu'une opération composée a faites : un `Ctrl+Z` défait le
     /// déplacement entier, pas son dernier tiers.
     ///
-    /// Un rapport vide ne pousse RIEN et rend `false`. Une entrée sans
+    /// Un rapport vide ne pousse RIEN et rend `None`. Une entrée sans
     /// correctif serait une case de plus dans la pile d'annulation qui ne
     /// défait rien — et l'utilisateur appuierait deux fois sur Ctrl+Z sans
     /// voir quoi que ce soit bouger.
+    ///
+    /// Sinon, rend les enregistrements à AJOUTER au fichier du journal pour
+    /// qu'il reflète l'état. Les jeter, c'est garder une annulation qui ne
+    /// survit pas à la fermeture.
     pub fn journaliser(
         &self,
         journal: &mut Journal,
@@ -153,12 +158,11 @@ impl RapportRegion {
         op: &str,
         params: Vec<u8>,
         horodatage: i64,
-    ) -> bool {
+    ) -> Option<Vec<Record>> {
         if self.est_vide() {
-            return false;
+            return None;
         }
-        journal.pousser(label, horodatage, self.genre(op, params));
-        true
+        Some(journal.pousser(label, horodatage, self.genre(op, params)))
     }
 
     /// Absorbe le rapport d'une autre passe.
@@ -944,9 +948,13 @@ pub enum Sens {
 /// une — **les correctifs s'annulent À L'ENVERS**, et l'ordre ne se voit que
 /// sur une opération qui repasse deux fois sur le même chunk.
 ///
-/// Rend le nombre de chunks touchés. **Tout ou rien par région** : un
-/// correctif qui diverge arrête la région avant la moindre écriture, plutôt
-/// que de laisser la moitié d'une annulation appliquée.
+/// Rend le nombre de chunks touchés. **Tout ou rien** : chaque région est
+/// recalculée EN MÉMOIRE d'abord, et rien ne s'écrit tant qu'un seul
+/// correctif diverge — dans n'importe laquelle. Écrire région par région
+/// laissait, quand la deuxième divergeait, la première annulée et la seconde
+/// non : une entrée à moitié défaite, que ni l'annulation ni la reprise ne
+/// savaient plus rejouer. Le cas n'a rien d'exotique : une région relue
+/// depuis la save à la reprise d'une séance diverge par construction.
 pub fn rejouer<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     entree: &tf_world::journal::Entree,
@@ -980,6 +988,8 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
         }
     }
 
+    // Première passe : tout calculer, ne rien écrire.
+    let mut pretes: Vec<(Dimension, Folder, RegionPos, WriteOutput, Vec<String>)> = Vec::new();
     let mut touches = 0;
     for (dim, folder, pos) in ordre {
         // Une région qui n'existe pas se lit VIDE : c'est l'état d'avant d'un
@@ -1072,13 +1082,25 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
             n += 1;
         }
         if n > 0 {
-            // Par le chemin COMMUN : un chunk qui repasse au-delà d'un
-            // mégaoctet en rejouant part en `.mcc`, et n'écrire que la région
-            // laisserait un talon vers un fichier absent — le chunk perdu.
-            ecrire_region(staging, &dim, folder, pos, &region, orphelins)?;
+            pretes.push((dim, folder, pos, write(&region)?, orphelins));
             touches += n;
         }
     }
+    // Seconde passe : tout a été validé, on écrit. Par le chemin COMMUN : un
+    // chunk qui repasse au-delà d'un mégaoctet en rejouant part en `.mcc`, et
+    // n'écrire que la région laisserait un talon vers un fichier absent — le
+    // chunk perdu.
+    let mut ecrites = Vec::with_capacity(pretes.len());
+    for (dim, folder, pos, sortie, orphelins) in pretes {
+        ecrire_sortie(staging, &dim, folder, pos, sortie, orphelins)?;
+        ecrites.push((dim, folder, pos));
+    }
+    // Une région que l'annulation ramène au contenu de la save QUITTE la
+    // copie. Gardée, elle n'aurait l'air de rien — mais recompressée, elle
+    // diffère de la save aux octets, et le jour où le joueur y joue elle
+    // devient un conflit avec… rien. Le journal n'en souffre pas : ses
+    // empreintes portent sur le contenu décompressé, identique des deux côtés.
+    staging.alleger_regions(&ecrites)?;
     Ok(touches)
 }
 
@@ -1229,7 +1251,19 @@ pub(crate) fn ecrire_region<S: RegionSource, O: RegionStore>(
     region: &Region<'_>,
     orphelins: Vec<String>,
 ) -> Result<(), Erreur> {
-    let out = write(region)?;
+    ecrire_sortie(staging, dim, folder, pos, write(region)?, orphelins)
+}
+
+/// La moitié d'`ecrire_region` qui touche au staging : une région déjà
+/// sérialisée, ses charges déportées, ce qu'elle ne porte plus.
+fn ecrire_sortie<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    pos: RegionPos,
+    out: WriteOutput,
+    orphelins: Vec<String>,
+) -> Result<(), Erreur> {
     staging.write_region(dim, folder, pos, &out.region)?;
     for f in out.external {
         staging.write_external(dim, folder, &f.name, &f.bytes)?;

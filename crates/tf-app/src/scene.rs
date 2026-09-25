@@ -538,6 +538,8 @@ pub struct Ouvert {
     pub zone: [i32; 4],
     pub nom: String,
     /// Le dossier temporaire de la copie de travail, à effacer en partant.
+    /// `None` quand la copie appartient à une SÉANCE : c'est elle qui décide
+    /// de ce qui survit à la fermeture.
     couche: Option<std::path::PathBuf>,
     /// **Combien de fois la ZONE ENTIÈRE a été rechargée.**
     ///
@@ -680,6 +682,29 @@ impl Ouvert {
         let overlay =
             tf_world::FsSource::open(&couche).map_err(|e| format!("copie de travail : {e:?}"))?;
         let staging = std::sync::Arc::new(tf_world::Staging::new(source, overlay));
+        Self::monter(assets, staging, dir, zone, Some(couche))
+    }
+
+    /// **Ouvre un monde sur une copie de travail DONNÉE** — celle d'une
+    /// séance, qui survit à la fermeture. `ouvrir` en fabrique une jetable,
+    /// effacée en partant : c'est ce que veulent un test et une capture.
+    pub fn sur_staging(
+        racine: &str,
+        staging: std::sync::Arc<tf_world::Staging<tf_world::FsSource, tf_world::FsSource>>,
+        nom: &str,
+        zone: [i32; 4],
+    ) -> Result<Ouvert, String> {
+        let assets = Assets::charger(racine)?;
+        Self::monter(assets, staging, nom, zone, None)
+    }
+
+    fn monter(
+        assets: Assets,
+        staging: std::sync::Arc<tf_world::Staging<tf_world::FsSource, tf_world::FsSource>>,
+        dir: &str,
+        zone: [i32; 4],
+        couche: Option<std::path::PathBuf>,
+    ) -> Result<Ouvert, String> {
         let m = charger_monde(&assets, Ou::Source(staging.as_ref(), zone, dir.to_string()))?;
         let mut o = Ouvert {
             assets,
@@ -687,7 +712,7 @@ impl Ouvert {
             staging: Some(staging),
             zone,
             nom: dir.to_string(),
-            couche: Some(couche),
+            couche,
             rechargements: 0,
             sections_remaillees: 0,
             residence: tf_world::Residency::new(BUDGET_RESIDENCE),

@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (916 tests aujourd’hui)
+cargo test            # tous les crates (953 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -350,6 +350,9 @@ crates/
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
+               SÉANCE ✅ (`session.rs`) : copie de travail et annulation qui
+               survivent à la fermeture ; la copie connaît la BASE de chaque
+               région et refuse d'écrire par-dessus ce que le jeu a changé
                (cellules de chunk et de .mca, `//chunk` et les sections)
                sélection ✅ : deux coins, `//expand`, la FACE qu'on attrape,
                et le POUSSER-TIRER (combien de blocs, et quelle TRANCHE)
@@ -427,6 +430,9 @@ couvriront le même terrain.
 | Une chose que la scène TIENT en mémoire | son terme dans `Ouvert::peser` (`tf-app/src/scene.rs`) ET dans `octets_residents`, jamais dans l'un seul : c'est leur ÉGALITÉ qu'un test vérifie à l'octet près, et une comptabilité qui ne se compare à rien est une comptabilité qu'on peut tenir en se trompant |
 | Une case dont une ENTITÉ se souvient (lit, ruche, laisse…) | les tables de `tf-anvil/src/mobiles.rs` (`TRIPLETS`, `COMPOUNDS_CASE`, `TABLEAUX_CASE`) — par son NOM et sa forme exacte, jamais devinée sur l'allure d'un `{X, Y, Z}` — et un cas dans `tf-ops/tests/mobiles.rs`. Elle ne suivra que si le bloc qu'elle désigne suit |
 | Un type d'entité ORIENTÉ (`Facing` qu'on sait lire) | `genre` dans `tf-ops/src/mobiles.rs`. Sans ça, son orientation reste telle quelle et elle est annoncée APPROCHÉE — jamais devinée |
+| Une métadonnée de la copie de travail | `encoder_etat` / `decoder_etat` (`tf-world/src/staging.rs`, format `TFC1`) — le décodeur rend `None` AU MOINDRE DOUTE : une table à moitié comprise donnerait des bases fausses, pire que pas de base du tout |
+| Un fichier dans le dossier d'une SÉANCE | une constante de `session.rs`, ET sa ligne dans `mettre_de_cote` — sinon une séance mise de côté part sans lui |
+| Ce que la reprise d'une séance doit DIRE | `Reprise::texte` : la coque l'affiche à la première image, la ligne de commande l'imprime |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2056,3 +2062,44 @@ propres à ce dépôt.
   fait rien relire » tournait sur une fixture SANS biomes, donc son
   `//setbiome` n'écrivait rien et la prémisse n'était jamais en jeu. Il exige
   maintenant qu'un biome ait changé.
+- **Écrire TOUT ce que la copie a un jour touché, c'est réécrire la partie
+  d'avant.** `commit` recopiait chaque région que la couche portait, écrite
+  ou non depuis. Écrire, aller voir en jeu, revenir éditer ailleurs, écrire
+  encore : la seconde écriture remettait les régions de la première telles
+  qu'avant la partie — perte silencieuse, dans le va-et-vient le plus
+  COURANT. L'écriture n'écrit plus que ce qui attend, et une région que la
+  save porte telle quelle QUITTE la copie (`rafraichir_regions`) : gardée sans
+  travail, elle deviendrait un conflit le jour où le joueur y remet les pieds.
+- **« À jour » se juge au CONTENU, pas aux octets.** Une annulation rend un
+  chunk identique mais RECOMPRESSÉ : jugée aux octets, une séance « éditer
+  puis tout annuler » survivait à la fermeture, et le jeu touchant ensuite la
+  région fabriquait un conflit avec… rien. `meme_contenu` compare chunk par
+  chunk, décompressé, et s'arrête au premier qui diffère — une région qui
+  porte du travail coûte deux chunks. Le journal n'en souffre pas : ses
+  empreintes portent déjà sur le contenu décompressé.
+- **Des octets quelconques se lisent comme une région VIDE.** Les fixtures
+  de `staging` étaient `vec![0; n]` marqué au premier octet : l'en-tête d'une
+  région y dit « aucun chunk ». Dès que « à jour » s'est jugé au contenu,
+  toutes les fixtures sont devenues identiques et neuf tests sont tombés — à
+  raison. `commun::region_marquee` écrit une vraie région à charge
+  INCOMPRESSIBLE, pour que les tailles comparées comparent encore quelque
+  chose. Même chose pour une charge déportée : orpheline, elle ne compte pas
+  dans le contenu, et un test qui n'en a que d'orphelines ne teste rien
+  (`commun::region_deportee`).
+- **Un enregistrement tronqué au bout d'un fichier en AJOUT SEUL empoisonne
+  la suite.** La lecture s'arrête dessus, sans échouer — c'est voulu. Mais
+  tout ce qu'on ajoutait DERRIÈRE lui ne se relisait jamais : la séance
+  suivante perdait tout ce que celle-ci aurait fait. Il se coupe à la reprise
+  (`lire_journal`), avant d'ajouter.
+- **Une annulation qui échoue à mi-chemin doit n'avoir RIEN fait.** Écrite
+  région par région, une annulation qui divergeait dans la deuxième avait
+  déjà défait la première ; et le curseur du journal avançait même quand
+  `rejouer` échouait, si bien que « refaire » réappliquait l'entrée par-dessus
+  elle-même. `rejouer` calcule tout en mémoire avant d'écrire, et le moteur
+  rend le curseur sur un échec. Le cas n'a rien d'exotique : une région relue
+  depuis la save à la reprise diverge par construction.
+- **Une dimension découverte par son dossier `region/` rate une couche qui
+  n'a écrit que des entités.** `FsSource::dimensions` ne regarde que
+  `region/` ; la reprise d'une telle couche la perdait, et la première
+  lecture retombait sur la save. `dimensions_de` ajoute les trois vanilla
+  d'office.
