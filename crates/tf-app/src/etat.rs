@@ -341,6 +341,8 @@ pub struct Etat {
     pub jeu_ferme: bool,
     /// Ce que l'interface a à dire, en une ligne. Vide = rien à signaler.
     pub message: String,
+    /// L'écran d'ouverture d'un monde.
+    pub accueil: crate::accueil::Accueil,
 }
 
 /// La face que `viser` rend, dite dans le vocabulaire de la sélection.
@@ -380,7 +382,25 @@ impl Etat {
             editable: false,
             jeu_ferme: false,
             message: String::new(),
+            accueil: crate::accueil::Accueil::default(),
         }
+    }
+
+    /// **Un autre monde vient de s'ouvrir** : la caméra se recadre sur lui, et
+    /// tout ce qui désignait des cases de l'ancien s'efface — sélection,
+    /// tirage, réticule. Le reste reste : le mode, l'outil, l'opération et
+    /// ses paramètres sont des choix de l'utilisateur, pas des propriétés du
+    /// monde.
+    ///
+    /// « Minecraft est fermé » se redemande : c'était vrai d'une AUTRE save.
+    pub fn recadrer(&mut self, min: [f32; 3], max: [f32; 3], aspect: f32) {
+        self.vue = Vue::cadrer(min, max, aspect);
+        self.selection = Selection::nouvelle();
+        self.tirage = None;
+        self.reticule = SousLeReticule::default();
+        self.demande = None;
+        self.jeu_ferme = false;
+        self.message.clear();
     }
 
     /// Relève ce que le réticule désigne, et ce que l'accrochage en fait.

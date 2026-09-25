@@ -1564,18 +1564,59 @@ impl Ouvert {
     /// quelques millisecondes pour un remaillage incrémental. Tout appel
     /// après une édition ordinaire est un bug, et un test le vérifie.
     fn recharger(&mut self) -> Result<(), String> {
-        self.rechargements += 1;
-        // Ce qui est parti au mailleur maillait le monde qu'on remplace : il
-        // est oublié, et jeté à son retour.
-        self.atelier.oublier();
         let st = self
             .staging
             .as_ref()
             .expect("un monde éditable a un staging");
-        self.monde = charger_monde(
+        let monde = charger_monde(
             &self.assets,
             Ou::Source(st.as_ref(), self.zone, self.nom.clone()),
         )?;
+        self.repartir(monde);
+        Ok(())
+    }
+
+    /// **Ouvre un AUTRE monde dans la même fenêtre** — sur sa copie de
+    /// travail, avec les mêmes assets, ou d'autres quand le monde vient d'une
+    /// autre installation.
+    ///
+    /// Le monde neuf se charge AVANT que quoi que ce soit ne change : s'il ne
+    /// se charge pas, l'ancien reste affiché et éditable, et l'erreur remonte.
+    /// Un échec qui laisserait une fenêtre sans monde obligerait à relancer.
+    pub fn changer_de_monde(
+        &mut self,
+        staging: std::sync::Arc<tf_world::Staging<tf_world::FsSource, tf_world::FsSource>>,
+        nom: &str,
+        zone: [i32; 4],
+        assets: Option<Assets>,
+    ) -> Result<(), String> {
+        let monde = charger_monde(
+            assets.as_ref().unwrap_or(&self.assets),
+            Ou::Source(staging.as_ref(), zone, nom.to_string()),
+        )?;
+        if let Some(a) = assets {
+            self.assets = a;
+        }
+        // La copie jetable de l'ancien monde part avec lui ; celle d'une
+        // séance, elle, appartient à la séance (`couche` vaut alors `None`).
+        if let Some(c) = self.couche.take() {
+            let _ = std::fs::remove_dir_all(c);
+        }
+        self.staging = Some(staging);
+        self.nom = nom.to_string();
+        self.zone = zone;
+        self.repartir(monde);
+        Ok(())
+    }
+
+    /// Repart d'un monde fraîchement chargé : tout ce qui décrivait l'ancien
+    /// est oublié.
+    fn repartir(&mut self, monde: Monde) {
+        self.rechargements += 1;
+        // Ce qui est parti au mailleur maillait le monde qu'on remplace : il
+        // est oublié, et jeté à son retour.
+        self.atelier.oublier();
+        self.monde = monde;
         // Un rechargement refait TOUT : c'est ce que le compteur doit dire.
         self.sections_remaillees = self.monde.grille.len();
         // **La fenêtre de résidence repart de zéro avec lui.** `recharger`
@@ -1591,7 +1632,6 @@ impl Ouvert {
         self.protegees.clear();
         self.deborde = false;
         self.inscrire_la_zone();
-        Ok(())
     }
 
     /// Le monde est-il éditable ? La fixture ne l'est pas, et l'interface doit

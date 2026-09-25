@@ -1,9 +1,16 @@
 //! **titiforge — la coque.**
 //!
 //! ```text
-//! titiforge <assets> [--monde <dossier>] [--zone "cx0,cz0,cx1,cz1"]
-//! titiforge <assets> --capture sortie.png [--taille 1400x900]
+//! titiforge                                   (un double clic suffit)
+//! titiforge [<assets>] [--monde <dossier>] [--zone "cx0,cz0,cx1,cz1"]
+//! titiforge [<assets>] --capture sortie.png [--taille 1400x900]
 //! ```
+//!
+//! **Tout est facultatif.** Sans assets, on prend l'installation de Minecraft
+//! trouvée sur la machine ; sans monde, la fenêtre s'ouvre sur l'ACCUEIL — les
+//! saves des installations, les mondes récents, un chemin à coller, ou un
+//! dossier à glisser. Un monde s'ouvre là où l'on joue (`level.dat`), pas au
+//! bloc (0, 0).
 //!
 //! **`--capture` n'est pas un mode dégradé.** La coque sait se dessiner dans
 //! une TEXTURE, exactement comme le rendu : c'est ce qui permet de la vérifier
@@ -16,24 +23,18 @@ use tf_app::{interface, scene};
 use tf_render::{Appareil, AtlasGpu, Cible, Scene};
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let racine = match args.next() {
-        Some(r) => r,
-        None => {
-            eprintln!(
-                "usage : titiforge <assets> [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
-                 \x20       [--rayon <cellules>]\n\
-                 \x20       titiforge <assets> --capture sortie.png [--taille 1400x900]\n\n\
-                 <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
-                 Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
-                 demander de connaître nos formats."
-            );
-            std::process::exit(2);
-        }
+    let mut args = std::env::args().skip(1).peekable();
+    // **Les assets sont facultatifs.** Sans eux, on prend l'installation de
+    // Minecraft qu'on trouve sur la machine — c'est ce qui permet d'ouvrir
+    // titiforge d'un double clic, sans rien savoir de nos formats.
+    let designes: Option<String> = match args.peek() {
+        Some(a) if !a.starts_with("--") => args.next(),
+        _ => None,
     };
     let mut monde: Option<String> = None;
-    let mut zone = [0i32, 0, 1, 1];
+    let mut zone: Option<[i32; 4]> = None;
     let mut capture: Option<String> = None;
+    let mut montrer_accueil = false;
     let mut mode = tf_render::controles::Mode::Edition;
     let (mut larg, mut haut) = (1400u32, 900u32);
     // **La distance d'affichage, en CHUNKS.** Un disque de rayon 8 porte 201
@@ -54,6 +55,9 @@ fn main() {
                 }
             }
             "--capture" => capture = args.next(),
+            // La capture montre l'ACCUEIL par-dessus la scène : c'est ce qui
+            // permet de le regarder depuis une machine sans écran.
+            "--accueil" => montrer_accueil = true,
             "--zone" => {
                 let v: Vec<i32> = args
                     .next()
@@ -62,12 +66,12 @@ fn main() {
                     .filter_map(|s| s.trim().parse().ok())
                     .collect();
                 if v.len() == 4 {
-                    zone = [
+                    zone = Some([
                         v[0].min(v[2]),
                         v[1].min(v[3]),
                         v[0].max(v[2]),
                         v[1].max(v[3]),
-                    ];
+                    ]);
                 }
             }
             "--rayon" => {
@@ -88,6 +92,36 @@ fn main() {
         }
     }
 
+    let installations = tf_assets::installations_sous(&tf_assets::dossiers_ou_chercher());
+    let racine = match designes.clone().or_else(|| {
+        tf_app::accueil::assets_par_defaut(
+            &installations,
+            monde.as_deref().map(std::path::Path::new),
+        )
+        .map(|p| p.display().to_string())
+    }) {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "aucune installation de Minecraft trouvée — désigner des assets :\n\n\
+                 usage : titiforge [<assets>] [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
+                 \x20       [--rayon <cellules>]\n\
+                 \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\n\
+                 <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
+                 Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
+                 demander de connaître nos formats."
+            );
+            std::process::exit(2);
+        }
+    };
+    // **Où ouvrir** : la zone demandée, sinon là où l'on joue.
+    let zone = zone.unwrap_or_else(|| {
+        let n = monde
+            .as_deref()
+            .and_then(|m| tf_world::niveau::lire_fichier(std::path::Path::new(m)));
+        tf_app::accueil::zone_d_ouverture(n.as_ref())
+    });
+
     // **La séance** : la copie de travail et l'annulation, rangées à un endroit
     // STABLE pour survivre à la fermeture. Pas pour une capture, qui n'édite
     // rien — et qui ne doit pas prendre le verrou d'une fenêtre ouverte.
@@ -103,6 +137,11 @@ fn main() {
         Ok(o) => o,
         Err(e) => {
             eprintln!("{e}");
+            // La séance vient de s'ouvrir sur un monde qu'on ne montrera pas :
+            // la refermer, sinon son dossier reste — vide, mais là.
+            if let Some((s, _, _)) = seance {
+                let _ = s.fermer();
+            }
             std::process::exit(1);
         }
     };
@@ -118,20 +157,49 @@ fn main() {
         }
     );
 
-    let accueil = seance.as_ref().and_then(|(_, _, r)| r.texte());
-    if let Some(t) = &accueil {
+    let message = seance.as_ref().and_then(|(_, _, r)| r.texte());
+    if let Some(t) = &message {
         println!("{t}");
     }
     match capture {
-        Some(png) => capturer(&ouvert.monde, &png, larg, haut, mode, ouvert.editable()),
-        None => fenetre(
-            ouvert,
-            seance.map(|(s, j, _)| (s, j)),
-            accueil,
-            larg,
-            haut,
-            rayon,
-        ),
+        Some(png) => {
+            let accueil = montrer_accueil.then(|| {
+                let seances = tf_world::session::racine_par_defaut();
+                let recents = seances
+                    .as_deref()
+                    .and_then(tf_app::accueil::fichier_recents)
+                    .map(|f| tf_app::accueil::lire_recents(&f))
+                    .unwrap_or_default();
+                tf_app::accueil::Accueil::explorer(&installations, seances.as_deref(), &recents)
+            });
+            capturer(
+                &ouvert.monde,
+                &png,
+                (larg, haut),
+                mode,
+                ouvert.editable(),
+                accueil,
+            )
+        }
+        None => {
+            let depart = tf_app::accueil::Depart {
+                assets: racine.clone(),
+                assets_designes: designes.is_some(),
+                installations,
+                seances: tf_world::session::racine_par_defaut(),
+                message,
+                // Aucun monde demandé : la fenêtre s'ouvre sur l'accueil.
+                accueil: monde.is_none(),
+            };
+            fenetre(
+                ouvert,
+                seance.map(|(s, j, _)| (s, j)),
+                depart,
+                larg,
+                haut,
+                rayon,
+            )
+        }
     }
 }
 
@@ -158,10 +226,10 @@ fn ouvrir_seance(dir: &str) -> (tf_world::Seance, tf_world::Journal, tf_world::R
 fn capturer(
     m: &scene::Monde,
     sortie: &str,
-    larg: u32,
-    haut: u32,
+    (larg, haut): (u32, u32),
     mode: tf_render::controles::Mode,
     editable: bool,
+    accueil: Option<tf_app::accueil::Accueil>,
 ) {
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -202,6 +270,10 @@ fn capturer(
     ));
     etat.quadrillage.chunks = Some(1);
     etat.quadrillage.mca = Some(0);
+    if let Some(a) = accueil {
+        etat.accueil = a;
+        etat.accueil.ouvert = true;
+    }
 
     let cible = Cible::nouvelle(&app, larg, haut);
     let atlas = AtlasGpu::avec_mips(
@@ -374,7 +446,14 @@ fn ecrire_png(chemin: &str, larg: u32, haut: u32, pixels: &[u8]) {
 type EnSeance = Option<(tf_world::Seance, tf_world::Journal)>;
 
 #[cfg(not(feature = "fenetre"))]
-fn fenetre(_m: scene::Ouvert, _s: EnSeance, _a: Option<String>, _l: u32, _h: u32, _r: u32) {
+fn fenetre(
+    _m: scene::Ouvert,
+    _s: EnSeance,
+    _d: tf_app::accueil::Depart,
+    _l: u32,
+    _h: u32,
+    _r: u32,
+) {
     eprintln!("compilé sans la fenêtre — utiliser --capture");
     std::process::exit(2);
 }
@@ -383,12 +462,12 @@ fn fenetre(_m: scene::Ouvert, _s: EnSeance, _a: Option<String>, _l: u32, _h: u32
 fn fenetre(
     o: scene::Ouvert,
     seance: EnSeance,
-    accueil: Option<String>,
+    depart: tf_app::accueil::Depart,
     larg: u32,
     haut: u32,
     rayon: u32,
 ) {
-    crate::coque::lancer(o, seance, accueil, larg, haut, rayon);
+    crate::coque::lancer(o, seance, depart, larg, haut, rayon);
 }
 
 #[cfg(feature = "fenetre")]

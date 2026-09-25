@@ -324,3 +324,37 @@ fn un_dossier_quelconque_est_refuse_en_le_disant() {
         "le message doit nommer le critère : {e}"
     );
 }
+
+#[test]
+fn les_installations_se_trouvent_sous_un_dossier_par_leur_contenu() {
+    // `%APPDATA%` ressemble à ça : des launchers, des dossiers qui n'en sont
+    // pas, et des fichiers.
+    let d = TempDir::new("appdata");
+    fs::create_dir_all(d.path().join(".minecraft/versions")).unwrap();
+    fs::create_dir_all(d.path().join(".minefield_1_18/versions")).unwrap();
+    fs::create_dir_all(d.path().join("Discord/Cache")).unwrap();
+    fs::create_dir_all(d.path().join("sans-versions/saves")).unwrap();
+    fs::write(d.path().join("un-fichier"), b"x").unwrap();
+
+    let trouvees = tf_assets::installations_sous(&[d.path().to_path_buf()]);
+    let noms: Vec<String> = trouvees
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        noms,
+        [".minecraft", ".minefield_1_18"],
+        "le critère est `versions/` — jamais le nom : le launcher du serveur \
+         n'est pas `.minecraft`"
+    );
+
+    // Un dossier qui EST une installation se trouve lui-même ; donné deux
+    // fois, il ne se compte qu'une.
+    let inst = d.path().join(".minecraft");
+    assert_eq!(
+        tf_assets::installations_sous(&[inst.clone(), inst.clone()]),
+        vec![inst]
+    );
+    // Un dossier qui n'existe pas ne fait rien échouer.
+    assert!(tf_assets::installations_sous(&[d.path().join("nulle-part")]).is_empty());
+}

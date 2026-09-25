@@ -14,6 +14,7 @@ pub mod fs_source;
 pub mod inference;
 pub mod journal;
 pub mod lecture;
+pub mod niveau;
 pub mod residency;
 pub mod selection;
 pub mod session;

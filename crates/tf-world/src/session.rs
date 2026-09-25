@@ -383,10 +383,19 @@ impl Seance {
 /// l'utilisateur — surtout pas la save : `sauvegarder` copie la save entière
 /// avant chaque écriture, et y emporterait la copie de travail à chaque fois.
 pub fn racine_par_defaut() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("TITIFORGE_SEANCES") {
-        return Some(PathBuf::from(p));
+    racine_selon(&|n| std::env::var_os(n))
+}
+
+/// [`racine_par_defaut`], l'environnement étant DONNÉ — pour se tester sans
+/// toucher aux variables du processus, que les tests partagent.
+pub fn racine_selon(env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    // Une variable VIDE vaut absente — c'est la règle XDG, et la seule sûre :
+    // `XDG_DATA_HOME=` prise au mot rangerait les séances dans un chemin
+    // RELATIF, c'est-à-dire là où l'application a été lancée.
+    let var = |n: &str| env(n).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(p) = var("TITIFORGE_SEANCES") {
+        return Some(p);
     }
-    let var = |n: &str| std::env::var_os(n).map(PathBuf::from);
     let base = if cfg!(windows) {
         var("LOCALAPPDATA")
     } else if cfg!(target_os = "macos") {

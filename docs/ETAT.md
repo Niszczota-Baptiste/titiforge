@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **953**, zéro échec |
+| Tests | **973**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-953 tests, répartis par ce qu'ils PROUVENT :
+973 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -53,7 +53,8 @@ cargo test --workspace
 | `tf-anvil` mobiles | 7 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 135 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
-| `tf-world` session | 16 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier |
+| `tf-world` session | 17 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier ; et qu'une variable d'environnement VIDE vaut absente — prise au mot, elle rangeait les séances dans un chemin relatif |
+| `tf-world` niveau | 9 | `level.dat` : le nom, le point d'apparition et le joueur se lisent À TRAVERS ce qu'on saute (réglages de génération, inventaire) ; un joueur dans le Nether fait ouvrir au point d'apparition ; une position qui n'est pas un nombre est ignorée ; aucune troncature ne fait paniquer ni ne rend un point à moitié lu ; et les saves d'une installation se listent de la plus récemment jouée à la plus ancienne, sous le nom du JEU |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 67 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
@@ -66,7 +67,7 @@ cargo test --workspace
 | `tf-ops` forme | 16 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-ops` creuser | 12 | `//hollow` : le critère est TOPOLOGIQUE, et un coffre vidé ne revient pas en fantôme |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
-| `tf-assets` pack/textures/rotation/jeu/codex_reel | 67 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
+| `tf-assets` pack/textures/rotation/jeu/codex_reel | 68 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 42 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
 | `tf-render` rendu | 30 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
@@ -79,6 +80,8 @@ cargo test --workspace
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
 | `tf-app` moteur | 12 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; et qu'un journal qui ne s'écrit pas se DIT |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
+| `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
+| `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
 | `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
@@ -564,6 +567,50 @@ chunk n'y renvoyait — donc hors du contenu de la région, et le jugement au
 contenu avait raison de les ignorer. Ils portent maintenant une vraie région
 dont un chunk est déporté.
 
+### Ouvrir un monde sans ligne de commande
+
+```bash
+cargo run --release -p tf-app                                   # un double clic suffit
+cargo run --release -p tf-app -- <assets> --capture accueil.png --accueil
+```
+
+`titiforge` s'ouvre maintenant sans argument. Les assets viennent de
+l'installation de Minecraft trouvée sur la machine — par son dossier
+`versions/`, jamais par son nom, et seulement si une version y est vraiment
+téléchargée — et la fenêtre s'ouvre sur l'**accueil** : les saves de chaque
+installation sous le nom que le JEU leur donne (`level.dat`), de la plus
+récemment jouée à la plus ancienne ; les mondes récents ; un chemin à coller ;
+ou un dossier à glisser sur la fenêtre. Une save dont la séance porte du
+travail pas encore écrit est signalée dans la liste — c'est ce qui évite de
+croire l'avoir perdu, ou de jouer dans un monde en croyant qu'il porte déjà
+les modifications.
+
+**Un monde s'ouvre là où l'on joue**, pas au bloc (0, 0) : `level.dat` donne
+la position du joueur — ou le point d'apparition quand il est dans une autre
+dimension — et ce sont les 3 × 3 chunks autour qui se chargent d'abord ; le
+reste arrive en volant.
+
+**Changer de monde se fait dans la même fenêtre**, et dans un ordre qui rend
+l'échec sans dommage : la séance du monde neuf s'ouvre d'abord (sinon rien ne
+bouge), sa scène se charge avant que l'ancienne ne parte, et seulement alors
+l'ancien moteur s'arrête — ce qui ferme SA séance après sa dernière action.
+Un monde d'une autre installation prend les textures de la sienne, sauf si
+l'utilisateur a désigné des assets.
+
+Deux défauts trouvés en l'essayant pour de vrai, sous Xvfb : une variable
+d'environnement VIDE (`XDG_DATA_HOME=`) était prise pour un chemin, et
+rangeait les séances dans un chemin relatif ; et un launcher dont aucune
+version n'est téléchargée était choisi comme source d'assets — l'ouverture
+échouait, en laissant derrière elle un dossier de séance vide.
+
+23 mutations, 23 tuées — deux au second tour. L'une rendait à une
+installation une save rangée hors de `saves/` (une copie de secours) : le
+test ne regardait que des chemins qui n'étaient dans AUCUNE installation.
+L'autre retirait la borne des récents à l'écriture : la lecture plafonne à
+dix, ce qui cachait un fichier d'une ligne de trop — et le dernier geste du
+test, re-noter un monde déjà présent, le ramenait justement à dix. Le compte
+se vérifie maintenant juste après la boucle.
+
 ---
 
 ## 4. Le rendu
@@ -1030,7 +1077,8 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **Ni composants ni saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste, et les composants qu'on modifie une fois pour les mettre à jour partout, restent à écrire (phase 7) |
-| **La coque n'ouvre pas de save par un menu** | le monde arrive par la ligne de commande (`--monde`, `--zone`), ou c'est la fixture de BUILD |
+| **Changer de monde EN CLIQUANT n'a été vu par personne** | la séance, la scène (contre une ouverture directe), le moteur et l'accueil sont testés chacun ; la fenêtre, elle, n'a tourné que sous Xvfb, où l'on ne peut pas cliquer. La jonction de la coque (`ouvrir_monde`) attend un essai sur une vraie machine |
+| **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Un dialogue natif demanderait une dépendance de plus |
 | **Une séance ne voit pas le jeu changer la save PENDANT qu'elle est ouverte** | les données restent justes — une région écrite a quitté la copie, donc la prochaine opération relit la save — mais ce qui est À L'ÉCRAN date d'avant la partie jusqu'à son prochain remaillage. Et une région où la copie porte du travail, que le jeu change entre-temps, fait refuser l'écriture sans autre issue dans l'application que fermer et rouvrir (la séance est alors mise de côté) |
 | **Pas de bouton « abandonner la copie de travail »** | tout annuler y revient, et une séance en conflit se met de côté d'elle-même ; mais on ne peut pas jeter d'un geste une séance qu'on ne veut plus. Les séances mises de côté ne s'effacent jamais seules |
 | **Rien n'est forcé sur le disque** (`fsync`) | un arrêt du PROGRAMME ne perd rien ; une coupure de courant peut perdre les dernières actions. Et une action interrompue en plein milieu peut laisser la copie à moitié écrite, sans entrée de journal pour la défaire : la reprise le DIT (« … a été interrompue »), elle ne sait pas le réparer |

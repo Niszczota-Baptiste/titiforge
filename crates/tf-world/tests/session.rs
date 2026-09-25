@@ -567,3 +567,37 @@ fn une_save_introuvable_ne_laisse_pas_de_seance() {
     assert_eq!(e.to_string(), "save introuvable");
     assert!(!racine.exists());
 }
+
+#[test]
+fn une_variable_d_environnement_vide_vaut_absente() {
+    use std::ffi::OsString;
+    use tf_world::session::racine_selon;
+    let env = |vars: &'static [(&'static str, &'static str)]| {
+        move |n: &str| {
+            vars.iter()
+                .find(|(k, _)| *k == n)
+                .map(|(_, v)| OsString::from(*v))
+        }
+    };
+    // Désignée, elle l'emporte.
+    assert_eq!(
+        racine_selon(&env(&[("TITIFORGE_SEANCES", "/ailleurs")])),
+        Some(PathBuf::from("/ailleurs"))
+    );
+    // Vides, toutes : la règle XDG. Prises au mot, elles rangeaient les
+    // séances dans un chemin RELATIF — là où l'application a été lancée.
+    let r = racine_selon(&env(&[
+        ("TITIFORGE_SEANCES", ""),
+        ("XDG_DATA_HOME", ""),
+        ("LOCALAPPDATA", "/donnees"),
+        ("HOME", "/maison"),
+    ]))
+    .unwrap();
+    assert!(r.is_absolute(), "{}", r.display());
+    assert!(r.ends_with("titiforge/seances"), "{}", r.display());
+    // Rien du tout : on ne sait pas où ranger, et on le dit.
+    assert_eq!(
+        racine_selon(&env(&[("HOME", ""), ("LOCALAPPDATA", "")])),
+        None
+    );
+}

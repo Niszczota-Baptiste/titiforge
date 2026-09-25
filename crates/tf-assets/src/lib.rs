@@ -34,7 +34,10 @@ pub use archive::Archive;
 pub use atlas::{Ajout, Atlas};
 pub use blockstates::{Blockstate, Variante};
 pub use catalogue::{table_rendu, Catalogue, Classement};
-pub use jeu::{catalogue, est_une_installation, inspecter, Genre, Installation, Version};
+pub use jeu::{
+    catalogue, dossiers_ou_chercher, est_une_installation, inspecter, installations_sous, Genre,
+    Installation, Version,
+};
 pub use modele::{cuboides, resoudre, Element, Modele, ModeleError, ModeleResolu};
 pub use rotation::{axes, tourner, Axes};
 pub use source::{Dossier, Id, Pile, Source, SourceError};

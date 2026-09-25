@@ -51,6 +51,54 @@ pub fn est_une_installation(racine: impl AsRef<Path>) -> bool {
     racine.as_ref().join("versions").is_dir()
 }
 
+/// **Les installations sous ces dossiers** — chacun d'eux, et ses enfants
+/// directs. Triées, sans doublon.
+///
+/// Le critère reste `versions/`, jamais le nom : c'est ce qui trouve
+/// `%APPDATA%\.minefield_1_18` à côté de `.minecraft`. Un dossier illisible
+/// est sauté, pas une erreur — chercher ne doit pas empêcher d'ouvrir.
+pub fn installations_sous(dossiers: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for d in dossiers {
+        if est_une_installation(d) {
+            out.push(d.clone());
+        }
+        let Ok(entrees) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in entrees.flatten() {
+            let p = e.path();
+            if p.is_dir() && est_une_installation(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// **Où chercher les installations** sur cette machine : là où les
+/// launchers les posent — `%APPDATA%` sous Windows, `Application Support`
+/// sous macOS, le dossier personnel ailleurs (`~/.minecraft`).
+pub fn dossiers_ou_chercher() -> Vec<PathBuf> {
+    // Vide vaut absente : chercher dans « » listerait le dossier courant.
+    let var = |n: &str| {
+        std::env::var_os(n)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let mut v = Vec::new();
+    if cfg!(windows) {
+        v.extend(var("APPDATA"));
+    } else if cfg!(target_os = "macos") {
+        v.extend(var("HOME").map(|h| h.join("Library/Application Support")));
+    } else {
+        v.extend(var("HOME"));
+    }
+    v
+}
+
 /// Ce qu'une installation contient. Ne lit aucun `.jar` — seulement les noms.
 pub fn inspecter(racine: impl AsRef<Path>) -> Result<Installation, SourceError> {
     let racine = racine.as_ref().to_path_buf();

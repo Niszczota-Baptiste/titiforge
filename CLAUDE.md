@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (953 tests aujourd’hui)
+cargo test            # tous les crates (973 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -317,6 +317,10 @@ TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/publ
 # LA COQUE. Une fenêtre, un vol à la Minecraft (molette ENFONCÉE pour tourner,
 # +Maj panoramique, molette roulée pour avancer ; gauche et droit restent aux
 # outils), la visée au réticule, la sélection à deux coins, l'accrochage.
+# SANS ARGUMENT : l'installation de Minecraft trouvée sur la machine, et
+# l'ACCUEIL — les saves, les récents, un chemin, un dossier à glisser.
+cargo run --release -p tf-app
+cargo run --release -p tf-app -- ../titisite/public/codex --capture accueil.png --accueil
 cargo run --release -p tf-app -- ../titisite/public/codex
 cargo run --release -p tf-app -- ../titisite/public/codex --monde D:\monde --zone "4,7,10,12"
 # Elle se dessine aussi dans une TEXTURE — interface comprise — donc elle se
@@ -350,10 +354,10 @@ crates/
   tf-blocks/   règles de transformation DÉRIVÉES du pack ✅ · internement à venir
   tf-world/    adressage ✅ · résidence ✅ · source ✅ · staging ✅ · journal ✅
                (typé, ajout seul, avec paramètres de REJEU) · découpage ✅
+               (cellules de chunk et de .mca, `//chunk` et les sections)
                SÉANCE ✅ (`session.rs`) : copie de travail et annulation qui
                survivent à la fermeture ; la copie connaît la BASE de chaque
                région et refuse d'écrire par-dessus ce que le jeu a changé
-               (cellules de chunk et de .mca, `//chunk` et les sections)
                sélection ✅ : deux coins, `//expand`, la FACE qu'on attrape,
                et le POUSSER-TIRER (combien de blocs, et quelle TRANCHE)
                inférence ✅ : accrocher à ce qui est BÂTI, et DIRE à quoi
@@ -403,6 +407,11 @@ crates/
                  charge, pose et lâche à chaque image. Dans la bibliothèque
                  et non dans la fenêtre, pour qu'un test fasse VOLER une
                  caméra sans serveur graphique
+               · ACCUEIL ✅ (`accueil.rs`) : sans argument, l'installation
+                 trouvée sur la machine ; les saves sous le nom du jeu, les
+                 récents, un chemin collé ou un dossier glissé ; le travail
+                 pas encore écrit SIGNALÉ ; un monde s'ouvre là où l'on joue
+                 (`level.dat`) et se change dans la même fenêtre
                · composants et saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -433,6 +442,8 @@ couvriront le même terrain.
 | Une métadonnée de la copie de travail | `encoder_etat` / `decoder_etat` (`tf-world/src/staging.rs`, format `TFC1`) — le décodeur rend `None` AU MOINDRE DOUTE : une table à moitié comprise donnerait des bases fausses, pire que pas de base du tout |
 | Un fichier dans le dossier d'une SÉANCE | une constante de `session.rs`, ET sa ligne dans `mettre_de_cote` — sinon une séance mise de côté part sans lui |
 | Ce que la reprise d'une séance doit DIRE | `Reprise::texte` : la coque l'affiche à la première image, la ligne de commande l'imprime |
+| Un endroit où chercher des installations | `dossiers_ou_chercher` (`tf-assets/src/jeu.rs`) — le critère reste `versions/`, et `assets_par_defaut` (`tf-app/src/accueil.rs`) écarte ce qui n'a aucune version téléchargée |
+| Ce que `level.dat` doit dire de plus | `tf-world/src/niveau.rs` — un champ lu, jamais écrit : le jeu y garde l'inventaire du joueur en solo |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2103,3 +2114,21 @@ propres à ce dépôt.
   `region/` ; la reprise d'une telle couche la perdait, et la première
   lecture retombait sur la save. `dimensions_de` ajoute les trois vanilla
   d'office.
+- **Une variable d'environnement VIDE n'est pas un chemin.** `XDG_DATA_HOME=`
+  prise au mot rangeait les séances dans `titiforge/seances` RELATIF —
+  c'est-à-dire dans le dossier d'où l'on avait lancé l'application, une
+  séance différente à chaque raccourci. La règle XDG dit « vide = absente »,
+  et c'est la seule sûre pour toutes les variables qu'on lit. Trouvé en
+  lançant la vraie fenêtre sous Xvfb avec un `HOME` de test : aucun test ne
+  touche aux variables du processus, que les tests partagent — d'où
+  `racine_selon`, qui prend l'environnement en paramètre.
+- **`versions/` dit qu'un launcher est passé par là, pas que le jeu y est
+  installé.** Un launcher dont aucune version n'est téléchargée n'a aucune
+  texture à donner ; choisi comme source d'assets, il faisait échouer
+  l'ouverture — en laissant un dossier de séance vide, ouvert juste avant.
+  `assets_par_defaut` écarte ce qui n'a pas de `.jar`, et un échec après
+  l'ouverture de la séance la REFERME.
+- **L'animation d'apparition d'egui rend une capture illisible.** La capture
+  ne dessine que deux images ; une fenêtre egui y sort à mi-fondu,
+  transparente sur la scène. `fade_in(false)` pour ce qu'on veut pouvoir
+  regarder sans écran.

@@ -12,7 +12,7 @@ n'ont pas :
 | | Ce qu'il apporte | Où on en est |
 |---|---|---|
 | **WorldEdit** | les opérations de masse : sélectionner, remplir, remplacer, tourner, copier. Le geste « change dix millions de blocs d'un coup » | ✅ le socle ET les déplacements ; reste à les brancher à des boutons |
-| **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | le rendu est là, la coque VOLE et SÉLECTIONNE ; les formats d'échange manquent |
+| **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | la coque s'ouvre sur les saves de la machine, là où l'on joue, VOLE et SÉLECTIONNE, et sa séance survit à la fermeture ; les formats d'échange manquent |
 | **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | l'inférence est là et DIT à quoi elle tient ; pousser-tirer et les composants restent — et c'est le plus structurant |
 
 Les deux premiers sont des outils d'ÉDITION : on prend ce qui existe et on le

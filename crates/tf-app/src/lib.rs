@@ -6,6 +6,8 @@
 //! à quoi elle ressemble depuis une machine qui n'a pas d'écran.
 //!
 //! - `etat` : ce que l'interface montre et modifie. Pur, testable.
+//! - `accueil` : ouvrir un monde sans ligne de commande — les saves de la
+//!   machine, les récents, un chemin collé. Pur, testable.
 //! - `interface` : le dessin egui. Il LIT l'état, il ne décide rien.
 //! - `scene` : le montage du monde vers l'arène GPU.
 //! - `chargeur` : le fil qui lit les régions, une réponse par cellule.
@@ -15,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod accueil;
 pub mod chargeur;
 pub mod etat;
 pub mod interface;

@@ -32,12 +32,25 @@ pub fn dessiner(ctx: &egui::Context, e: &mut Etat) {
     egui::SidePanel::right("inspecteur")
         .default_width(310.0)
         .show(ctx, |ui| inspecteur(ui, e));
-    reticule(ctx);
+    if e.accueil.ouvert {
+        accueil(ctx, &mut e.accueil);
+    } else {
+        // Le réticule est au premier plan : il se dessinerait PAR-DESSUS la
+        // fenêtre d'accueil, en plein milieu de la liste des saves.
+        reticule(ctx);
+    }
 }
 
 fn barre(ui: &mut Ui, e: &mut Etat) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("titiforge").strong());
+        if ui
+            .button("Ouvrir un monde…")
+            .on_hover_text("Les saves de vos installations, les mondes récents, ou un chemin.")
+            .clicked()
+        {
+            e.accueil.ouvert = true;
+        }
         ui.separator();
 
         // **Le bouton de mode.** Les deux modes sont nommés d'après ce qu'ils
@@ -472,7 +485,7 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
         ui.label(
             RichText::new(
                 "La fixture n'a pas de save derrière elle : rien à éditer. \
-                 Ouvrir un monde avec --monde.",
+                 « Ouvrir un monde… », en haut à gauche.",
             )
             .small()
             .color(ORANGE),
@@ -675,6 +688,114 @@ fn nom_transfo(t: Option<tf_blocks::Transfo>) -> &'static str {
         None => "aucune",
         Some(x) => x.nom(),
     }
+}
+
+/// **L'écran d'ouverture d'un monde.** Il LIT l'accueil et y pose ce qu'on
+/// choisit ; c'est la coque qui ouvre.
+fn accueil(ctx: &egui::Context, a: &mut crate::accueil::Accueil) {
+    let mut ouvert = a.ouvert;
+    egui::Window::new("Ouvrir un monde")
+        .open(&mut ouvert)
+        // Pas de fondu : une capture ne dessine que deux images, et
+        // l'accueil y sortait à moitié transparent — illisible.
+        .fade_in(false)
+        .collapsible(false)
+        .default_width(460.0)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    if !a.recents.is_empty() {
+                        ui.label(RichText::new("RÉCENTS").strong().color(GRIS));
+                        let mut choix = None;
+                        for s in &a.recents {
+                            if ligne_de_save(ui, s) {
+                                choix = Some(s.save.chemin.clone());
+                            }
+                        }
+                        if let Some(c) = choix {
+                            a.choisir(c);
+                        }
+                        ui.add_space(8.0);
+                    }
+                    if a.nombre_de_saves() == 0 {
+                        ui.label(
+                            RichText::new(
+                                "Aucune save trouvée dans une installation de Minecraft. \
+                                 Coller le chemin d'un monde ci-dessous, ou glisser son \
+                                 dossier sur la fenêtre.",
+                            )
+                            .color(ORANGE),
+                        );
+                    }
+                    let mut choix = None;
+                    for i in &a.installations {
+                        if i.saves.is_empty() {
+                            continue;
+                        }
+                        ui.label(RichText::new(&i.nom).strong().color(GRIS))
+                            .on_hover_text(i.racine.display().to_string());
+                        for s in &i.saves {
+                            if ligne_de_save(ui, s) {
+                                choix = Some(s.save.chemin.clone());
+                            }
+                        }
+                        ui.add_space(6.0);
+                    }
+                    if let Some(c) = choix {
+                        a.choisir(c);
+                    }
+                });
+            ui.separator();
+            ui.label("Autre monde — le dossier qui contient level.dat :");
+            ui.horizontal(|ui| {
+                let champ = ui.add(
+                    egui::TextEdit::singleline(&mut a.chemin)
+                        .desired_width(330.0)
+                        .hint_text(r"C:\…\saves\Mon monde"),
+                );
+                let entree = champ.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Ouvrir").clicked() || entree {
+                    a.choisir_texte();
+                }
+            });
+            ui.label(
+                RichText::new("On peut aussi glisser le dossier d'une save sur la fenêtre.")
+                    .small()
+                    .color(GRIS),
+            );
+            if let Some(err) = &a.erreur {
+                ui.colored_label(ROUGE, err);
+            }
+        });
+    a.ouvert = ouvert;
+}
+
+/// Une save dans la liste. Rend vrai si on l'a choisie.
+fn ligne_de_save(ui: &mut Ui, s: &crate::accueil::SaveVue) -> bool {
+    let mut texte = RichText::new(&s.save.nom);
+    if s.seance_en_cours {
+        texte = texte.color(ORANGE);
+    }
+    let r = ui.selectable_label(false, texte);
+    let r = if s.seance_en_cours {
+        r.on_hover_text(format!(
+            "{}\nModifications pas encore écrites dans la save : elles seront \
+             reprises à l'ouverture.",
+            s.save.chemin.display()
+        ))
+    } else {
+        r.on_hover_text(s.save.chemin.display().to_string())
+    };
+    if s.seance_en_cours {
+        ui.label(
+            RichText::new("  ✎ modifications pas encore écrites")
+                .small()
+                .color(ORANGE),
+        );
+    }
+    r.clicked()
 }
 
 /// Le réticule, au centre exact de la zone de dessin.

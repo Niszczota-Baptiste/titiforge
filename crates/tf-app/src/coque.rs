@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use tf_app::accueil::Depart;
 use tf_app::etat::Etat;
 use tf_app::etat::Outil;
 use tf_app::moteur::Moteur;
@@ -38,7 +39,7 @@ const HAUTEUR: (i32, i32) = (-64, 319);
 pub fn lancer(
     ouvert: scene::Ouvert,
     seance: Option<(tf_world::Seance, tf_world::journal::Journal)>,
-    accueil: Option<String>,
+    depart: Depart,
     larg: u32,
     haut: u32,
     rayon: u32,
@@ -82,7 +83,9 @@ pub fn lancer(
     let mut app = Coque {
         ouvert,
         moteur,
-        accueil,
+        depart,
+        accueil_vu: false,
+        a_ouvrir: None,
         remailler: None,
         pilote,
         taille: (larg, haut),
@@ -131,8 +134,14 @@ struct Coque {
     /// travail pour savoir si elle doit survivre. Le fil doit donc s'arrêter
     /// en dernier.
     moteur: Option<Moteur>,
-    /// Ce que la reprise d'une séance a à dire, affiché à la première image.
-    accueil: Option<String>,
+    depart: Depart,
+    /// L'accueil était-il ouvert à l'image d'avant ? S'il vient de s'ouvrir,
+    /// on regarde de nouveau la machine : une partie jouée depuis a pu créer
+    /// une save.
+    accueil_vu: bool,
+    /// Le monde que l'accueil vient de choisir, ouvert quand la boucle rend
+    /// la main — pas au milieu d'une image qui tient la fenêtre.
+    a_ouvrir: Option<std::path::PathBuf>,
     /// Ce qui a changé, en coordonnées MONDE. `None` = rien à remailler.
     ///
     /// Les BORNES et non un drapeau : c'est ce qui rend le remaillage
@@ -149,6 +158,14 @@ struct Coque {
 }
 
 impl ApplicationHandler for Coque {
+    fn about_to_wait(&mut self, _: &ActiveEventLoop) {
+        // Ici et pas dans l'image : ouvrir un monde remplace la scène, le
+        // pilote et le moteur, ce qu'on ne fait pas pendant qu'on les tient.
+        if let Some(c) = self.a_ouvrir.take() {
+            self.ouvrir_monde(c);
+        }
+    }
+
     fn resumed(&mut self, evb: &ActiveEventLoop) {
         if self.fenetre.is_some() {
             return;
@@ -166,9 +183,13 @@ impl ApplicationHandler for Coque {
         };
         match preparer(&f, &mut self.ouvert) {
             Ok(mut g) => {
-                if let Some(m) = self.accueil.take() {
+                if let Some(m) = self.depart.message.take() {
                     g.etat.message = m;
                 }
+                g.etat.accueil = self.explorer();
+                g.etat.accueil.ouvert = self.depart.accueil;
+                self.accueil_vu = self.depart.accueil;
+                f.set_title(&titre(&self.ouvert));
                 self.gpu = Some(g);
                 self.fenetre = Some(f);
             }
@@ -189,6 +210,14 @@ impl ApplicationHandler for Coque {
 
         match ev {
             WindowEvent::CloseRequested => evb.exit(),
+            // **Glisser le dossier d'une save sur la fenêtre l'ouvre.** Ce qui
+            // n'en est pas une ouvre l'accueil, pour que l'erreur se lise.
+            WindowEvent::DroppedFile(p) => {
+                g.etat.accueil.choisir(p);
+                if g.etat.accueil.demande.is_none() {
+                    g.etat.accueil.ouvert = true;
+                }
+            }
             WindowEvent::Resized(t) => {
                 g.config.width = t.width.max(1);
                 g.config.height = t.height.max(1);
@@ -344,6 +373,16 @@ impl ApplicationHandler for Coque {
                 // Ce que l'interface a décidé pendant le dessin part
                 // maintenant : le fil travaillera pendant l'image suivante.
                 envoyer(&mut self.moteur, &mut g.etat);
+                // L'accueil vient de s'ouvrir : la machine a pu changer.
+                if g.etat.accueil.ouvert && !self.accueil_vu {
+                    let neuf = explorer(&self.depart);
+                    g.etat.accueil.installations = neuf.installations;
+                    g.etat.accueil.recents = neuf.recents;
+                }
+                self.accueil_vu = g.etat.accueil.ouvert;
+                if let Some(c) = g.etat.accueil.demande.take() {
+                    self.a_ouvrir = Some(c);
+                }
                 if let Some(b) = self.remailler.take() {
                     if let Err(e) = self.ouvert.remailler(Some(b)) {
                         g.etat.message = format!("remaillage : {e}");
@@ -369,6 +408,158 @@ impl ApplicationHandler for Coque {
             _ => {}
         }
         f.request_redraw();
+    }
+}
+
+impl Coque {
+    fn explorer(&self) -> tf_app::accueil::Accueil {
+        explorer(&self.depart)
+    }
+
+    /// **Ouvre un autre monde dans la même fenêtre.**
+    ///
+    /// L'ordre est ce qui rend l'échec sans dommage : la séance du monde
+    /// NEUF d'abord — si elle ne s'ouvre pas, rien n'a bougé — puis sa scène,
+    /// chargée avant que l'ancienne ne parte ; et seulement alors l'ancien
+    /// moteur s'arrête, ce qui ferme SA séance après sa dernière action.
+    fn ouvrir_monde(&mut self, chemin: std::path::PathBuf) {
+        let meme = |a: &std::path::Path, b: &std::path::Path| {
+            std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok()
+        };
+        if self.ouvert.editable() && meme(std::path::Path::new(&self.ouvert.nom), &chemin) {
+            self.dire("ce monde est déjà ouvert".into(), false);
+            if let Some(g) = self.gpu.as_mut() {
+                g.etat.accueil.ouvert = false;
+            }
+            return;
+        }
+        let Some(racine) = self.depart.seances.clone() else {
+            self.dire(
+                "aucun dossier où ranger la séance (ni LOCALAPPDATA, ni HOME) — \
+                 définir TITIFORGE_SEANCES"
+                    .into(),
+                true,
+            );
+            return;
+        };
+        let (seance, journal, reprise) = match tf_world::Seance::ouvrir(&racine, &chemin) {
+            Ok(x) => x,
+            Err(e) => return self.dire(e.to_string(), true),
+        };
+        // Les textures du monde : celles de SON installation, sauf si
+        // l'utilisateur en a désigné d'autres.
+        let assets = match tf_app::accueil::installation_de(&chemin) {
+            Some(i)
+                if !self.depart.assets_designes
+                    && i.display().to_string() != self.depart.assets =>
+            {
+                match scene::Assets::charger(&i.display().to_string()) {
+                    Ok(a) => Some((i.display().to_string(), a)),
+                    Err(e) => return self.dire(e, true),
+                }
+            }
+            _ => None,
+        };
+        let niveau = tf_world::niveau::lire_fichier(&chemin);
+        let zone = tf_app::accueil::zone_d_ouverture(niveau.as_ref());
+        let nom = chemin.display().to_string();
+        let (racine_assets, assets) = match assets {
+            Some((r, a)) => (Some(r), Some(a)),
+            None => (None, None),
+        };
+        if let Err(e) = self
+            .ouvert
+            .changer_de_monde(seance.staging(), &nom, zone, assets)
+        {
+            return self.dire(format!("{nom} : {e}"), true);
+        }
+        if let Some(r) = racine_assets {
+            self.depart.assets = r;
+        }
+        // L'ancien s'arrête MAINTENANT — sa séance se ferme dans son fil.
+        if let Some(mut m) = self.moteur.take() {
+            m.arreter();
+        }
+        let rayon = self.pilote.rayon();
+        self.pilote = Pilote::pour(
+            &self.ouvert,
+            tf_world::Dimension::Overworld,
+            tf_world::Niveau::Chunk,
+            rayon,
+            HAUTEUR,
+        );
+        let st = seance.staging();
+        self.moteur = Some(Moteur::lancer_en_seance(
+            st,
+            tf_world::Dimension::Overworld,
+            journal,
+            Some(chemin.clone()),
+            Box::new(seance),
+        ));
+        self.remailler = None;
+        if let Some(f) = self
+            .depart
+            .seances
+            .as_deref()
+            .and_then(tf_app::accueil::fichier_recents)
+        {
+            let _ = tf_app::accueil::noter_recent(&f, &chemin);
+        }
+        if let Some(f) = &self.fenetre {
+            f.set_title(&titre(&self.ouvert));
+        }
+        if let Some(g) = self.gpu.as_mut() {
+            let aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+            let m = &self.ouvert.monde;
+            g.etat.recadrer(m.min, m.max, aspect);
+            g.etat.message = reprise.texte().unwrap_or_else(|| {
+                format!(
+                    "monde ouvert : {}",
+                    niveau.and_then(|n| n.nom).unwrap_or_else(|| nom.clone())
+                )
+            });
+            g.etat.accueil.ouvert = false;
+            g.etat.accueil.erreur = None;
+            regarnir(g, &mut self.ouvert);
+        }
+    }
+
+    /// Dit quelque chose — dans l'accueil aussi quand c'est lui qui a demandé,
+    /// sinon l'erreur se lirait derrière une fenêtre qui la cache.
+    fn dire(&mut self, m: String, erreur: bool) {
+        if let Some(g) = self.gpu.as_mut() {
+            if erreur {
+                g.etat.accueil.erreur = Some(m.clone());
+            }
+            g.etat.message = m;
+        } else {
+            eprintln!("{m}");
+        }
+    }
+}
+
+/// Ce que l'accueil propose : les saves des installations, et les récents.
+fn explorer(d: &Depart) -> tf_app::accueil::Accueil {
+    let recents = d
+        .seances
+        .as_deref()
+        .and_then(tf_app::accueil::fichier_recents)
+        .map(|f| tf_app::accueil::lire_recents(&f))
+        .unwrap_or_default();
+    tf_app::accueil::Accueil::explorer(&d.installations, d.seances.as_deref(), &recents)
+}
+
+/// Le titre de la fenêtre dit ce qui est ouvert : deux fenêtres sur deux
+/// mondes se confondent sinon dans la barre des tâches.
+fn titre(o: &scene::Ouvert) -> String {
+    if o.editable() {
+        let nom = std::path::Path::new(&o.nom)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| o.nom.clone());
+        format!("titiforge — {nom}")
+    } else {
+        "titiforge".into()
     }
 }
 
@@ -431,8 +622,8 @@ fn envoyer(m: &mut Option<Moteur>, e: &mut Etat) {
         return;
     };
     let Some(moteur) = m else {
-        e.message = "la fixture n'a pas de save derrière elle — ouvrir un monde \
-                     avec --monde"
+        e.message = "la fixture n'a pas de save derrière elle — « Ouvrir un \
+                     monde… », en haut à gauche"
             .into();
         return;
     };
