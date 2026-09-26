@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1032**, zéro échec |
+| Tests | **1039**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1032 tests, répartis par ce qu'ils PROUVENT :
+1039 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -58,6 +58,7 @@ cargo test --workspace
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 71 | qu'un Ctrl+Z défait les chunks ET le document d'une même entrée, qu'un document qui diverge n'écrit aucune région, et qu'une correction d'un genre inconnu fait refuser l'entrée ENTIÈRE ; qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
+| `tf-ops` tout_ou_rien | 7 | qu'une opération qui ÉCHOUE en route ne laisse rien : un `//set` dont la seconde région refuse défait la première, et l'action d'avant sur les mêmes chunks se défait encore ; un `//move` dont la copie — ou les entités — refusent ne perd pas le build ; un `//stack` défait ses copies d'avant ; un collage dont les entités refusent défait ses blocs ; des points d'intérêt qui refusent après les blocs les font défaire ; et un échec qu'on ne peut pas défaire se DIT. La panne est provoquée, dossier par dossier (`MemorySource::tomber_en_panne`) |
 | `tf-ops` composant | 22 | les COMPOSANTS : vingt instances dans les six orientations suivent leur définition case par case, et UN Ctrl+Z rend l'ancienne partout et dans le document ; qu'une mise à jour n'écrit que ce qui change — un coffre rempli dans une instance le reste, une retouche survit hors du changement, même sur un bloc orienté d'une instance tournée — et ne relit qu'une section sous chaque instance quand seul le sommet d'un mât change (compté) ; que toutes les dimensions suivent ; qu'une maison intacte ne se croit pas changée, d'où qu'on la copie ; qu'une action qui échoue en route DÉFAIT ce qu'elle avait écrit, que le terrain se vérifie sous toutes les instances avant la première écriture, et qu'un échec qu'on ne peut défaire se dit ; qu'aucune block entity ne se pose sur de l'air ; qu'un composant trop grand pour être RELU est refusé à la création ; et que le document se relit à l'identique et refuse — jamais en rendant un document vide — ce qu'il ne comprend pas |
 | `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
 | `tf-ops` poi | 6 | qu'une édition fait relire au jeu les POINTS D'INTÉRÊT de ses chunks — toutes leurs sections, et rien d'autre, pas même un `Valid` de mod glissé dans un enregistrement ; qu'un biome n'en fait relire aucun (sur un terrain qui PORTE des biomes, sans quoi le test ne prouvait rien) ; qu'une section déjà invalide ne salit rien ; et qu'annuler rend la table d'origine |
@@ -728,6 +729,37 @@ sauter le début — en gardant les blocs de l'autre. C'est le piège du `StateI
 relatif à SON interner, une fois de plus : la table se désigne par son NUMÉRO
 (`Ouvert::rechargements`), jamais par sa longueur.
 
+### Une opération qui échoue en route ne laisse rien
+
+```bash
+cargo test -p tf-ops --test tout_ou_rien
+```
+
+Une opération écrit au fil de l'eau : une région après l'autre, la source
+d'un `//move` avant sa destination, les blocs avant les points d'intérêt et
+les entités. Qu'une écriture refuse — disque plein, droits, fichier tenu — et
+ce qui était déjà écrit RESTAIT dans la copie de travail, sans entrée de
+journal : hors de portée de tout Ctrl+Z, et de quoi faire DIVERGER
+l'annulation des actions précédentes sur les mêmes chunks. Pour un `//move`,
+c'était un build effacé dont la copie n'arrivait jamais — le cas même que le
+refus du terrain absent devait empêcher, arrivé par un autre chemin.
+
+`appliquer`, `coller`, `deplacer` et `empiler` défont maintenant leur rapport
+partiel avant que l'erreur ne remonte (`echouer`, qui passe par
+`defaire_rapport`, donc par le chemin du Ctrl+Z et ses empreintes) ; toute
+l'exécution du catalogue passe par eux. Si même défaire échoue, l'erreur le
+dit (`Erreur::AMoitie`). Trouvé en écrivant les composants, dont une mise à
+jour écrit sous vingt instances.
+
+La panne est PROVOQUÉE — `MemorySource::tomber_en_panne`, par région, par
+dossier, par budget d'écritures ou sur un fichier du monde — et chaque test
+vérifie que l'échec vient bien de la passe visée : sans ça, un test des
+entités passait aussi bien si la panne frappait les blocs. 11 mutations,
+11 tuées.
+
+Reste ce qu'aucun rapport ne décrit : un ARRÊT du programme en pleine
+écriture (voir § 7, `fsync`).
+
 ### Les composants : une définition, vingt instances, un seul Ctrl+Z
 
 ```bash
@@ -1266,7 +1298,6 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **Les composants n'ont pas encore d'interface** | le moteur est là (`tf-ops/src/composant.rs`, 22 tests) ; la coque ne sait ni en créer, ni en poser, ni les dessiner |
 | **Pas de saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste reste à écrire (phase 7) |
-| **Une opération ordinaire qui échoue en route garde ses premières régions** | `appliquer` écrit région par région : une région illisible à la troisième laisse les deux premières écrites sans entrée de journal. Les composants défont déjà leur rapport partiel (`defaire_rapport`) ; les opérations du catalogue pas encore |
 | **Un déplacement lointain remaille tout ce qui est entre** | une opération rend l'UNION de ce qu'elle a écrit : un `//move` de cinq mille blocs, un `//stack`, une mise à jour de composant sur des instances éparpillées font relire et remailler tout le résident entre leurs deux bouts |
 | **Changer de monde EN CLIQUANT n'a été vu par personne** | la séance, la scène (contre une ouverture directe), le moteur et l'accueil sont testés chacun ; la fenêtre, elle, n'a tourné que sous Xvfb, où l'on ne peut pas cliquer. La jonction de la coque (`ouvrir_monde`) attend un essai sur une vraie machine |
 | **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Un dialogue natif demanderait une dépendance de plus |

@@ -10,8 +10,6 @@
 //! L'orientation attendue est écrite À LA MAIN (`vers_monde`) : la tirer du
 //! code sous test ne prouverait que sa cohérence avec lui-même.
 
-use std::sync::Mutex;
-
 use tf_anvil::entites::Entite;
 use tf_anvil::Interner;
 use tf_bench::{region, region_en, Terrain};
@@ -25,9 +23,7 @@ use tf_ops::plan::Plan;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
 use tf_world::journal::Journal;
-use tf_world::source::{
-    Dimension, Folder, MemorySource, Overview, RegionSink, RegionSource, SourceError,
-};
+use tf_world::source::{Dimension, Folder, MemorySource, Panne, RegionSink, RegionSource};
 use tf_world::Staging;
 
 const SURFACE: Dimension = Dimension::Overworld;
@@ -1101,123 +1097,7 @@ fn une_mise_a_jour_sous_du_terrain_absent_est_refusee_avant_d_ecrire() {
     assert_eq!(journal.entrees().len(), n);
 }
 
-/// Une copie de travail qui REFUSE d'écrire là où on le lui dit : de quoi
-/// faire échouer une action en route, à l'endroit voulu.
-#[derive(Default)]
-struct Capricieuse {
-    m: MemorySource,
-    refus: Mutex<Refus>,
-}
-
-#[derive(Default, Clone)]
-struct Refus {
-    /// Les écritures de cette région échouent.
-    region: Option<RegionPos>,
-    /// Au-delà de ce nombre d'écritures de région, toutes échouent.
-    budget: Option<usize>,
-    /// Ce fichier du monde ne s'écrit pas.
-    meta: Option<String>,
-}
-
-impl Capricieuse {
-    fn refuser(&self, r: Refus) {
-        *self.refus.lock().unwrap() = r;
-    }
-}
-
-impl RegionSource for Capricieuse {
-    fn dimensions(&self) -> Result<Vec<Dimension>, SourceError> {
-        self.m.dimensions()
-    }
-    fn overview(&self, dim: &Dimension, folder: Folder) -> Result<Overview, SourceError> {
-        self.m.overview(dim, folder)
-    }
-    fn read_region(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        pos: RegionPos,
-    ) -> Result<Vec<u8>, SourceError> {
-        self.m.read_region(dim, folder, pos)
-    }
-    fn read_external(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        name: &str,
-    ) -> Result<Vec<u8>, SourceError> {
-        self.m.read_external(dim, folder, name)
-    }
-    fn external_names(&self, dim: &Dimension, folder: Folder) -> Result<Vec<String>, SourceError> {
-        self.m.external_names(dim, folder)
-    }
-    fn read_meta(&self, nom: &str) -> Result<Vec<u8>, SourceError> {
-        self.m.read_meta(nom)
-    }
-    fn meta_names(&self) -> Result<Vec<String>, SourceError> {
-        self.m.meta_names()
-    }
-}
-
-impl RegionSink for Capricieuse {
-    fn write_region(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        pos: RegionPos,
-        bytes: &[u8],
-    ) -> Result<(), SourceError> {
-        {
-            let mut r = self.refus.lock().unwrap();
-            if r.region == Some(pos) {
-                return Err(SourceError::Io("disque plein (région)".into()));
-            }
-            if let Some(b) = r.budget.as_mut() {
-                if *b == 0 {
-                    return Err(SourceError::Io("disque plein (budget)".into()));
-                }
-                *b -= 1;
-            }
-        }
-        self.m.write_region(dim, folder, pos, bytes)
-    }
-    fn write_external(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<(), SourceError> {
-        self.m.write_external(dim, folder, name, bytes)
-    }
-    fn remove_external(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        name: &str,
-    ) -> Result<(), SourceError> {
-        self.m.remove_external(dim, folder, name)
-    }
-    fn remove_region(
-        &self,
-        dim: &Dimension,
-        folder: Folder,
-        pos: RegionPos,
-    ) -> Result<(), SourceError> {
-        self.m.remove_region(dim, folder, pos)
-    }
-    fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<(), SourceError> {
-        if self.refus.lock().unwrap().meta.as_deref() == Some(nom) {
-            return Err(SourceError::Io("disque plein (fichier)".into()));
-        }
-        self.m.write_meta(nom, bytes)
-    }
-    fn remove_meta(&self, nom: &str) -> Result<(), SourceError> {
-        self.m.remove_meta(nom)
-    }
-}
-
-type Fragile = Staging<MemorySource, Capricieuse>;
+type Fragile = St;
 
 /// Deux régions : (0, 0) et (1, 0).
 fn monde_fragile() -> Fragile {
@@ -1234,7 +1114,7 @@ fn monde_fragile() -> Fragile {
         RegionPos { x: 1, z: 0 },
         region_en(&Terrain::petite(), 1, 0),
     );
-    Staging::new(src, Capricieuse::default())
+    Staging::new(src, MemorySource::new())
 }
 
 /// **Une mise à jour qui échoue en route DÉFAIT ce qu'elle a écrit.** Sans
@@ -1263,7 +1143,7 @@ fn une_mise_a_jour_qui_echoue_en_route_defait_ce_qu_elle_a_ecrit() {
     poser_bloc(&st, P0, "minecraft:gold_block", &mut i);
     let (_, avant) = Projet::lire(&st).unwrap();
     let n = journal.entrees().len();
-    st.overlay().refuser(Refus {
+    st.overlay().tomber_en_panne(Panne {
         region: Some(RegionPos { x: 1, z: 0 }),
         ..Default::default()
     });
@@ -1283,7 +1163,7 @@ fn une_mise_a_jour_qui_echoue_en_route_defait_ce_qu_elle_a_ecrit() {
 
     // La preuve que tout est rentré dans l'ordre : les trois poses se
     // défont.
-    st.overlay().refuser(Refus::default());
+    st.overlay().tomber_en_panne(Panne::default());
     for _ in 0..3 {
         let (e, _) = journal.annuler().unwrap();
         rejouer(&st, e, Sens::Annuler).expect("une pose ne se défait plus");
@@ -1321,7 +1201,7 @@ fn un_echec_qu_on_ne_peut_pas_defaire_se_dit() {
     );
     poser_bloc(&st, P0, "minecraft:gold_block", &mut i);
     // Une seule écriture de région passe : la première instance.
-    st.overlay().refuser(Refus {
+    st.overlay().tomber_en_panne(Panne {
         budget: Some(1),
         ..Default::default()
     });
@@ -1349,7 +1229,7 @@ fn un_document_qui_ne_s_ecrit_pas_defait_les_blocs() {
     let terrain = etat(&st, q);
     let (_, avant) = Projet::lire(&st).unwrap();
     let n = journal.entrees().len();
-    st.overlay().refuser(Refus {
+    st.overlay().tomber_en_panne(Panne {
         meta: Some("projet".into()),
         ..Default::default()
     });

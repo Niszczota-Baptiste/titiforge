@@ -368,6 +368,28 @@ pub struct MemorySource {
     externals: RwLock<BTreeMap<CleExterne, Vec<u8>>>,
     metas: RwLock<BTreeMap<String, Vec<u8>>>,
     read_only: bool,
+    panne: RwLock<Panne>,
+}
+
+/// **Les écritures qu'une source en mémoire REFUSE**, pour faire échouer une
+/// action en route à l'endroit voulu — un disque plein à la douzième
+/// instance, un document qui ne s'écrit pas après les blocs.
+///
+/// C'est ce qui rend vérifiable qu'une action échouée ne laisse RIEN : sans
+/// panne provoquée, le chemin d'erreur n'est jamais pris, donc jamais testé.
+/// Aucune panne par défaut.
+#[derive(Debug, Clone, Default)]
+pub struct Panne {
+    /// Les écritures de cette région échouent — toutes dimensions, et tous
+    /// dossiers sauf si `dossier` en désigne un.
+    pub region: Option<RegionPos>,
+    /// Restreint `region` à ce dossier : les blocs s'écrivent, les points
+    /// d'intérêt ou les entités non.
+    pub dossier: Option<Folder>,
+    /// Il reste tant d'écritures de région ; au-delà, toutes échouent.
+    pub budget: Option<usize>,
+    /// Ce fichier du monde ne s'écrit pas.
+    pub meta: Option<String>,
 }
 
 impl MemorySource {
@@ -385,6 +407,12 @@ impl MemorySource {
 
     pub fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Fait refuser ces écritures-là à partir de maintenant ; `Panne::default()`
+    /// répare.
+    pub fn tomber_en_panne(&self, p: Panne) {
+        *self.panne.write().unwrap() = p;
     }
 
     pub fn put_region(&self, dim: Dimension, folder: Folder, pos: RegionPos, bytes: Vec<u8>) {
@@ -497,6 +525,21 @@ impl RegionSink for MemorySource {
         if self.read_only {
             return Err(SourceError::ReadOnly);
         }
+        {
+            let mut p = self.panne.write().unwrap();
+            if p.region == Some(pos) && p.dossier.is_none_or(|d| d == folder) {
+                return Err(SourceError::Io(format!(
+                    "panne provoquée : région {}, {} ({folder:?})",
+                    pos.x, pos.z
+                )));
+            }
+            if let Some(b) = p.budget.as_mut() {
+                if *b == 0 {
+                    return Err(SourceError::Io("panne provoquée : budget épuisé".into()));
+                }
+                *b -= 1;
+            }
+        }
         self.put_region(dim.clone(), folder, pos, bytes.to_vec());
         Ok(())
     }
@@ -542,6 +585,9 @@ impl RegionSink for MemorySource {
     fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<()> {
         if self.read_only {
             return Err(SourceError::ReadOnly);
+        }
+        if self.panne.read().unwrap().meta.as_deref() == Some(nom) {
+            return Err(SourceError::Io(format!("panne provoquée : « {nom} »")));
         }
         self.metas
             .write()

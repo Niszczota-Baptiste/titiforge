@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1032 tests aujourd’hui)
+cargo test            # tous les crates (1039 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -458,6 +458,7 @@ couvriront le même terrain.
 | Ce que `level.dat` doit dire de plus | `tf-world/src/niveau.rs` — un champ lu, jamais écrit : le jeu y garde l'inventaire du joueur en solo |
 | Un endroit où l'on tape un BLOC | `interface::champ_de_bloc` — jamais un `TextEdit` nu : c'est lui qui propose (`Nuancier`) et qui dit tout de suite ce qui ne se lit pas. Côté moteur rien à faire : un paramètre `Saisie::Bloc` passe par `cle_de_bloc` dans le normaliseur |
 | Une source de propositions de blocs | une `Origine` dans `nuancier.rs` — son RANG dans l'enum est sa préférence à correspondance égale — et sa place dans la chaîne de `chercher` |
+| Une opération à PLUSIEURS passes (ou une passe de plus à une opération) | chaque passe après la première se branche par `match … Err(e) => return Err(echouer(staging, &total, e))` (`edition.rs`) — jamais un `?` nu : ce que les passes d'avant ont écrit resterait hors de tout journal. Un test la fait échouer À CETTE PASSE (`MemorySource::tomber_en_panne`, avec son dossier) |
 | Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture |
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
@@ -2217,9 +2218,12 @@ propres à ce dépôt.
   seule.** Vingt instances s'écrivent l'une après l'autre : un échec à la
   douzième laissait les onze premières dans la copie de travail, sans entrée
   de journal — hors de portée de tout Ctrl+Z, et de quoi faire diverger celui
-  des actions précédentes. `defaire_rapport` rejoue le rapport partiel à
+  des actions précédentes. Et ce n'était pas propre aux composants : un
+  `//move` dont la copie refusait gardait sa source EFFACÉE, un `//set` sur
+  deux régions sa première. `defaire_rapport` rejoue le rapport partiel à
   l'envers, par le chemin du Ctrl+Z ; ce qui peut être vérifié d'avance (le
-  terrain sous chaque instance) l'est avant la première écriture.
+  terrain sous chaque instance) l'est avant la première écriture. Un chemin
+  d'erreur qu'aucun test ne prend n'existe pas : la panne se PROVOQUE.
 - **Deux plafonds pour la même chose, l'un plus large que l'autre.** La
   copie accepte cinq cents millions de cases, le décodeur du document seize :
   un composant plus grand s'écrivait très bien, et la lecture SUIVANTE

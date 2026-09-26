@@ -258,6 +258,39 @@ pub enum Erreur {
         /// Le premier d'entre eux, en coordonnées de chunk.
         exemple: ChunkPos,
     },
+    /// L'opération a échoué en route, ET ce qu'elle avait déjà écrit n'a pas
+    /// pu être défait. Le seul cas où la copie de travail garde une action à
+    /// moitié faite — et il se DIT.
+    AMoitie {
+        cause: Box<Erreur>,
+        defaire: Box<Erreur>,
+    },
+}
+
+/// **Une opération qui échoue en route ne laisse rien.** Ce qu'elle a déjà
+/// écrit — les régions d'avant celle qui a refusé, la première passe d'un
+/// `//move` — est DÉFAIT avant que l'erreur ne remonte, par le chemin du
+/// Ctrl+Z.
+///
+/// Sans ça, ces écritures restaient dans la copie de travail sans entrée de
+/// journal : hors de portée de toute annulation, et de quoi faire DIVERGER
+/// celle des actions précédentes sur les mêmes chunks. Si même défaire
+/// échoue, l'erreur le dit (`AMoitie`).
+pub(crate) fn echouer<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    fait: &RapportRegion,
+    cause: Erreur,
+) -> Erreur {
+    if fait.patches.is_empty() {
+        return cause;
+    }
+    match defaire_rapport(staging, fait) {
+        Ok(_) => cause,
+        Err(e) => Erreur::AMoitie {
+            cause: Box::new(cause),
+            defaire: Box::new(e),
+        },
+    }
 }
 
 macro_rules! de {
@@ -317,6 +350,12 @@ impl std::fmt::Display for Erreur {
                 exemple.z,
                 exemple.x * 16,
                 exemple.z * 16
+            ),
+            Erreur::AMoitie { cause, defaire } => write!(
+                f,
+                "{cause} — et ce qui avait déjà été écrit n'a pas pu être défait \
+                 ({defaire}) : la copie de travail garde une partie de l'opération, \
+                 sans entrée d'annulation — la vérifier avant d'écrire dans la save"
             ),
             Erreur::TropGros { octets, plafond } => write!(
                 f,
@@ -1395,9 +1434,10 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         ..Default::default()
     };
     for pos in regions_a_visiter(staging, dim, folder, sel)? {
-        total.absorber(appliquer_region(
-            staging, dim, folder, pos, sel, op, interner,
-        )?);
+        match appliquer_region(staging, dim, folder, pos, sel, op, interner) {
+            Ok(r) => total.absorber(r),
+            Err(e) => return Err(echouer(staging, &total, e)),
+        }
     }
     // ── Les points d'intérêt, que le JEU relira.
     //
@@ -1408,7 +1448,10 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
     // reste : annuler rend aussi la table d'origine.
     if folder == Folder::Region && !total.chunks_blocs.is_empty() {
         let chunks = total.chunks_blocs.clone();
-        total.absorber(crate::poi::invalider(staging, dim, &chunks)?);
+        match crate::poi::invalider(staging, dim, &chunks) {
+            Ok(r) => total.absorber(r),
+            Err(e) => return Err(echouer(staging, &total, e)),
+        }
     }
     Ok(total)
 }
@@ -1557,12 +1600,19 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
     } else {
         efface
     };
+    // Trois passes : qu'une échoue, et les précédentes sont défaites — une
+    // source effacée dont la copie n'est jamais arrivée serait un build
+    // PERDU, hors de portée de tout Ctrl+Z.
     total.absorber(appliquer(staging, dim, folder, sel, &efface, interner)?);
-    total.absorber(coller(
-        staging, dim, folder, &presse, sel.min, pas, interner,
-    )?);
+    match coller(staging, dim, folder, &presse, sel.min, pas, interner) {
+        Ok(r) => total.absorber(r),
+        Err(e) => return Err(echouer(staging, &total, e)),
+    }
     if folder == Folder::Region {
-        total.absorber(crate::mobiles::deplacer_mobiles(staging, dim, sel, pas.d)?);
+        match crate::mobiles::deplacer_mobiles(staging, dim, sel, pas.d) {
+            Ok(r) => total.absorber(r),
+            Err(e) => return Err(echouer(staging, &total, e)),
+        }
     }
     Ok(total)
 }
@@ -1634,9 +1684,10 @@ pub fn empiler<S: RegionSource, O: RegionStore>(
             d: [pas.d[0] * k, pas.d[1] * k, pas.d[2] * k],
             ..pas
         };
-        total.absorber(coller(
-            staging, dim, folder, &presse, sel.min, un, interner,
-        )?);
+        match coller(staging, dim, folder, &presse, sel.min, un, interner) {
+            Ok(r) => total.absorber(r),
+            Err(e) => return Err(echouer(staging, &total, e)),
+        }
     }
     Ok(total)
 }
@@ -1670,12 +1721,10 @@ pub fn coller<S: RegionSource, O: RegionStore>(
     };
     let mut rap = appliquer(staging, dim, folder, &c.bornes(), &c, interner)?;
     if folder == Folder::Region && !presse.mobiles.is_empty() {
-        rap.absorber(crate::mobiles::poser_mobiles(
-            staging,
-            dim,
-            &presse.mobiles,
-            c.coin,
-        )?);
+        match crate::mobiles::poser_mobiles(staging, dim, &presse.mobiles, c.coin) {
+            Ok(r) => rap.absorber(r),
+            Err(e) => return Err(echouer(staging, &rap, e)),
+        }
     }
     Ok(rap)
 }
