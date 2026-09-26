@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1093**, zéro échec |
+| Tests | **1106**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1093 tests, répartis par ce qu'ils PROUVENT :
+1106 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -53,7 +53,7 @@ cargo test --workspace
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 144 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; les FICHIERS DU MONDE qui ne sont pas des régions — la copie d'abord, la save sinon, écrits APRÈS la sauvegarde et jamais sur un refus, un document vidé retiré de la save, un temporaire d'écriture qui n'en est pas un — et leur correctif de journal, resserré, gardé par son empreinte, ENVELOPPÉ pour qu'une version antérieure le saute ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
 | `tf-world` session | 19 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface — mais pas une qui n'a que son DOCUMENT en attente, et la reprise le dit —, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier ; et qu'une variable d'environnement VIDE vaut absente — prise au mot, elle rangeait les séances dans un chemin relatif |
-| `tf-world` niveau | 9 | `level.dat` : le nom, le point d'apparition et le joueur se lisent À TRAVERS ce qu'on saute (réglages de génération, inventaire) ; un joueur dans le Nether fait ouvrir au point d'apparition ; une position qui n'est pas un nombre est ignorée ; aucune troncature ne fait paniquer ni ne rend un point à moitié lu ; et les saves d'une installation se listent de la plus récemment jouée à la plus ancienne, sous le nom du JEU |
+| `tf-world` niveau | 9 | `level.dat` : le nom, le point d'apparition, le joueur et la version du jeu (`DataVersion`) se lisent À TRAVERS ce qu'on saute (réglages de génération, inventaire) ; un joueur dans le Nether fait ouvrir au point d'apparition ; une position qui n'est pas un nombre est ignorée ; aucune troncature ne fait paniquer ni ne rend un point à moitié lu ; et les saves d'une installation se listent de la plus récemment jouée à la plus ancienne, sous le nom du JEU |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
 | `tf-ops` etages/edition/presse/tirage + 3 unitaires | 71 | qu'un Ctrl+Z défait les chunks ET le document d'une même entrée, qu'un document qui diverge n'écrit aucune région, et qu'une correction d'un genre inconnu fait refuser l'entrée ENTIÈRE ; qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
@@ -83,13 +83,13 @@ cargo test --workspace
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 40 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main ; et l'outil COMPOSANT : il pose la définition choisie au point de pose dans l'orientation choisie, le clic droit la tourne d'un quart de tour, l'instance visée vient du document PUBLIÉ, et une définition disparue — ou un autre monde — fait oublier ce qu'on avait choisi |
+| `tf-app` etat | 48 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main ; et l'outil COMPOSANT : il pose la définition choisie au point de pose dans l'orientation choisie, le clic droit la tourne d'un quart de tour, l'instance visée vient du document PUBLIÉ, et une définition disparue — ou un autre monde — fait oublier ce qu'on avait choisi ; et les ÉCHANGES : chaque format se range là où l'outil qui le lit le CHERCHE — Litematica et WorldEdit dans l'installation, le bloc de structure dans le MONDE ; un nom devient un nom de fichier sans perdre un accent ni un hangeul, et un nom réservé de Windows (`CON`, `lpt1.txt`, `COM¹`) prend un préfixe ; les fichiers trouvés se listent du plus récent — le `.schematic` d'avant 1.13 compris, que la lecture NOMMERA, et le dossier d'export tapé aussi, une seule fois ; exporter demande une sélection ET un dossier ; « Coller » pose le presse-papiers au point de pose et son CONTOUR d'arrivée dit où, tourné avec lui — un composant aussi ; un presse-papiers neuf met l'outil en main ; et un fichier d'un Minecraft plus récent que le monde se signale |
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) ; et qu'un `//move` de deux cents blocs en diagonale ne remaille — et ne DÉCOMPRESSE — que ses deux bouts, 11 sections au lieu de 196, annulation comprise, pour la même scène qu'un rechargement complet |
-| `tf-app` moteur | 15 + 1 unitaire | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit ; et que les COMPOSANTS passent par le fil — créer, poser, mettre à jour, annuler, refaire, détacher, renommer — avec leur document PUBLIÉ qui suit chaque pas, annulation comprise, publié dès le lancement, jamais réécrit s'il est illisible, et dont la version ne bouge pas quand il ne change pas |
+| `tf-app` moteur | 19 + 1 unitaire | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit ; et que les COMPOSANTS passent par le fil — créer, poser, mettre à jour, annuler, refaire, détacher, renommer — avec leur document PUBLIÉ qui suit chaque pas, annulation comprise, publié dès le lancement, jamais réécrit s'il est illisible, et dont la version ne bouge pas quand il ne change pas ; et les ÉCHANGES par le fil : un export ne remplace JAMAIS le fichier d'hier (« porte (2).litematic »), l'import publie un presse-papiers qui dit sa source et sa version, ce qui se colle est ce qui s'est copié, un Ctrl+Z le défait, et seul le collage entre dans la séance — exporter et importer n'écrivent rien dans le monde ; copier la sélection puis coller TOURNÉ donne la copie tournée ; coller sans l'air garde ce qui est là, avec l'air creuse ; un presse-papiers vide, un fichier illisible ou absent se disent par leur nom, sans rien charger |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
-| `tf-app` interface | 11 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin ; et que la fiche des composants se dessine, document lisible ou non, sans rien envoyer d'elle-même |
+| `tf-app` interface | 12 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin ; et que la fiche des composants se dessine, document lisible ou non, sans rien envoyer d'elle-même ; et que la section ÉCHANGES et la fiche « Coller » se dessinent, presse-papiers vide ou plein, fichier plus récent que le monde compris, sans rien envoyer d'elles-mêmes |
 | `tf-app` regles | 6 | qu'une rotation lancée DEPUIS LA COQUE tourne aussi les états — un pack écrit à la volée, des règles dérivées de lui, le fil moteur, la copie de travail relue ; que sans règles la case bouge, l'orientation non, et que la réponse le DIT ; qu'un bloc que le pack ne sait pas tourner se signale autrement ; qu'un `//set` n'attend pas une dérivation en cours quand une rotation, si ; et qu'une dérivation MORTE vaut « aucune règle » au lieu d'un moteur qui attend pour toujours — chaque scénario dans un fil témoin à attente bornée |
 | `tf-app` nuancier | 9 | le SÉLECTEUR DE BLOCS : le visé, puis les récents, puis le monde — pas le pack entier — quand rien n'est tapé ; la correspondance classe avant l'origine, et chaque mot d'une recherche compte ; les états que le JEU a écrits passent avant le nom nu ; la syntaxe du jeu tapée à la main trouve ses états ; un ordre TOTAL, le même quel que soit l'ordre d'entrée ; des récents canoniques, sans air ni doublon, bornés, qui survivent au fichier ; et un bloc inconnu du pack ET du monde qui se signale |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
@@ -958,6 +958,59 @@ entity dans une région Litematica qui ne commence pas à l'origine, la
 frontière exacte de la v7 (1.20.5), des indices trop courts, une entité sans
 `id`, des block entities hors de la boîte ou en double, un champ en double.
 
+### Échanger dans la coque : un fichier, le presse-papiers, et « Coller »
+
+```bash
+cargo test -p tf-app --test moteur --test etat --test interface
+cargo run --release -p tf-app -- ../titisite/public/codex --capture coller.png --importer porte.litematic
+```
+
+Le panneau ÉCHANGES, sous la sélection, et l'outil « Coller » en mode
+Conception :
+
+- **Exporter la sélection** l'écrit là où l'outil qui la lira la CHERCHE :
+  `schematics/` de l'installation pour Litematica,
+  `config/worldedit/schematics/` pour WorldEdit en solo, et
+  `generated/minecraft/structures/` DU MONDE pour un bloc de structure, qui y
+  charge `minecraft:<nom>`. Le fichier emporte le `DataVersion` du monde, lu
+  dans `level.dat` — 1.18.2 à défaut. Le dossier reste modifiable, et le
+  chemin se lit avant le clic.
+- **Un export n'écrase JAMAIS.** Le nom se RÉSERVE (`create_new`, atomique),
+  les octets vont dans un temporaire, puis le temporaire remplace la
+  réservation : exporter deux fois « porte » donne `porte.litematic` et
+  `porte (2).litematic`, et un arrêt en plein milieu laisse au pire un fichier
+  vide sous le nom voulu — jamais un fichier tronqué qui se lirait à moitié.
+  Le nom passe par `nom_de_fichier`, qui ne retire que ce que Windows refuse
+  VRAIMENT : « Vallée » et « 한국어 건물 » sortent tels quels.
+- **Importer** : la liste montre les fichiers des trois dossiers, du plus
+  récent au plus ancien ; un chemin se colle, un fichier se GLISSE sur la
+  fenêtre. C'est le CONTENU qui décide du format — la liste ne regarde une
+  extension que pour se remplir. Le fichier lu devient le presse-papiers, et
+  l'outil « Coller » passe en main.
+- **Le presse-papiers vit dans le fil moteur**, avec les états et leur
+  interner, et le fil en PUBLIE un résumé — taille, source, version, remarques
+  de lecture — comme le document des composants : l'interface ne décode rien.
+  Un fichier d'un Minecraft plus récent que le monde se dit en rouge.
+- **« Coller »** pose le coin de plus petites coordonnées sur la case de
+  pose, accrochage compris, dans l'orientation choisie : le clic droit tourne
+  d'un quart de tour, et les états tournent par les règles dérivées du pack.
+  Un CONTOUR ambre montre la boîte d'arrivée avant le clic — pour le
+  composant choisi aussi. Sans « coller aussi l'air », ce qui est là reste :
+  on pose un bâtiment sur un terrain ; avec, l'air de l'extrait creuse. Un
+  Ctrl+Z défait le collage entier, et c'est la seule des quatre commandes qui
+  entre dans la séance : exporter, importer et copier n'écrivent rien dans le
+  monde.
+
+**24 mutations, toutes tuées.** Trois ont survécu au premier tour, chacune
+faute d'un test : un nom de quatre lettres qui commence comme un port sans en
+être un (`COMX`), un presse-papiers VIDE publié qui mettait quand même l'outil
+en main, et « coller aussi l'air » qui n'arrivait pas jusqu'au moteur. Sept
+visent ce qu'une relecture a ajouté ensuite : Windows réserve aussi les ports
+en exposant (`COM¹` à `LPT³`) et `CONIN$`, et juge `CON .txt` comme `CON` ; le
+`.schematic` d'avant 1.13 reste dans la liste, pour que la lecture le NOMME au
+lieu que la liste le taise ; et le dossier d'export tapé s'y ajoute — une
+fois, même quand c'est un dossier par défaut.
+
 ---
 
 ## 4. Le rendu
@@ -1457,16 +1510,17 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La pose d'un porte-armure n'est pas reflétée sous miroir** | annoncée comme approchée : il faudrait échanger bras et jambes gauches et droits, donc réécrire le compound au lieu de quelques octets |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
-| **Les formats d'échange ne sont pas encore dans la coque** | le moteur lit et écrit les quatre formats, testés de bout en bout ; aucun bouton ne les appelle encore |
 | **Aucun fichier produit par Litematica ou WorldEdit n'a encore été lu EN VRAI** | les lecteurs suivent leur code et sont éprouvés contre des fichiers construits comme eux les écrivent ; `--example lire -- <fichier>` le vérifie sur un vrai fichier en une commande |
 | **Le `.schematic` d'avant 1.13 (MCEdit, Schematica) n'est pas lu** | il numérote ses blocs : il faudrait la table d'aplatissement du jeu. Il est refusé et NOMMÉ |
 | **Les biomes d'un fichier ne sont pas repris** | le presse-papiers n'en porte pas ; le compte rendu le dit |
+| **Un fichier d'une version plus RÉCENTE que le monde se colle quand même** | la fiche le dit en rouge (« fichier d'un Minecraft plus récent que ce monde ») ; ses blocs inconnus du jeu deviendraient de l'air au chargement, et les octets de ses coffres sont dans la forme de SA version. Rien n'est converti |
+| **Le presse-papiers ne survit pas à la fermeture, ni à un changement de monde** | il vit dans le fil moteur, et ses états sont numérotés par l'interner de CE monde. Copier dans un monde et coller dans un autre passe donc par un fichier : exporter, changer de monde, importer |
 | **Les souvenirs d'entités d'un `.litematic` ou d'un `.nbt` ne suivent pas** | le lit, la ruche, le poste de travail y sont dans le repère d'un monde inconnu : ils restent tels quels, comme les laisse Litematica lui-même, et le compte rendu les compte |
-| **L'outil Composant n'a été vu que par des captures** | le moteur, le fil, l'état et la fiche sont testés, et la capture montre la fiche et les contours ; un clic sur ses boutons, lui, ne l'est pas — il vit derrière winit, comme les autres boutons de l'inspecteur |
-| **Une instance se pose par son COIN, sans aperçu** | son coin de plus petites coordonnées tombe sur la case visée ; rien ne montre où elle ira avant le clic. Ctrl+Z la retire |
+| **Les outils Composant et Coller, et la section ÉCHANGES, n'ont été vus que par des captures** | le moteur, le fil, l'état et les fiches sont testés, et la capture montre les fiches, les contours et le contour d'arrivée ; un clic sur leurs boutons, lui, ne l'est pas — il vit derrière winit, comme les autres boutons de l'inspecteur. Le glisser-déposer d'un fichier sur la fenêtre non plus |
+| **Une pose se voit par son CONTOUR, pas par ses blocs** | une instance ou un collage pose son coin de plus petites coordonnées sur la case visée, et un contour ambre montre la boîte d'arrivée, tournée ; les blocs eux-mêmes n'apparaissent qu'après le clic. Ctrl+Z les retire |
 | **Pas de saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste reste à écrire (phase 7) |
 | **Changer de monde EN CLIQUANT n'a été vu par personne** | la séance, la scène (contre une ouverture directe), le moteur et l'accueil sont testés chacun ; la fenêtre, elle, n'a tourné que sous Xvfb, où l'on ne peut pas cliquer. La jonction de la coque (`ouvrir_monde`) attend un essai sur une vraie machine |
-| **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Un dialogue natif demanderait une dépendance de plus |
+| **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Même chose pour un fichier à importer : la liste montre ceux des dossiers où Litematica, WorldEdit et les blocs de structure les rangent ; sinon on colle son chemin ou on le glisse. Un dialogue natif demanderait une dépendance de plus |
 | **Une séance ne voit pas le jeu changer la save PENDANT qu'elle est ouverte** | les données restent justes — une région écrite a quitté la copie, donc la prochaine opération relit la save — mais ce qui est À L'ÉCRAN date d'avant la partie jusqu'à son prochain remaillage. Et une région où la copie porte du travail, que le jeu change entre-temps, fait refuser l'écriture sans autre issue dans l'application que fermer et rouvrir (la séance est alors mise de côté) |
 | **Pas de bouton « abandonner la copie de travail »** | tout annuler y revient, et une séance en conflit se met de côté d'elle-même ; mais on ne peut pas jeter d'un geste une séance qu'on ne veut plus. Les séances mises de côté ne s'effacent jamais seules |
 | **Rien n'est forcé sur le disque** (`fsync`) | un arrêt du PROGRAMME ne perd rien ; une coupure de courant peut perdre les dernières actions. Et une action interrompue en plein milieu peut laisser la copie à moitié écrite, sans entrée de journal pour la défaire : la reprise le DIT (« … a été interrompue »), elle ne sait pas le réparer |

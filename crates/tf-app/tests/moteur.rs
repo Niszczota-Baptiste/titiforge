@@ -678,3 +678,236 @@ fn le_document_est_publie_des_le_lancement_et_jamais_ecrase_s_il_est_illisible()
     );
     assert_eq!(st.lire_fichier("projet").unwrap(), b"TFP1 abime");
 }
+
+// ── les échanges ────────────────────────────────────────────────────────────
+
+fn dossier_neuf(nom: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("titiforge-echanges-{nom}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+fn meta() -> tf_formats::Meta {
+    tf_formats::Meta {
+        data_version: 2975,
+        nom: "porte".into(),
+        auteur: "titi".into(),
+        description: String::new(),
+        date_ms: 0,
+    }
+}
+
+/// Ce qu'une boîte du monde porte, relu par `//copy` — le repère d'états d'un
+/// seul interner pour comparer deux boîtes.
+fn contenu(
+    st: &Staging<MemorySource, MemorySource>,
+    b: BBox,
+    interner: &mut tf_anvil::Interner,
+) -> Vec<tf_anvil::StateId> {
+    tf_ops::edition::copier(st, &SURFACE, Folder::Region, &b, interner)
+        .unwrap()
+        .blocs
+}
+
+/// **Exporter, importer, coller — par le fil.** Le fichier d'hier n'est
+/// jamais écrasé, ce qui se colle est ce qui s'est copié, un Ctrl+Z le défait,
+/// et seul le collage marque la séance : exporter et importer n'écrivent rien
+/// dans le monde, une reprise n'aurait rien à en dire.
+#[test]
+fn exporter_importer_coller_par_le_fil() {
+    use tf_formats::Format;
+    let (mut m, t, st) = en_seance();
+    let d = dossier_neuf("fil");
+    let voulu = d.join("schematics").join("porte.litematic");
+    let source = BBox::new(BlockPos::new(0, -48, 0), BlockPos::new(7, -41, 7));
+    let exporter = || Commande::Exporter {
+        sel: source,
+        format: Format::Litematic,
+        chemin: voulu.clone(),
+        meta: meta(),
+    };
+    let r = faire(&mut m, exporter());
+    assert!(matches!(r, Reponse::Note(_)), "{r:?}");
+    let premier = std::fs::read(&voulu).expect("le dossier se crée s'il manque");
+    let r = faire(&mut m, exporter());
+    assert!(r.texte().contains("porte (2).litematic"), "{}", r.texte());
+    assert_eq!(std::fs::read(&voulu).unwrap(), premier, "jamais écrasé");
+
+    assert_eq!(m.presse_papiers().taille, None, "vide avant l'import");
+    let r = faire(
+        &mut m,
+        Commande::Importer {
+            chemin: voulu.clone(),
+        },
+    );
+    assert!(matches!(r, Reponse::Note(_)), "{r:?}");
+    let pp = m.presse_papiers();
+    assert_eq!(pp.taille, Some([8, 8, 8]));
+    assert_eq!(pp.source, "porte.litematic");
+    assert_eq!(pp.data_version, Some(2975));
+
+    let coin = BlockPos::new(100, -48, 100);
+    let r = faire(
+        &mut m,
+        Commande::Coller {
+            coin,
+            transfo: None,
+            avec_air: true,
+        },
+    );
+    let Reponse::Fait { op, zones, .. } = &r else {
+        panic!("{r:?}")
+    };
+    assert_eq!(op, "Coller « porte.litematic »");
+    assert!(!zones.is_empty(), "de quoi remailler");
+    let arrivee = BBox::new(coin, BlockPos::new(107, -41, 107));
+    let mut i = tf_anvil::Interner::new();
+    assert_eq!(
+        contenu(&st, arrivee, &mut i),
+        contenu(&st, source, &mut i),
+        "ce qui se colle est ce qui s'est copié"
+    );
+    let r = faire(&mut m, Commande::Annuler);
+    assert!(matches!(r, Reponse::Defait { .. }), "{r:?}");
+    assert_ne!(
+        contenu(&st, arrivee, &mut i),
+        contenu(&st, source, &mut i),
+        "le Ctrl+Z défait le collage"
+    );
+
+    m.arreter();
+    let lignes = t.lignes();
+    assert!(
+        lignes.contains(&"commencer Coller « porte.litematic »".to_string()),
+        "{lignes:?}"
+    );
+    assert!(
+        !lignes
+            .iter()
+            .any(|l| l.starts_with("commencer Exporter") || l.starts_with("commencer Importer")),
+        "{lignes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// La sélection copiée remplit le presse-papiers, et se colle TOURNÉE.
+#[test]
+fn copier_la_selection_puis_coller_tourne() {
+    let (mut m, _, st) = en_seance();
+    let source = BBox::new(BlockPos::new(0, -48, 0), BlockPos::new(5, -46, 2));
+    let r = faire(&mut m, Commande::Copier { sel: source });
+    assert!(matches!(r, Reponse::Note(_)), "{r:?}");
+    let pp = m.presse_papiers();
+    assert_eq!(pp.taille, Some([6, 3, 3]));
+    assert_eq!(pp.source, "la sélection");
+    let r = faire(
+        &mut m,
+        Commande::Coller {
+            coin: BlockPos::new(60, -48, 60),
+            transfo: Some(tf_blocks::Transfo::Rot90),
+            avec_air: true,
+        },
+    );
+    assert!(matches!(r, Reponse::Fait { .. }), "{r:?}");
+    // Un quart de tour échange largeur et profondeur : 3 × 3 × 6.
+    let mut i = tf_anvil::Interner::new();
+    let tourne = BBox::new(BlockPos::new(60, -48, 60), BlockPos::new(62, -46, 65));
+    let attendu = tf_ops::edition::copier(st.as_ref(), &SURFACE, Folder::Region, &source, &mut i)
+        .unwrap()
+        .transformer(tf_blocks::Transfo::Rot90, &mut i, &|_, _| None)
+        .presse
+        .blocs;
+    assert_eq!(contenu(&st, tourne, &mut i), attendu);
+}
+
+/// Ce qui ne marche pas se DIT, par son nom — et ne touche à rien.
+#[test]
+fn les_echanges_qui_echouent_se_disent() {
+    let (mut m, _, _) = en_seance();
+    let r = faire(
+        &mut m,
+        Commande::Coller {
+            coin: BlockPos::new(0, 0, 0),
+            transfo: None,
+            avec_air: false,
+        },
+    );
+    assert!(
+        matches!(&r, Reponse::Echec(s) if s.contains("presse-papiers est vide")),
+        "{r:?}"
+    );
+    let d = dossier_neuf("illisible");
+    std::fs::create_dir_all(&d).unwrap();
+    let f = d.join("abime.schem");
+    std::fs::write(&f, b"pas du NBT").unwrap();
+    let r = faire(&mut m, Commande::Importer { chemin: f });
+    assert!(
+        matches!(&r, Reponse::Echec(s) if s.contains("abime.schem")),
+        "{r:?}"
+    );
+    let r = faire(
+        &mut m,
+        Commande::Importer {
+            chemin: d.join("absent.litematic"),
+        },
+    );
+    assert!(matches!(r, Reponse::Echec(_)), "{r:?}");
+    assert_eq!(m.presse_papiers().taille, None, "rien n'a été chargé");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// **Coller sans l'air garde ce qui est là** ; avec, l'air de l'extrait
+/// creuse. C'est la différence entre poser un bâtiment sur un terrain et
+/// reposer un extrait à l'identique, trous compris.
+#[test]
+fn coller_sans_l_air_garde_ce_qui_est_la() {
+    let (mut m, _, st) = en_seance();
+    let source = BBox::new(BlockPos::new(0, -48, 0), BlockPos::new(3, -46, 3));
+    // Un trou d'air au milieu de l'extrait.
+    let trou = BBox::new(BlockPos::new(1, -47, 1), BlockPos::new(2, -47, 2));
+    let mut params = Params::new();
+    params.poser("bloc", Valeur::texte("minecraft:air"));
+    let r = faire(
+        &mut m,
+        Commande::Appliquer {
+            op: "poser",
+            params,
+            sel: trou,
+            forme: Forme::Boite,
+            compter: false,
+            seed: 0,
+        },
+    );
+    assert!(matches!(r, Reponse::Fait { .. }), "{r:?}");
+    assert!(matches!(
+        faire(&mut m, Commande::Copier { sel: source }),
+        Reponse::Note(_)
+    ));
+    let coin = BlockPos::new(40, -48, 40);
+    let sous_le_trou = BBox::new(BlockPos::new(41, -47, 41), BlockPos::new(42, -47, 42));
+    let mut i = tf_anvil::Interner::new();
+    let air = i.intern("minecraft:air");
+    let avant = contenu(&st, sous_le_trou, &mut i);
+    assert!(avant.iter().all(|&s| s != air), "la destination est pleine");
+    for avec_air in [false, true] {
+        let r = faire(
+            &mut m,
+            Commande::Coller {
+                coin,
+                transfo: None,
+                avec_air,
+            },
+        );
+        assert!(matches!(r, Reponse::Fait { .. }), "{r:?}");
+        let apres = contenu(&st, sous_le_trou, &mut i);
+        if avec_air {
+            assert!(apres.iter().all(|&s| s == air), "l'air creuse");
+        } else {
+            assert_eq!(apres, avant, "sans l'air, ce qui est là reste");
+        }
+        assert!(matches!(
+            faire(&mut m, Commande::Annuler),
+            Reponse::Defait { .. }
+        ));
+    }
+}

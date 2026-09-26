@@ -33,6 +33,11 @@ pub struct Niveau {
     /// Où se tient le joueur en solo, et dans quelle dimension.
     pub joueur: Option<[f64; 3]>,
     pub dimension_joueur: Option<String>,
+    /// Le `DataVersion` du monde : la version du jeu qui l'a écrit en
+    /// dernier — donc la FORME des octets de ses coffres et de ses entités.
+    /// Un fichier d'échange exporté l'emporte ; un fichier importé plus récent
+    /// peut porter des blocs que ce monde ne connaît pas.
+    pub data_version: Option<i32>,
 }
 
 impl Niveau {
@@ -91,6 +96,7 @@ fn lire_data(c: &mut Cur<'_>, n: &mut Niveau) -> Option<()> {
             (tag::INT, "SpawnX") => spawn[0] = Some(c.i32().ok()?),
             (tag::INT, "SpawnY") => spawn[1] = Some(c.i32().ok()?),
             (tag::INT, "SpawnZ") => spawn[2] = Some(c.i32().ok()?),
+            (tag::INT, "DataVersion") => n.data_version = Some(c.i32().ok()?),
             (tag::COMPOUND, "Player") => lire_joueur(c, n)?,
             _ => c.skip_payload(t).ok()?,
         }

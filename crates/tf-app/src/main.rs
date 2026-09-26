@@ -37,6 +37,7 @@ fn main() {
     let mut montrer_accueil = false;
     let mut bloc_tape: Option<String> = None;
     let mut outil: Option<tf_app::etat::Outil> = None;
+    let mut a_importer: Option<String> = None;
     let mut mode = tf_render::controles::Mode::Edition;
     let (mut larg, mut haut) = (1400u32, 900u32);
     // **La distance d'affichage, en CHUNKS.** Un disque de rayon 8 porte 201
@@ -73,6 +74,9 @@ fn main() {
                     eprintln!("outil inconnu : « {nom} »");
                 }
             }
+            // La capture montre ce fichier dans le PRESSE-PAPIERS, l'outil
+            // Coller en main et son contour d'arrivée.
+            "--importer" => a_importer = args.next(),
             "--zone" => {
                 let v: Vec<i32> = args
                     .next()
@@ -123,7 +127,7 @@ fn main() {
                  \x20       [--rayon <cellules>]\n\
                  \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\
                  \x20                 [--accueil] [--bloc <texte>] [--mode conception]\n\
-                 \x20                 [--outil composant]\n\n\
+                 \x20                 [--outil composant] [--importer <fichier>]\n\n\
                  <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
                  Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
                  demander de connaître nos formats."
@@ -223,6 +227,7 @@ fn main() {
                     bloc: bloc_tape,
                     outil,
                     composants,
+                    presse: a_importer.map(|f| presse_de(&f)),
                 },
             )
         }
@@ -268,13 +273,40 @@ fn ouvrir_seance(dir: &str) -> (tf_world::Seance, tf_world::Journal, tf_world::R
 }
 
 /// Ce que la capture montre en plus de la scène : l'accueil, le sélecteur de
-/// blocs ouvert sur un texte, la fiche d'un outil, les composants du monde.
+/// blocs ouvert sur un texte, la fiche d'un outil, les composants du monde,
+/// un fichier dans le presse-papiers.
 struct AMontrer {
     accueil: Option<tf_app::accueil::Accueil>,
     nuancier: tf_app::nuancier::Nuancier,
     bloc: Option<String>,
     outil: Option<tf_app::etat::Outil>,
     composants: tf_app::moteur::Composants,
+    presse: Option<tf_app::moteur::PressePapiers>,
+}
+
+/// Le presse-papiers qu'un fichier donnerait — lu par le MÊME lecteur que le
+/// moteur, pour que la capture montre ce que la fenêtre montrerait.
+fn presse_de(fichier: &str) -> tf_app::moteur::PressePapiers {
+    let octets = std::fs::read(fichier).unwrap_or_else(|e| {
+        eprintln!("{fichier} : {e}");
+        std::process::exit(1);
+    });
+    let lu = tf_formats::lire(&octets, &mut tf_anvil::Interner::new()).unwrap_or_else(|e| {
+        eprintln!("{fichier} : {e}");
+        std::process::exit(1);
+    });
+    println!("presse-papiers : {} · {:?}", lu.lecture, lu.presse.taille);
+    tf_app::moteur::PressePapiers {
+        taille: Some(lu.presse.taille),
+        ancre: lu.presse.ancre,
+        source: std::path::Path::new(fichier)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        data_version: lu.data_version,
+        remarques: lu.remarques.iter().map(|r| r.to_string()).collect(),
+        version: 1,
+    }
 }
 
 /// Une image de l'interface, sans écran.
@@ -292,6 +324,7 @@ fn capturer(
         bloc,
         outil,
         composants,
+        presse,
     } = montrer;
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -344,6 +377,9 @@ fn capturer(
     // Le premier composant du monde est choisi : ses instances s'éclairent.
     etat.composant_choisi = composants.projet.definitions.first().map(|d| d.id);
     etat.suivre_composants(composants);
+    if let Some(p) = presse {
+        etat.suivre_presse(p);
+    }
     let focus = bloc.map(|t| {
         etat.mode = tf_render::controles::Mode::Conception;
         etat.outil = tf_app::etat::Outil::Poser;
@@ -382,11 +418,19 @@ fn capturer(
     lignes.sommets.extend(
         scene::contours_composants(&etat.composants.projet, etat.composant_choisi, visee).sommets,
     );
+    let composants_vus = lignes.len() - quadrillage - selection;
+    let arrivee = etat.contour_d_arrivee();
+    lignes
+        .sommets
+        .extend(scene::contour_d_arrivee(arrivee).sommets);
     println!(
-        "calque : {quadrillage} segment(s) de découpage, {selection} de sélection, {} \
-         d'instances de composants",
-        lignes.len() - quadrillage - selection
+        "calque : {quadrillage} segment(s) de découpage, {selection} de sélection, \
+         {composants_vus} d'instances de composants, {} d'arrivée",
+        lignes.len() - quadrillage - selection - composants_vus
     );
+    if let Some(b) = arrivee {
+        println!("  arrivée : {:?} → {:?}", b.min, b.max);
+    }
     if selection > 0 {
         let v = &lignes.sommets[quadrillage * 2];
         println!("  premier sommet de sélection : {:?}", v.position);

@@ -22,15 +22,17 @@
 //! rend un `Echec` — puis continue. Un moteur mort se dit ; il ne se devine
 //! pas.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
 use tf_anvil::Interner;
 use tf_blocks::Transfo;
+use tf_formats::{Format, Meta};
 use tf_ops::catalogue::{construire, Params};
 use tf_ops::composant::{self, Projet};
-use tf_ops::edition::{rejouer, Sens};
+use tf_ops::edition::{coller, copier, rejouer, Pas, Sens};
 use tf_ops::executer::{executer, Options};
-use tf_ops::Forme;
+use tf_ops::{Forme, Presse};
 use tf_world::coords::{BBox, BlockPos};
 use tf_world::journal::{Journal, Record};
 use tf_world::source::{Dimension, Folder, RegionSource};
@@ -119,8 +121,67 @@ pub enum Commande {
     /// une opération : un Ctrl+Z défait la mise à jour d'une définition ET ses
     /// réestampages.
     Composant(ActionComposant),
+    /// **Copie la sélection dans un fichier d'échange.** Ni le monde ni le
+    /// journal ne sont touchés. Le fichier n'est JAMAIS écrasé : un nom déjà
+    /// pris devient « nom (2) » — l'export d'hier est peut-être celui qu'on
+    /// voulait garder.
+    Exporter {
+        sel: BBox,
+        format: Format,
+        chemin: PathBuf,
+        meta: Meta,
+    },
+    /// Lit un fichier d'échange dans le PRESSE-PAPIERS du chantier.
+    Importer {
+        chemin: PathBuf,
+    },
+    /// La sélection devient le presse-papiers — `//copy`.
+    Copier {
+        sel: BBox,
+    },
+    /// **Colle le presse-papiers**, son coin de plus petites coordonnées en
+    /// `coin`, dans l'orientation donnée. Une entrée de journal.
+    Coller {
+        coin: BlockPos,
+        transfo: Option<Transfo>,
+        avec_air: bool,
+    },
     /// Range le chantier et termine le fil.
     Arreter,
+}
+
+impl Commande {
+    /// Écrit-elle dans la copie de travail ? Seules celles-là marquent la
+    /// séance « action en cours » : un export interrompu n'a rien laissé à
+    /// réparer, et la reprise ne doit pas prétendre le contraire.
+    fn ecrit(&self) -> bool {
+        !matches!(
+            self,
+            Commande::Exporter { .. }
+                | Commande::Importer { .. }
+                | Commande::Copier { .. }
+                | Commande::Arreter
+        )
+    }
+}
+
+/// **Le presse-papiers du chantier, tel que le fil l'a publié** — sans sa
+/// grille : la coque n'en a besoin que pour montrer où il ira, et le dire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PressePapiers {
+    /// Sa boîte ; `None` quand il est vide.
+    pub taille: Option<[u32; 3]>,
+    pub ancre: [i32; 3],
+    /// D'où il vient : un fichier, ou la sélection.
+    pub source: String,
+    /// Le `DataVersion` du fichier, quand il en porte un : plus récent que le
+    /// monde, ses blocs peuvent ne pas y exister, et c'est la coque — qui
+    /// connaît le monde — qui le dit.
+    pub data_version: Option<i32>,
+    /// Ce que la lecture n'a pas su porter, une phrase chacun.
+    pub remarques: Vec<String>,
+    /// Change à chaque publication.
+    pub version: u64,
 }
 
 /// Ce qu'on fait aux composants. Les identifiants sont ceux du document que
@@ -205,6 +266,9 @@ pub enum Reponse {
         regions: usize,
         sauvegarde: String,
     },
+    /// Ce qui s'est fait sans toucher au monde : un fichier écrit, un
+    /// presse-papiers rempli.
+    Note(String),
     Echec(String),
 }
 
@@ -242,7 +306,7 @@ impl Reponse {
                 regions,
                 sauvegarde,
             } => format!("écrit : {regions} région(s) · sauvegarde dans {sauvegarde}"),
-            Reponse::Echec(s) => s.clone(),
+            Reponse::Note(s) | Reponse::Echec(s) => s.clone(),
         }
     }
 
@@ -267,6 +331,8 @@ pub struct Moteur {
     regles: std::sync::Arc<std::sync::Mutex<crate::regles::Regles>>,
     /// Le document des composants, publié par le fil.
     composants: std::sync::Arc<std::sync::Mutex<Composants>>,
+    /// Le presse-papiers, publié par le fil.
+    presse: std::sync::Arc<std::sync::Mutex<PressePapiers>>,
 }
 
 impl Moteur {
@@ -328,6 +394,8 @@ impl Moteur {
         let (doc_vu, lu) = lire_document(staging.as_ref());
         let composants = std::sync::Arc::new(std::sync::Mutex::new(Composants::depuis(lu, 1)));
         let composants_du_fil = composants.clone();
+        let presse = std::sync::Arc::new(std::sync::Mutex::new(PressePapiers::default()));
+        let presse_du_fil = presse.clone();
         let fil = std::thread::Builder::new()
             .name("moteur".into())
             .spawn(move || {
@@ -341,6 +409,8 @@ impl Moteur {
                     regles: regles_du_fil,
                     composants: composants_du_fil,
                     doc_vu,
+                    presse: None,
+                    presse_publiee: presse_du_fil,
                 };
                 while let Ok(cmd) = commandes.recv() {
                     if matches!(cmd, Commande::Arreter) {
@@ -366,7 +436,13 @@ impl Moteur {
             fil: Some(fil),
             regles,
             composants,
+            presse,
         }
+    }
+
+    /// **Le presse-papiers**, tel que le fil l'a publié en dernier.
+    pub fn presse_papiers(&self) -> PressePapiers {
+        self.presse.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// **Le document des composants**, tel que le fil l'a publié en dernier.
@@ -482,6 +558,10 @@ struct Chantier<S: RegionSource, O: RegionStore> {
     /// Ses octets à la dernière publication : on ne décode que ce qui a
     /// changé. `None` : illisible la dernière fois, à relire.
     doc_vu: Option<Vec<u8>>,
+    /// Le presse-papiers : un fichier importé, ou la sélection copiée — ses
+    /// états dans l'interner de CE fil, et sa provenance.
+    presse: Option<(Presse, String)>,
+    presse_publiee: std::sync::Arc<std::sync::Mutex<PressePapiers>>,
 }
 
 impl Composants {
@@ -579,6 +659,10 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             Commande::Refaire => "Refaire".into(),
             Commande::Ecrire { .. } => "Écrire dans la save".into(),
             Commande::Composant(a) => self.label_composant(a),
+            Commande::Exporter { format, .. } => format!("Exporter en {}", format.nom()),
+            Commande::Importer { chemin } => format!("Importer « {} »", nom_de(chemin)),
+            Commande::Copier { .. } => "Copier la sélection".into(),
+            Commande::Coller { .. } => self.label_coller(),
             Commande::Arreter => "Arrêter".into(),
         };
         // Ce qui a pu changer le document des composants : une action sur
@@ -587,17 +671,50 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             c,
             Commande::Composant(_) | Commande::Annuler | Commande::Refaire
         );
-        if let Some(k) = &mut self.carnet {
-            k.commencer(&quoi);
+        let marque = c.ecrit();
+        if marque {
+            if let Some(k) = &mut self.carnet {
+                k.commencer(&quoi);
+            }
         }
         let r = self.executer(c);
         if doc {
             self.publier();
         }
-        if let Some(k) = &mut self.carnet {
-            k.terminer();
+        if marque {
+            if let Some(k) = &mut self.carnet {
+                k.terminer();
+            }
         }
         r
+    }
+
+    fn label_coller(&self) -> String {
+        match &self.presse {
+            Some((_, source)) => format!("Coller « {source} »"),
+            None => "Coller".into(),
+        }
+    }
+
+    /// **Publie le presse-papiers** pour la coque.
+    fn publier_presse(&mut self, data_version: Option<i32>, remarques: Vec<String>) {
+        if let Ok(mut g) = self.presse_publiee.lock() {
+            let version = g.version + 1;
+            *g = match &self.presse {
+                Some((p, source)) => PressePapiers {
+                    taille: Some(p.taille),
+                    ancre: p.ancre,
+                    source: source.clone(),
+                    data_version,
+                    remarques,
+                    version,
+                },
+                None => PressePapiers {
+                    version,
+                    ..Default::default()
+                },
+            };
+        }
     }
 
     /// Range des enregistrements dans la séance. Rend de quoi compléter le
@@ -632,7 +749,198 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
                 confirme_sans_verrou,
             } => self.ecrire(confirme_sans_verrou),
             Commande::Composant(a) => self.composant(a),
+            Commande::Exporter {
+                sel,
+                format,
+                chemin,
+                meta,
+            } => self.exporter(sel, format, &chemin, &meta),
+            Commande::Importer { chemin } => self.importer(&chemin),
+            Commande::Copier { sel } => self.copier(sel),
+            Commande::Coller {
+                coin,
+                transfo,
+                avec_air,
+            } => self.coller(coin, transfo, avec_air),
             Commande::Arreter => Reponse::Rien("arrêt".into()),
+        }
+    }
+
+    /// Voir `Commande::Exporter`. La sélection est relue MAINTENANT — ce qui
+    /// part dans le fichier est ce que la copie de travail porte, retouches
+    /// comprises.
+    fn exporter(&mut self, sel: BBox, format: Format, chemin: &Path, meta: &Meta) -> Reponse {
+        let p = match copier(
+            self.staging.as_ref(),
+            &self.dim,
+            Folder::Region,
+            &sel,
+            &mut self.interner,
+        ) {
+            Ok(p) => p,
+            Err(e) => return Reponse::Echec(format!("exporter : {e}")),
+        };
+        let ecrit = match tf_formats::ecrire(&p, format, &self.interner, meta) {
+            Ok(e) => e,
+            Err(e) => return Reponse::Echec(format!("exporter : {e}")),
+        };
+        let chemin = match ecrire_sans_ecraser(chemin, &ecrit.octets) {
+            Ok(c) => c,
+            Err(e) => {
+                return Reponse::Echec(format!("exporter : {} — {e}", chemin.display()));
+            }
+        };
+        let mut s = format!(
+            "exporté : {} · {} · {} Ko",
+            chemin.display(),
+            resume_presse(&p),
+            ecrit.octets.len().div_ceil(1024)
+        );
+        for r in &ecrit.remarques {
+            s.push_str(&format!(" · {r}"));
+        }
+        Reponse::Note(s)
+    }
+
+    /// Voir `Commande::Importer`.
+    fn importer(&mut self, chemin: &Path) -> Reponse {
+        let nom = nom_de(chemin);
+        // Un fichier plus gros que ce que la lecture accepte décompressé ne
+        // se lit pas — on ne le charge pas en mémoire pour le découvrir.
+        match std::fs::metadata(chemin) {
+            Ok(m) if m.len() > tf_formats::MAX_OCTETS_NBT => {
+                return Reponse::Echec(format!("« {nom} » : {} Mo, trop gros", m.len() >> 20));
+            }
+            Ok(_) => {}
+            Err(e) => return Reponse::Echec(format!("« {nom} » : {e}")),
+        }
+        let octets = match std::fs::read(chemin) {
+            Ok(o) => o,
+            Err(e) => return Reponse::Echec(format!("« {nom} » : {e}")),
+        };
+        let lu = match tf_formats::lire(&octets, &mut self.interner) {
+            Ok(lu) => lu,
+            Err(e) => return Reponse::Echec(format!("« {nom} » : {e}")),
+        };
+        let mut s = format!(
+            "« {nom} » dans le presse-papiers : {} · {}",
+            lu.lecture,
+            resume_presse(&lu.presse)
+        );
+        let remarques: Vec<String> = lu.remarques.iter().map(|r| r.to_string()).collect();
+        for r in &remarques {
+            s.push_str(&format!(" · {r}"));
+        }
+        self.presse = Some((lu.presse, nom));
+        self.publier_presse(lu.data_version, remarques);
+        Reponse::Note(s)
+    }
+
+    /// Voir `Commande::Copier`.
+    fn copier(&mut self, sel: BBox) -> Reponse {
+        let p = match copier(
+            self.staging.as_ref(),
+            &self.dim,
+            Folder::Region,
+            &sel,
+            &mut self.interner,
+        ) {
+            Ok(p) => p,
+            Err(e) => return Reponse::Echec(format!("copier : {e}")),
+        };
+        let s = format!("sélection copiée : {}", resume_presse(&p));
+        self.presse = Some((p, "la sélection".into()));
+        self.publier_presse(None, Vec::new());
+        Reponse::Note(s)
+    }
+
+    /// Voir `Commande::Coller`.
+    fn coller(&mut self, coin: BlockPos, transfo: Option<Transfo>, avec_air: bool) -> Reponse {
+        let label = self.label_coller();
+        let regles = self.regles.lock().map(|r| r.clone()).unwrap_or_default();
+        let demandee = std::cell::Cell::new(false);
+        let regle = |cle: &str, t: Transfo| {
+            demandee.set(true);
+            regles.table().and_then(|table| table.transformer(cle, t))
+        };
+        let Some((p, _)) = &self.presse else {
+            return Reponse::Echec(
+                "le presse-papiers est vide — importer un fichier ou copier la sélection".into(),
+            );
+        };
+        let (p, intacts, approches) = match transfo {
+            Some(t) => {
+                let tr = p.transformer(t, &mut self.interner, &regle);
+                (
+                    std::borrow::Cow::Owned(tr.presse),
+                    tr.intacts.len(),
+                    tr.approches.len(),
+                )
+            }
+            None => (std::borrow::Cow::Borrowed(p), 0, 0),
+        };
+        let pas = Pas {
+            d: [0; 3],
+            avec_air,
+            air: self.interner.intern("minecraft:air"),
+            compter: true,
+        };
+        let rap = match coller(
+            self.staging.as_ref(),
+            &self.dim,
+            Folder::Region,
+            &p,
+            coin,
+            pas,
+            &self.interner,
+        ) {
+            Ok(r) => r,
+            Err(e) => return Reponse::Echec(format!("{label} : {e}")),
+        };
+        let Some(records) = rap.journaliser(
+            &mut self.journal,
+            &label,
+            "coller",
+            Vec::new(),
+            horodatage(),
+        ) else {
+            // Un collage sur du terrain jamais généré n'écrit rien : il
+            // n'ENGENDRE pas de chunk. Le dire, sinon c'est un bouton mort.
+            return Reponse::Rien(format!("{label} (aucun terrain généré sous l'extrait ?)"));
+        };
+        let mut s = match rap.blocs {
+            Some(b) => format!("{b} blocs"),
+            None => format!("{} chunk(s)", rap.patches.len()),
+        };
+        if rap.entites_posees > 0 {
+            s.push_str(&format!(" · {} coffre(s) et autres", rap.entites_posees));
+        }
+        if rap.mobiles_poses > 0 {
+            s.push_str(&format!(" · {} entité(s)", rap.mobiles_poses));
+        }
+        let laissees = rap.mobiles_sans_terrain + rap.mobiles_autre_version;
+        if laissees > 0 {
+            s.push_str(&format!(
+                " · {laissees} entité(s) laissée(s) (pas de terrain à l'arrivée, ou chunk \
+                 d'une autre version)"
+            ));
+        }
+        if approches > 0 {
+            s.push_str(&format!(" · {approches} entité(s) approchée(s)"));
+        }
+        if demandee.get() && regles.table().is_none() {
+            s.push_str(" · orientations NON réécrites : les règles de rotation du pack manquent");
+        } else if intacts > 0 {
+            s.push_str(&format!(
+                " · {intacts} état(s) que le pack ne sait pas tourner, laissés tels quels"
+            ));
+        }
+        s.push_str(&self.noter(&records));
+        Reponse::Fait {
+            op: label,
+            resume: s,
+            bornes: rap.bornes,
+            zones: zones_de(rap.patches.iter().map(|p| &p.cible), rap.bornes, &self.dim),
         }
     }
 
@@ -918,6 +1226,84 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             }
         }
     }
+}
+
+/// Le nom d'un fichier, pour les messages.
+fn nom_de(chemin: &Path) -> String {
+    chemin
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| chemin.display().to_string())
+}
+
+/// Un extrait en une phrase : sa boîte, ses coffres, ses entités.
+fn resume_presse(p: &Presse) -> String {
+    let [x, y, z] = p.taille;
+    let mut s = format!("{x} × {y} × {z}");
+    if !p.entites.is_empty() {
+        s.push_str(&format!(" · {} block entit(é/ies)", p.entites.len()));
+    }
+    if !p.mobiles.is_empty() {
+        s.push_str(&format!(" · {} entité(s)", p.mobiles.len()));
+    }
+    s
+}
+
+/// **Écrit un fichier sans JAMAIS en écraser un** : un nom pris devient
+/// « nom (2).ext », « nom (3).ext »… Rend le chemin écrit.
+///
+/// Le nom se RÉSERVE d'abord (`create_new`, atomique : deux exports
+/// simultanés ne prennent pas le même), les octets s'écrivent dans un
+/// temporaire, puis le temporaire remplace la réservation. Un arrêt en plein
+/// milieu laisse au pire un fichier vide sous le nom voulu — jamais un
+/// fichier tronqué qui se lirait à moitié.
+pub fn ecrire_sans_ecraser(voulu: &Path, octets: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    if let Some(d) = voulu.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d)?;
+    }
+    let tige = voulu
+        .file_stem()
+        .map(|t| t.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = voulu
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for k in 1..10_000u32 {
+        let c = if k == 1 {
+            voulu.to_path_buf()
+        } else {
+            voulu.with_file_name(format!("{tige} ({k}){ext}"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&c)
+        {
+            Ok(reservation) => {
+                drop(reservation);
+                let tmp = c.with_file_name(format!(".{tige} ({k}){ext}.titiforge-tmp"));
+                let ecrit = (|| {
+                    let mut f = std::fs::File::create(&tmp)?;
+                    f.write_all(octets)?;
+                    f.sync_all()?;
+                    std::fs::rename(&tmp, &c)
+                })();
+                if let Err(e) = ecrit {
+                    let _ = std::fs::remove_file(&tmp);
+                    let _ = std::fs::remove_file(&c);
+                    return Err(e);
+                }
+                return Ok(c);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(
+        "dix mille fichiers de ce nom déjà là",
+    ))
 }
 
 /// Ce qu'une action sur les composants a fait, en une phrase.

@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1093 tests aujourd’hui)
+cargo test            # tous les crates (1106 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -327,6 +327,11 @@ cargo run --release -p tf-app -- ../titisite/public/codex --monde D:\monde --zon
 # regarde depuis une machine sans écran, et elle se vérifiera au pixel.
 cargo run --release -p tf-app -- ../titisite/public/codex --capture ecran.png --taille 1400x900
 cargo run --release -p tf-app -- ../titisite/public/codex --capture concep.png --mode conception
+# un fichier d'échange dans le presse-papiers : l'outil Coller et son contour
+# d'arrivée. Le format se reconnaît au CONTENU, jamais à l'extension
+cargo run --release -p tf-app -- ../titisite/public/codex --capture coller.png --importer porte.litematic
+cargo run --release -p tf-formats --example lire -- porte.litematic
+cargo run --release -p tf-formats --example mesurer
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -429,6 +434,10 @@ crates/
                · COMPOSANTS ✅ : l'outil « Composant » (poser, tourner,
                  mettre à jour, détacher), leurs contours dans la vue, et le
                  document PUBLIÉ par le fil — l'interface ne décode rien
+               · ÉCHANGES ✅ : exporter la sélection là où l'outil qui la
+                 lit la cherche, sans jamais écraser ; importer (dossiers
+                 habituels, chemin, glisser-déposer) ; l'outil « Coller » et
+                 le contour de ce qu'il va poser
                · saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -469,7 +478,7 @@ couvriront le même terrain.
 | Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture. Côté coque : sa variante d'`ActionComposant` et son bras dans `Chantier::composant` (`moteur.rs`), sa `demande_*` dans `Etat`, son bouton dans la fiche (`interface::composants`) |
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
-| Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas |
+| Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas. Côté coque, son dossier dans `dossier_par_defaut` (`tf-app/src/etat.rs`, le compilateur l'exige) : là où l'outil qui le lit le CHERCHE. Son extension, l'export et la liste d'import la tirent de `Format::extension` |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés

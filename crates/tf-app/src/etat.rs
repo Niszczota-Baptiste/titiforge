@@ -232,10 +232,18 @@ pub enum Outil {
     /// Poser le COMPOSANT choisi, et tenir ses instances : les mettre à jour,
     /// les détacher.
     Composant,
+    /// Coller le PRESSE-PAPIERS — un fichier importé, ou la sélection copiée.
+    Coller,
 }
 
 impl Outil {
-    pub const TOUS: [Outil; 4] = [Outil::Tirer, Outil::Poser, Outil::Casser, Outil::Composant];
+    pub const TOUS: [Outil; 5] = [
+        Outil::Tirer,
+        Outil::Poser,
+        Outil::Casser,
+        Outil::Composant,
+        Outil::Coller,
+    ];
 
     pub const fn nom(self) -> &'static str {
         match self {
@@ -243,6 +251,7 @@ impl Outil {
             Outil::Poser => "Poser",
             Outil::Casser => "Casser",
             Outil::Composant => "Composant",
+            Outil::Coller => "Coller",
         }
     }
 
@@ -257,8 +266,192 @@ impl Outil {
             Outil::Composant => {
                 "gauche : poser le composant choisi · droit : le tourner d'un quart de tour"
             }
+            Outil::Coller => {
+                "gauche : coller le presse-papiers · droit : le tourner d'un quart de tour"
+            }
         }
     }
+}
+
+// ── les échanges ────────────────────────────────────────────────────────────
+
+/// Un fichier d'échange trouvé sur la machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trouve {
+    pub chemin: std::path::PathBuf,
+    pub nom: String,
+    pub octets: u64,
+}
+
+/// **Ce que le panneau des échanges retient** — exporter la sélection,
+/// importer un fichier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Echanges {
+    pub format: tf_formats::Format,
+    /// Le nom du fichier, sans extension — il deviendra un nom de FICHIER
+    /// (`nom_de_fichier`).
+    pub nom: String,
+    /// Où exporter. Proposé selon le format — là où l'outil qui le lit le
+    /// cherche — et modifiable.
+    pub dossier: String,
+    /// Un chemin tapé ou collé, pour importer.
+    pub a_importer: String,
+    /// Les fichiers d'échange trouvés, du plus récent au plus ancien.
+    pub trouves: Vec<Trouve>,
+    /// Coller écrase-t-il avec l'AIR de l'extrait ? Non par défaut, comme
+    /// WorldEdit : on colle un bâtiment sur un terrain, pas un cube d'air.
+    pub avec_air: bool,
+    /// Le `DataVersion` du monde ouvert (`level.dat`) : ce qu'un export
+    /// emporte, et ce à quoi un import se compare.
+    pub version_monde: Option<i32>,
+    /// L'installation du monde ouvert, et le monde lui-même : les dossiers
+    /// d'échange par défaut en dépendent.
+    pub installation: Option<std::path::PathBuf>,
+    pub monde: Option<std::path::PathBuf>,
+}
+
+impl Default for Echanges {
+    fn default() -> Self {
+        Echanges {
+            // Litematica d'abord : pour bâtir en survie sur un serveur, c'est
+            // lui qui montre le build à reproduire.
+            format: tf_formats::Format::Litematic,
+            nom: String::new(),
+            dossier: String::new(),
+            a_importer: String::new(),
+            trouves: Vec::new(),
+            avec_air: false,
+            version_monde: None,
+            installation: None,
+            monde: None,
+        }
+    }
+}
+
+/// Minecraft 1.18.2 : le `DataVersion` qu'on suppose quand le monde ne dit
+/// pas le sien — la version du serveur que ce projet sert d'abord.
+pub const DV_PAR_DEFAUT: i32 = 2975;
+
+/// **Où un format se range**, par défaut : là où l'outil qui le lit le
+/// cherche. Litematica lit `schematics/` à la racine de l'installation,
+/// WorldEdit en solo `config/worldedit/schematics/`, et un bloc de structure
+/// charge `minecraft:<nom>` depuis `generated/minecraft/structures/` DU
+/// MONDE.
+pub fn dossier_par_defaut(
+    format: tf_formats::Format,
+    installation: Option<&std::path::Path>,
+    monde: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    use tf_formats::Format;
+    match format {
+        Format::Litematic => installation.map(|i| i.join("schematics")),
+        Format::SpongeV2 | Format::SpongeV3 => {
+            installation.map(|i| i.join("config").join("worldedit").join("schematics"))
+        }
+        Format::Structure => {
+            monde.map(|m| m.join("generated").join("minecraft").join("structures"))
+        }
+    }
+}
+
+/// **Un nom qui devient un nom de FICHIER**, sous Windows comme ailleurs.
+///
+/// On ne retire que ce qu'un système de fichiers refuse VRAIMENT : les
+/// caractères interdits de Windows et les contrôles, les noms de périphériques
+/// réservés (`CON`, `LPT1`…), un point ou une espace en fin de nom. Jamais
+/// `\w` : « Vallée » deviendrait `Vall_e`, et deux builds coréens sortiraient
+/// sous le même nom — le piège qu'`ExeWorldEdit` a payé.
+///
+/// Windows juge un nom de périphérique sur ce qui précède le PREMIER point,
+/// espaces de fin retirées : `CON.txt` et `CON .txt` sont la console. Et les
+/// ports vont de 0 à 9, plus `¹`, `²` et `³`.
+pub fn nom_de_fichier(nom: &str) -> String {
+    let propre: String = nom
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let propre = propre.trim().trim_end_matches(['.', ' ']).to_string();
+    let base = propre
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    let port = base
+        .strip_prefix("COM")
+        .or_else(|| base.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            let mut c = n.chars();
+            matches!(
+                (c.next(), c.next()),
+                (Some('0'..='9' | '¹' | '²' | '³'), None)
+            )
+        });
+    let reserve = port
+        || matches!(
+            base.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        );
+    if propre.is_empty() {
+        "export".into()
+    } else if reserve {
+        format!("_{propre}")
+    } else {
+        propre
+    }
+}
+
+/// **Les fichiers d'échange de ces dossiers**, du plus récent au plus ancien —
+/// reconnus à leur extension pour la LISTE seulement : c'est la lecture qui
+/// décidera, par leurs octets, de ce qu'ils sont.
+///
+/// Les extensions viennent de `Format::extension` — une table de plus
+/// divergerait au premier format ajouté —, plus le `.schematic` d'avant 1.13 :
+/// la lecture le refuse en le NOMMANT, ce qui vaut mieux qu'un fichier que la
+/// liste tairait.
+pub fn fichiers_d_echange(dossiers: &[std::path::PathBuf]) -> Vec<Trouve> {
+    let mut v: Vec<(std::time::SystemTime, Trouve)> = Vec::new();
+    for d in dossiers {
+        let Ok(lecture) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in lecture.flatten() {
+            let chemin = e.path();
+            let Some(ext) = chemin
+                .extension()
+                .map(|x| x.to_string_lossy().to_ascii_lowercase())
+            else {
+                continue;
+            };
+            if ext != "schematic"
+                && !tf_formats::Format::TOUS
+                    .iter()
+                    .any(|f| f.extension() == ext)
+            {
+                continue;
+            }
+            let Ok(m) = e.metadata() else { continue };
+            if !m.is_file() {
+                continue;
+            }
+            v.push((
+                m.modified().unwrap_or(std::time::UNIX_EPOCH),
+                Trouve {
+                    nom: e.file_name().to_string_lossy().into_owned(),
+                    chemin,
+                    octets: m.len(),
+                },
+            ));
+        }
+    }
+    v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.nom.cmp(&b.1.nom)));
+    v.into_iter().map(|(_, t)| t).take(40).collect()
 }
 
 /// La dimension que la scène montre. La coque ne dessine que la surface
@@ -391,9 +584,14 @@ pub struct Etat {
     pub composant_choisi: Option<u64>,
     /// Le nom tapé pour créer un composant, ou renommer le choisi.
     pub nom_composant: String,
-    /// L'orientation de la prochaine pose. Un choix de l'utilisateur : elle
-    /// survit au changement de monde.
+    /// L'orientation de la prochaine pose — d'un composant comme d'un
+    /// collage. Un choix de l'utilisateur : elle survit au changement de
+    /// monde.
     pub orientation: Option<tf_blocks::Transfo>,
+    /// Le presse-papiers, tel que le fil l'a PUBLIÉ.
+    pub presse: crate::moteur::PressePapiers,
+    /// Le panneau des échanges.
+    pub echanges: Echanges,
 }
 
 /// La face que `viser` rend, dite dans le vocabulaire de la sélection.
@@ -440,6 +638,8 @@ impl Etat {
             composant_choisi: None,
             nom_composant: String::new(),
             orientation: None,
+            presse: crate::moteur::PressePapiers::default(),
+            echanges: Echanges::default(),
         }
     }
 
@@ -463,6 +663,180 @@ impl Etat {
         // l'ancien monde désigneraient, dans le nouveau, autre chose ou rien.
         self.composants = crate::moteur::Composants::default();
         self.composant_choisi = None;
+        // Le presse-papiers vivait dans le moteur de l'ANCIEN monde : ses
+        // états sont ceux de son interner, et il est parti avec lui.
+        self.presse = crate::moteur::PressePapiers::default();
+    }
+
+    /// **Un monde vient de s'ouvrir** : les dossiers d'échange par défaut
+    /// sont ceux de SON installation et de lui-même, et le nom proposé est le
+    /// sien.
+    pub fn situer_echanges(
+        &mut self,
+        installation: Option<std::path::PathBuf>,
+        monde: Option<std::path::PathBuf>,
+        version_monde: Option<i32>,
+        nom: Option<&str>,
+    ) {
+        let e = &mut self.echanges;
+        e.installation = installation;
+        e.monde = monde;
+        e.version_monde = version_monde;
+        if let Some(n) = nom {
+            e.nom = nom_de_fichier(n);
+        }
+        self.choisir_format(self.echanges.format);
+        self.chercher_fichiers();
+    }
+
+    /// Change le format de l'export — et le dossier, qui en dépend.
+    pub fn choisir_format(&mut self, f: tf_formats::Format) {
+        let e = &mut self.echanges;
+        e.format = f;
+        e.dossier = dossier_par_defaut(f, e.installation.as_deref(), e.monde.as_deref())
+            .map(|d| d.display().to_string())
+            .unwrap_or_default();
+    }
+
+    /// Relit les fichiers d'échange des dossiers par défaut — et du dossier
+    /// d'export tapé, sinon ce qu'on vient d'y exporter n'apparaîtrait pas
+    /// dans la liste d'à côté.
+    pub fn chercher_fichiers(&mut self) {
+        let e = &self.echanges;
+        let tape = Some(e.dossier.trim())
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from);
+        let mut dossiers = Vec::new();
+        for d in tf_formats::Format::TOUS
+            .iter()
+            .filter_map(|&f| dossier_par_defaut(f, e.installation.as_deref(), e.monde.as_deref()))
+            .chain(tape)
+        {
+            if !dossiers.contains(&d) {
+                dossiers.push(d);
+            }
+        }
+        self.echanges.trouves = fichiers_d_echange(&dossiers);
+    }
+
+    /// Le fichier où l'export ira — avant qu'un nom pris ne le numérote.
+    pub fn chemin_d_export(&self) -> Option<std::path::PathBuf> {
+        let e = &self.echanges;
+        let dossier = e.dossier.trim();
+        if dossier.is_empty() {
+            return None;
+        }
+        Some(std::path::Path::new(dossier).join(format!(
+            "{}.{}",
+            nom_de_fichier(&e.nom),
+            e.format.extension()
+        )))
+    }
+
+    /// **Exporte la sélection.** `date_ms` est passée, pas lue : l'état ne
+    /// touche pas à l'horloge, et un test compare ce qu'il construit.
+    pub fn demande_exporter(&self, date_ms: i64) -> Option<crate::moteur::Commande> {
+        let sel = self.selection.boite()?;
+        let chemin = self.chemin_d_export()?;
+        let e = &self.echanges;
+        Some(crate::moteur::Commande::Exporter {
+            sel,
+            format: e.format,
+            chemin,
+            meta: tf_formats::Meta {
+                data_version: e.version_monde.unwrap_or(DV_PAR_DEFAUT),
+                nom: e.nom.trim().to_string(),
+                auteur: "titiforge".into(),
+                description: String::new(),
+                date_ms,
+            },
+        })
+    }
+
+    /// Importe un fichier dans le presse-papiers.
+    pub fn demande_importer(&self, chemin: &std::path::Path) -> crate::moteur::Commande {
+        crate::moteur::Commande::Importer {
+            chemin: chemin.to_path_buf(),
+        }
+    }
+
+    /// La sélection devient le presse-papiers.
+    pub fn demande_copier(&self) -> Option<crate::moteur::Commande> {
+        Some(crate::moteur::Commande::Copier {
+            sel: self.selection.boite()?,
+        })
+    }
+
+    /// **Colle le presse-papiers** — son coin de plus petites coordonnées sur
+    /// la case de pose, dans l'orientation choisie.
+    pub fn coller_ici(&mut self) -> Option<crate::moteur::Commande> {
+        if self.presse.taille.is_none() {
+            self.message = "le presse-papiers est vide — importer un fichier, ou copier la \
+                            sélection"
+                .into();
+            return None;
+        }
+        let coin = self.point_de_pose()?;
+        Some(crate::moteur::Commande::Coller {
+            coin,
+            transfo: self.orientation,
+            avec_air: self.echanges.avec_air,
+        })
+    }
+
+    /// **Le fil a publié le presse-papiers.** Un presse-papiers NEUF met
+    /// l'outil « Coller » en main : on vient d'importer pour coller.
+    pub fn suivre_presse(&mut self, p: crate::moteur::PressePapiers) {
+        if p.version == self.presse.version {
+            return;
+        }
+        if p.taille.is_some() {
+            self.mode = Mode::Conception;
+            self.outil = Outil::Coller;
+        }
+        self.presse = p;
+    }
+
+    /// Le fichier importé est-il d'un Minecraft plus RÉCENT que le monde ?
+    /// Ses blocs peuvent n'y pas exister — le jeu les remplacerait par de
+    /// l'air au chargement.
+    pub fn presse_plus_recente(&self) -> Option<(i32, i32)> {
+        match (self.presse.data_version, self.echanges.version_monde) {
+            (Some(f), Some(m)) if f > m => Some((f, m)),
+            _ => None,
+        }
+    }
+
+    /// **Où la pose irait**, si l'on cliquait maintenant : la boîte du
+    /// presse-papiers — ou du composant choisi — posée sur la case visée,
+    /// dans l'orientation choisie. C'est l'aperçu.
+    pub fn contour_d_arrivee(&self) -> Option<tf_world::coords::BBox> {
+        let taille = match self.outil {
+            Outil::Coller => self.presse.taille?,
+            Outil::Composant => {
+                self.composants
+                    .projet
+                    .definition(self.composant_choisi?)?
+                    .contenu
+                    .taille
+            }
+            _ => return None,
+        };
+        let [sx, sy, sz] = match self.orientation {
+            Some(tf_blocks::Transfo::Rot90 | tf_blocks::Transfo::Rot270) => {
+                [taille[2], taille[1], taille[0]]
+            }
+            _ => taille,
+        };
+        let c = self.point_de_pose()?;
+        Some(tf_world::coords::BBox::new(
+            c,
+            BlockPos::new(
+                c.x + sx as i32 - 1,
+                c.y + sy as i32 - 1,
+                c.z + sz as i32 - 1,
+            ),
+        ))
     }
 
     /// **Le fil a publié le document des composants.** Une définition choisie
@@ -528,7 +902,7 @@ impl Etat {
             _ => None,
         };
         self.message = format!(
-            "orientation du composant : {}",
+            "orientation de la pose : {}",
             nom_orientation(self.orientation)
         );
     }

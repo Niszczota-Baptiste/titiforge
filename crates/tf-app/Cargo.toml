@@ -14,6 +14,7 @@ tf-assets.workspace = true
 tf-blocks.workspace = true
 tf-mesh.workspace = true
 tf-ops.workspace = true
+tf-formats.workspace = true
 tf-render.workspace = true
 tf-world.workspace = true
 rayon.workspace = true

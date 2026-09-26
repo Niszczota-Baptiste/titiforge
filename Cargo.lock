@@ -2065,6 +2065,7 @@ dependencies = [
  "tf-assets",
  "tf-bench",
  "tf-blocks",
+ "tf-formats",
  "tf-mesh",
  "tf-ops",
  "tf-render",

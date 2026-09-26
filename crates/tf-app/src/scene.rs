@@ -1919,6 +1919,19 @@ pub fn contours_composants(
     l
 }
 
+/// **Où la pose irait** — le presse-papiers ou le composant choisi, sur la
+/// case visée — en ambre : ni le vert de la sélection, ni le violet des
+/// instances. Poser par le coin sans le voir, c'était recommencer sa pose à
+/// chaque fois qu'on l'avait manquée d'un bloc.
+pub fn contour_d_arrivee(b: Option<tf_world::coords::BBox>) -> Lignes {
+    let mut l = Lignes::new();
+    if let Some(b) = b {
+        let (min, max) = b.coins();
+        l.contour(min, max, tf_render::rgba(255, 196, 64, 255));
+    }
+    l
+}
+
 /// Le contour de la sélection, en vert.
 pub fn contour_selection(sel: &tf_world::Selection) -> Lignes {
     let mut l = Lignes::new();

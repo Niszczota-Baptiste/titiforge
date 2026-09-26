@@ -1133,3 +1133,313 @@ fn l_instance_visee_vient_du_document_publie() {
     assert_eq!(e.composant_choisi, None);
     assert!(e.composants.projet.instances.is_empty());
 }
+
+// ── les échanges ────────────────────────────────────────────────────────────
+
+/// **Chaque format se range où son outil le cherche** : Litematica à la
+/// racine de l'installation, WorldEdit en solo sous `config/`, un bloc de
+/// structure DANS le monde.
+#[test]
+fn chaque_format_se_range_ou_son_outil_le_cherche() {
+    use std::path::Path;
+    use tf_app::etat::dossier_par_defaut;
+    use tf_formats::Format;
+    let i = Path::new("/jeu/.minefield_1_18");
+    let m = Path::new("/jeu/.minefield_1_18/saves/Ville");
+    assert_eq!(
+        dossier_par_defaut(Format::Litematic, Some(i), Some(m)),
+        Some(i.join("schematics"))
+    );
+    for f in [Format::SpongeV2, Format::SpongeV3] {
+        assert_eq!(
+            dossier_par_defaut(f, Some(i), Some(m)),
+            Some(i.join("config").join("worldedit").join("schematics"))
+        );
+    }
+    assert_eq!(
+        dossier_par_defaut(Format::Structure, Some(i), Some(m)),
+        Some(m.join("generated").join("minecraft").join("structures"))
+    );
+    // Un monde hors de toute installation : pas de dossier Litematica à
+    // deviner, mais le sien pour les structures.
+    assert_eq!(dossier_par_defaut(Format::Litematic, None, Some(m)), None);
+    assert!(dossier_par_defaut(Format::Structure, None, Some(m)).is_some());
+}
+
+/// **Un nom devient un nom de fichier sans rien perdre** de ce qu'un système
+/// de fichiers accepte — les accents, le hangeul — et sans rien garder de ce
+/// qu'il refuse.
+#[test]
+fn un_nom_devient_un_nom_de_fichier() {
+    use tf_app::etat::nom_de_fichier;
+    for (nom, attendu) in [
+        ("Vallée", "Vallée"),
+        ("한국어 건물", "한국어 건물"),
+        ("porte/nord", "porte_nord"),
+        ("a:b*c?d\"e<f>g|h\\i", "a_b_c_d_e_f_g_h_i"),
+        ("  tour  ", "tour"),
+        ("tour.", "tour"),
+        ("CON", "_CON"),
+        ("lpt1.txt", "_lpt1.txt"),
+        ("console", "console"),
+        // Quatre lettres commençant comme un port, sans chiffre : un nom.
+        ("COMX", "COMX"),
+        ("com9", "_com9"),
+        // Deux chiffres : un nom comme un autre pour Windows.
+        ("COM10", "COM10"),
+        // Les exposants sont des ports aussi, et Windows juge le nom avant
+        // le premier point, espaces de fin retirées.
+        ("COM¹", "_COM¹"),
+        ("lpt³.schem", "_lpt³.schem"),
+        ("con .txt", "_con .txt"),
+        ("CONIN$", "_CONIN$"),
+        ("", "export"),
+        ("...", "export"),
+    ] {
+        assert_eq!(nom_de_fichier(nom), attendu, "« {nom} »");
+    }
+}
+
+/// Les fichiers d'échange d'un dossier : les extensions des formats, plus le
+/// `.schematic` d'avant 1.13 — que la lecture refusera en le nommant —, du
+/// plus récent au plus ancien ; et pas un dossier qui en porte le nom.
+#[test]
+fn les_fichiers_d_echange_se_listent_du_plus_recent() {
+    use tf_app::etat::fichiers_d_echange;
+    let d = std::env::temp_dir().join(format!("titiforge-trouves-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("faux.litematic")).unwrap();
+    let ecrire = |nom: &str, age: u64| {
+        let f = d.join(nom);
+        std::fs::write(&f, b"x").unwrap();
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+        std::fs::File::options()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    ecrire("vieux.schem", 3000);
+    ecrire("neuf.litematic", 10);
+    ecrire("moyen.NBT", 500);
+    ecrire("mcedit.schematic", 2000);
+    ecrire("notes.txt", 1);
+    ecrire("sans-extension", 1);
+    let noms: Vec<String> = fichiers_d_echange(&[d.clone(), d.join("absent")])
+        .into_iter()
+        .map(|t| t.nom)
+        .collect();
+    assert_eq!(
+        noms,
+        [
+            "neuf.litematic",
+            "moyen.NBT",
+            "mcedit.schematic",
+            "vieux.schem"
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// **La liste d'import montre aussi le dossier d'export TAPÉ** — sinon ce
+/// qu'on vient d'y exporter n'apparaîtrait pas à côté — et un dossier qui est
+/// aussi un dossier par défaut n'y compte qu'une fois.
+#[test]
+fn la_liste_d_import_montre_aussi_le_dossier_tape() {
+    let d = std::env::temp_dir().join(format!("titiforge-tape-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let inst = d.join("inst");
+    let we = inst.join("config").join("worldedit").join("schematics");
+    let ailleurs = d.join("ailleurs");
+    std::fs::create_dir_all(&we).unwrap();
+    std::fs::create_dir_all(&ailleurs).unwrap();
+    std::fs::write(we.join("porte.schem"), b"x").unwrap();
+    std::fs::write(ailleurs.join("maison.litematic"), b"x").unwrap();
+    let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    e.situer_echanges(Some(inst.clone()), None, None, None);
+    e.choisir_format(tf_formats::Format::SpongeV2);
+    e.chercher_fichiers();
+    let noms = |e: &Etat| -> Vec<String> {
+        let mut v: Vec<String> = e.echanges.trouves.iter().map(|t| t.nom.clone()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(noms(&e), ["porte.schem"], "le défaut, une seule fois");
+    e.echanges.dossier = format!("  {}  ", ailleurs.display());
+    e.chercher_fichiers();
+    assert_eq!(noms(&e), ["maison.litematic", "porte.schem"]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// **Exporter demande une sélection et un dossier**, et emporte la version du
+/// MONDE — sinon celle du serveur que ce projet sert, 1.18.2.
+#[test]
+fn exporter_demande_une_selection_et_un_dossier() {
+    use tf_app::moteur::Commande;
+    use tf_formats::Format;
+    let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    let i = std::path::PathBuf::from("/jeu");
+    e.situer_echanges(
+        Some(i.clone()),
+        Some(i.join("saves").join("Ville")),
+        None,
+        Some("Ville / nord"),
+    );
+    assert_eq!(e.echanges.nom, "Ville _ nord");
+    assert_eq!(
+        e.echanges.dossier,
+        i.join("schematics").display().to_string()
+    );
+    assert!(e.demande_exporter(7).is_none(), "sans sélection");
+    e.selection.poser_coin1(BlockPos::new(0, 0, 0));
+    e.selection.poser_coin2(BlockPos::new(3, 2, 1));
+    match e.demande_exporter(7) {
+        Some(Commande::Exporter {
+            sel,
+            format,
+            chemin,
+            meta,
+        }) => {
+            assert_eq!(sel, e.selection.boite().unwrap());
+            assert_eq!(format, Format::Litematic);
+            assert_eq!(chemin, i.join("schematics").join("Ville _ nord.litematic"));
+            assert_eq!(meta.data_version, 2975);
+            assert_eq!(meta.date_ms, 7);
+        }
+        autre => panic!("{autre:?}"),
+    }
+    // Un autre format change le dossier ; la version du monde voyage.
+    e.echanges.version_monde = Some(3465);
+    e.choisir_format(Format::Structure);
+    match e.demande_exporter(0) {
+        Some(Commande::Exporter { chemin, meta, .. }) => {
+            assert!(chemin.ends_with("generated/minecraft/structures/Ville _ nord.nbt"));
+            assert_eq!(meta.data_version, 3465);
+        }
+        autre => panic!("{autre:?}"),
+    }
+    e.echanges.dossier = "  ".into();
+    assert!(e.demande_exporter(0).is_none(), "sans dossier");
+}
+
+/// **Coller** pose le presse-papiers au point de pose, dans l'orientation
+/// choisie — le contour d'arrivée montre la MÊME boîte, tournée — et un
+/// presse-papiers vide se dit au lieu de ne rien faire.
+#[test]
+fn coller_pose_le_presse_papiers_et_son_contour_le_montre() {
+    use tf_app::etat::Outil;
+    use tf_app::moteur::{Commande, PressePapiers};
+    use tf_blocks::Transfo;
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    e.outil = Outil::Coller;
+    assert!(e.coller_ici().is_none());
+    assert!(
+        e.message.contains("presse-papiers est vide"),
+        "{}",
+        e.message
+    );
+    assert_eq!(e.contour_d_arrivee(), None);
+
+    // Le fil publie un presse-papiers : l'outil Coller passe en main.
+    e.mode = tf_render::controles::Mode::Edition;
+    e.outil = Outil::Poser;
+    e.suivre_presse(PressePapiers {
+        taille: Some([4, 2, 1]),
+        source: "porte.litematic".into(),
+        version: 1,
+        ..Default::default()
+    });
+    assert_eq!(e.outil, Outil::Coller);
+    assert_eq!(e.mode, tf_render::controles::Mode::Conception);
+    // Un presse-papiers VIDÉ ne met rien en main.
+    e.outil = Outil::Poser;
+    e.suivre_presse(PressePapiers {
+        taille: None,
+        version: 7,
+        ..Default::default()
+    });
+    assert_eq!(e.outil, Outil::Poser, "rien à coller");
+    e.suivre_presse(PressePapiers {
+        taille: Some([4, 2, 1]),
+        source: "porte.litematic".into(),
+        version: 1,
+        ..Default::default()
+    });
+    // La même publication ne le remet pas en main une seconde fois.
+    e.outil = Outil::Poser;
+    e.suivre_presse(PressePapiers {
+        taille: Some([4, 2, 1]),
+        version: 1,
+        ..Default::default()
+    });
+    assert_eq!(e.outil, Outil::Poser);
+    e.outil = Outil::Coller;
+
+    let coin = e.point_de_pose().unwrap();
+    e.echanges.avec_air = true;
+    assert!(
+        matches!(
+            e.coller_ici(),
+            Some(Commande::Coller {
+                coin: c,
+                transfo: None,
+                avec_air: true
+            }) if c == coin
+        ),
+        "au point de pose, tel quel, avec l'air"
+    );
+    let b = e.contour_d_arrivee().unwrap();
+    assert_eq!((b.min, b.size()), (coin, (4, 2, 1)));
+    // Un quart de tour échange largeur et profondeur.
+    e.tourner_le_composant();
+    let b = e.contour_d_arrivee().unwrap();
+    assert_eq!(b.size(), (1, 2, 4));
+    assert!(matches!(
+        e.coller_ici(),
+        Some(Commande::Coller {
+            transfo: Some(Transfo::Rot90),
+            ..
+        })
+    ));
+    // Changer de monde vide le presse-papiers : il vivait dans l'ancien
+    // moteur.
+    e.recadrer([0.0; 3], [8.0; 3], 1.0);
+    assert_eq!(e.presse.taille, None);
+}
+
+/// Le contour d'arrivée de l'outil Composant est la boîte du composant
+/// CHOISI.
+#[test]
+fn le_contour_d_arrivee_d_un_composant_est_sa_boite() {
+    use tf_app::etat::Outil;
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let case = e.reticule.case.unwrap();
+    e.suivre_composants(document(case));
+    e.outil = Outil::Composant;
+    assert_eq!(e.contour_d_arrivee(), None, "aucun composant choisi");
+    e.composant_choisi = Some(1);
+    let b = e.contour_d_arrivee().unwrap();
+    assert_eq!(b.min, e.point_de_pose().unwrap());
+    assert_eq!(b.size(), (3, 1, 1));
+}
+
+/// Un fichier d'un Minecraft plus RÉCENT que le monde se signale.
+#[test]
+fn un_fichier_plus_recent_que_le_monde_se_signale() {
+    use tf_app::moteur::PressePapiers;
+    let mut e = Etat::cadre([0.0; 3], [8.0; 3], 1.0);
+    e.suivre_presse(PressePapiers {
+        taille: Some([1, 1, 1]),
+        data_version: Some(3465),
+        version: 1,
+        ..Default::default()
+    });
+    assert_eq!(e.presse_plus_recente(), None, "monde de version inconnue");
+    e.echanges.version_monde = Some(2975);
+    assert_eq!(e.presse_plus_recente(), Some((3465, 2975)));
+    e.echanges.version_monde = Some(3465);
+    assert_eq!(e.presse_plus_recente(), None);
+}

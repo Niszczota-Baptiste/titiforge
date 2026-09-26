@@ -213,6 +213,17 @@ impl ApplicationHandler for Coque {
                 }
                 g.etat.accueil = self.explorer();
                 g.etat.accueil.ouvert = self.depart.accueil;
+                // Le monde du lancement a, lui aussi, ses dossiers d'échange.
+                if self.ouvert.editable() {
+                    let chemin = std::path::PathBuf::from(&self.ouvert.nom);
+                    let niveau = tf_world::niveau::lire_fichier(&chemin);
+                    g.etat.situer_echanges(
+                        tf_app::accueil::installation_de(&chemin),
+                        Some(chemin),
+                        niveau.as_ref().and_then(|n| n.data_version),
+                        niveau.as_ref().and_then(|n| n.nom.as_deref()),
+                    );
+                }
                 self.accueil_vu = self.depart.accueil;
                 f.set_title(&titre(&self.ouvert));
                 self.gpu = Some(g);
@@ -235,12 +246,18 @@ impl ApplicationHandler for Coque {
 
         match ev {
             WindowEvent::CloseRequested => evb.exit(),
-            // **Glisser le dossier d'une save sur la fenêtre l'ouvre.** Ce qui
-            // n'en est pas une ouvre l'accueil, pour que l'erreur se lise.
+            // **Glisser le dossier d'une save sur la fenêtre l'ouvre** ; un
+            // FICHIER est un fichier d'échange à importer — c'est sa lecture,
+            // par ses octets, qui dira s'il en est un. Ce qui n'est ni l'un ni
+            // l'autre ouvre l'accueil, pour que l'erreur se lise.
             WindowEvent::DroppedFile(p) => {
-                g.etat.accueil.choisir(p);
-                if g.etat.accueil.demande.is_none() {
-                    g.etat.accueil.ouvert = true;
+                if p.is_file() && self.moteur.is_some() {
+                    g.etat.demande = Some(g.etat.demande_importer(&p));
+                } else {
+                    g.etat.accueil.choisir(p);
+                    if g.etat.accueil.demande.is_none() {
+                        g.etat.accueil.ouvert = true;
+                    }
                 }
             }
             WindowEvent::Resized(t) => {
@@ -351,8 +368,12 @@ impl ApplicationHandler for Coque {
                                 (Outil::Composant, MouseButton::Left) => {
                                     g.etat.demande = g.etat.poser_un_composant();
                                 }
-                                (Outil::Composant, MouseButton::Right) => {
+                                (Outil::Composant, MouseButton::Right)
+                                | (Outil::Coller, MouseButton::Right) => {
                                     g.etat.tourner_le_composant();
+                                }
+                                (Outil::Coller, MouseButton::Left) => {
+                                    g.etat.demande = g.etat.coller_ici();
                                 }
                                 _ => {}
                             }
@@ -420,6 +441,7 @@ impl ApplicationHandler for Coque {
                 // recopié seulement quand sa version a bougé.
                 if let Some(m) = &self.moteur {
                     g.etat.suivre_composants(m.composants());
+                    g.etat.suivre_presse(m.presse_papiers());
                 }
                 g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
                 g.etat.editable = self.ouvert.editable();
@@ -586,14 +608,21 @@ impl Coque {
             g.etat.recadrer(m.min, m.max, aspect);
             // Le pack a pu changer avec l'installation ; les récents restent.
             g.etat.nuancier.repartir(self.ouvert.assets.noms());
+            let nom_du_jeu = niveau.as_ref().and_then(|n| n.nom.clone());
             g.etat.message = reprise.texte().unwrap_or_else(|| {
                 format!(
                     "monde ouvert : {}",
-                    niveau.and_then(|n| n.nom).unwrap_or_else(|| nom.clone())
+                    nom_du_jeu.clone().unwrap_or_else(|| nom.clone())
                 )
             });
             g.etat.accueil.ouvert = false;
             g.etat.accueil.erreur = None;
+            g.etat.situer_echanges(
+                tf_app::accueil::installation_de(&chemin),
+                Some(chemin.clone()),
+                niveau.as_ref().and_then(|n| n.data_version),
+                nom_du_jeu.as_deref(),
+            );
             regarnir(g, &mut self.ouvert);
         }
     }
@@ -663,6 +692,11 @@ fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> Vec<tf_world::BBox> {
     let mut bouge = Vec::new();
     for r in moteur.recevoir() {
         e.message = r.texte();
+        // Un export vient peut-être d'écrire dans un dossier que la liste
+        // d'import montre : elle se relit, pour qu'il y soit.
+        if matches!(r, tf_app::moteur::Reponse::Note(_)) {
+            e.chercher_fichiers();
+        }
         // **Des zones, donc des blocs ont changé.** C'est le seul critère :
         // une opération qui n'a rien écrit n'en rend pas, et remailler pour
         // rien coûterait la zone entière à chaque clic.
@@ -869,6 +903,9 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
         scene::contours_composants(&g.etat.composants.projet, g.etat.composant_choisi, visee)
             .sommets,
     );
+    lignes
+        .sommets
+        .extend(scene::contour_d_arrivee(g.etat.contour_d_arrivee()).sommets);
     g.scene.poser_lignes(&lignes);
 
     g.scene.dessiner_sur(

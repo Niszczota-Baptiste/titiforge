@@ -200,6 +200,9 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
         }
     }
 
+    // ── exporter, importer
+    echanges(ui, e);
+
     // ── le quadrillage
     ui.add_space(10.0);
     ui.separator();
@@ -275,6 +278,10 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
     });
     if e.outil == Outil::Composant {
         composants(ui, e);
+        return;
+    }
+    if e.outil == Outil::Coller {
+        coller(ui, e);
         return;
     }
     if e.outil != Outil::Tirer {
@@ -481,6 +488,209 @@ fn composants(ui: &mut Ui, e: &mut Etat) {
         .small()
         .color(GRIS),
     );
+}
+
+/// **Les échanges** : exporter la sélection dans un fichier que WorldEdit,
+/// Litematica ou un bloc de structure liront ; importer un fichier dans le
+/// presse-papiers ; copier la sélection.
+///
+/// Rien n'est décidé ici : les boutons envoient ce que l'état construit, et
+/// le dossier proposé vient de `dossier_par_defaut`.
+fn echanges(ui: &mut Ui, e: &mut Etat) {
+    use tf_formats::Format;
+    ui.add_space(10.0);
+    ui.separator();
+    ui.label(RichText::new("ÉCHANGES").strong().color(GRIS));
+    let actif = e.editable && !e.occupe;
+
+    // ── exporter
+    ui.horizontal_wrapped(|ui| {
+        for f in Format::TOUS {
+            if ui
+                .selectable_label(e.echanges.format == f, f.nom())
+                .on_hover_text(f.pour())
+                .clicked()
+            {
+                e.choisir_format(f);
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("nom");
+        ui.add(
+            egui::TextEdit::singleline(&mut e.echanges.nom)
+                .desired_width(170.0)
+                .hint_text("porte nord"),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("dans");
+        ui.add(
+            egui::TextEdit::singleline(&mut e.echanges.dossier)
+                .desired_width(230.0)
+                .hint_text("un dossier"),
+        );
+    });
+    match e.chemin_d_export() {
+        Some(c) => {
+            ui.label(RichText::new(c.display().to_string()).small().color(GRIS));
+        }
+        None => {
+            ui.label(
+                RichText::new("aucun dossier : ouvrir un monde d'une installation, ou en taper un")
+                    .small()
+                    .color(GRIS),
+            );
+        }
+    }
+    let maintenant = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
+    let exporter = e.demande_exporter(maintenant);
+    let copier = e.demande_copier();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                actif && exporter.is_some(),
+                egui::Button::new("Exporter la sélection"),
+            )
+            .on_hover_text(
+                "Ce que la copie de travail porte, retouches comprises. Un fichier \
+                 du même nom n'est jamais écrasé : le nouveau prend « (2) ».",
+            )
+            .clicked()
+        {
+            e.demande = exporter;
+        }
+        if ui
+            .add_enabled(actif && copier.is_some(), egui::Button::new("Copier"))
+            .on_hover_text("La sélection devient le presse-papiers, que l'outil Coller pose.")
+            .clicked()
+        {
+            e.demande = copier;
+        }
+    });
+    if e.selection.boite().is_none() {
+        ui.label(
+            RichText::new("exporter et copier demandent une sélection")
+                .small()
+                .color(GRIS),
+        );
+    }
+
+    // ── importer
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("importer").color(GRIS));
+        if ui
+            .small_button("relire")
+            .on_hover_text("Relit les dossiers de Litematica, de WorldEdit et du monde.")
+            .clicked()
+        {
+            e.chercher_fichiers();
+        }
+    });
+    let mut choisi = None;
+    egui::ScrollArea::vertical()
+        .id_salt("fichiers-d-echange")
+        .max_height(120.0)
+        .show(ui, |ui| {
+            if e.echanges.trouves.is_empty() {
+                ui.label(
+                    RichText::new("aucun fichier dans les dossiers habituels")
+                        .small()
+                        .color(GRIS),
+                );
+            }
+            for t in &e.echanges.trouves {
+                if ui
+                    .add_enabled(
+                        actif,
+                        egui::Button::new(format!("{} — {} Ko", t.nom, t.octets.div_ceil(1024)))
+                            .frame(false),
+                    )
+                    .on_hover_text(t.chemin.display().to_string())
+                    .clicked()
+                {
+                    choisi = Some(t.chemin.clone());
+                }
+            }
+        });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut e.echanges.a_importer)
+                .desired_width(200.0)
+                .hint_text("chemin d'un .litematic, .schem, .nbt"),
+        );
+        let tape = e.echanges.a_importer.trim().to_string();
+        if ui
+            .add_enabled(actif && !tape.is_empty(), egui::Button::new("Importer"))
+            .clicked()
+        {
+            choisi = Some(tape.into());
+        }
+    });
+    ui.label(
+        RichText::new("ou glisser le fichier sur la fenêtre")
+            .small()
+            .color(GRIS),
+    );
+    if let Some(c) = choisi {
+        e.demande = Some(e.demande_importer(&c));
+    }
+}
+
+/// **La fiche de l'outil Coller** : ce que porte le presse-papiers, ce que sa
+/// lecture n'a pas su porter, et comment il se pose.
+fn coller(ui: &mut Ui, e: &mut Etat) {
+    use crate::etat::{nom_orientation, ORIENTATIONS};
+    ui.add_space(6.0);
+    ui.label(RichText::new("PRESSE-PAPIERS").strong().color(GRIS));
+    match e.presse.taille {
+        None => {
+            ui.label(
+                RichText::new(
+                    "vide — importer un fichier ou copier la sélection (ÉCHANGES, plus haut)",
+                )
+                .color(GRIS),
+            );
+            return;
+        }
+        Some([x, y, z]) => {
+            ui.label(format!("« {} » — {x} × {y} × {z}", e.presse.source));
+        }
+    }
+    if let Some((f, m)) = e.presse_plus_recente() {
+        ui.colored_label(
+            ROUGE,
+            format!(
+                "fichier d'un Minecraft plus récent que ce monde (DataVersion {f} > {m}) : \
+                 des blocs peuvent ne pas y exister — le jeu les remplacerait par de l'air"
+            ),
+        );
+    }
+    for r in &e.presse.remarques {
+        ui.label(RichText::new(r).small().color(ORANGE));
+    }
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "la pose met le coin de plus petites coordonnées sur la case visée — le \
+             contour ambre montre où",
+        )
+        .small()
+        .color(GRIS),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for t in ORIENTATIONS {
+            ui.selectable_value(&mut e.orientation, t, nom_orientation(t));
+        }
+    });
+    ui.checkbox(&mut e.echanges.avec_air, "coller aussi l'air")
+        .on_hover_text(
+            "Non par défaut, comme WorldEdit : on colle un bâtiment sur un terrain. \
+             Oui pour reposer un extrait à l'identique, trous compris.",
+        );
 }
 
 /// L'identifiant du champ « bloc en main » : un seul dans l'interface, et

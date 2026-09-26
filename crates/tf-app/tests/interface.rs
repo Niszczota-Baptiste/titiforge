@@ -380,3 +380,43 @@ fn la_fiche_des_composants_se_dessine() {
         assert!(e.demande.is_none(), "dessiner n'envoie rien tout seul");
     }
 }
+
+/// **Les échanges et la fiche de l'outil Coller se dessinent** — vide, puis
+/// avec un presse-papiers dont la lecture a des remarques, venu d'un
+/// Minecraft plus récent que le monde, et une liste de fichiers trouvés.
+#[test]
+fn les_echanges_et_la_fiche_coller_se_dessinent() {
+    use tf_app::etat::{Etat, Outil, Trouve};
+    use tf_app::moteur::PressePapiers;
+    for plein in [false, true] {
+        let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+        e.mode = tf_render::controles::Mode::Conception;
+        e.outil = Outil::Coller;
+        e.editable = true;
+        e.selection.poser_coin1(BlockPos::new(0, 0, 0));
+        e.selection.poser_coin2(BlockPos::new(4, 4, 4));
+        let i = std::path::PathBuf::from("/jeu");
+        e.situer_echanges(Some(i.clone()), None, Some(2975), Some("Ville"));
+        e.echanges.trouves = vec![Trouve {
+            chemin: i.join("schematics").join("porte.litematic"),
+            nom: "porte.litematic".into(),
+            octets: 12_345,
+        }];
+        if plein {
+            e.suivre_presse(PressePapiers {
+                taille: Some([5, 5, 5]),
+                ancre: [0, 0, 0],
+                source: "porte.litematic".into(),
+                data_version: Some(3465),
+                remarques: vec!["3 régions fusionnées en une boîte".into()],
+                version: 1,
+            });
+        }
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            tf_app::interface::dessiner(ctx, &mut e);
+        });
+        assert!(e.demande.is_none(), "dessiner n'envoie rien tout seul");
+        assert!(e.presse_plus_recente().is_some() == plein);
+    }
+}

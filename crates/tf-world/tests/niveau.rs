@@ -31,6 +31,7 @@ fn level_dat(joueur: Option<([f64; 3], &str)>, gzip: bool) -> Vec<u8> {
     w.field(tag::INT, "SpawnX").i32_payload(-120);
     w.field(tag::INT, "SpawnY").i32_payload(64);
     w.field(tag::INT, "SpawnZ").i32_payload(300);
+    w.field(tag::INT, "DataVersion").i32_payload(2975);
     if let Some((pos, dim)) = joueur {
         w.field(tag::COMPOUND, "Player");
         w.field(tag::LIST, "Inventory")
@@ -64,6 +65,11 @@ fn le_nom_l_apparition_et_le_joueur_se_lisent_a_travers_ce_qu_on_saute() {
     .unwrap();
     assert_eq!(n.nom.as_deref(), Some("Minefield — ville"));
     assert_eq!(n.apparition, Some([-120, 64, 300]));
+    assert_eq!(
+        n.data_version,
+        Some(2975),
+        "la version du jeu qui l'a écrit"
+    );
     assert_eq!(n.joueur, Some([4012.7, 70.0, -3999.2]));
     assert_eq!(
         n.ou_regarder(),

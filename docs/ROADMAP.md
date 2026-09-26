@@ -604,13 +604,17 @@ de 8 ms — des agrandissements de tampon que llvmpipe copie sur le processeur.
 > **Sortie.** Monde de 800 régions, vol continu, RAM bornée au budget déclaré,
 > aucune pause > 8 ms sur le fil principal.
 
-## Phase 6 — Formats d'échange · ✅ **moteur fait**
+## Phase 6 — Formats d'échange · ✅ **moteur et coque faits**
 
 `tf-formats` : `.schem` (Sponge v2 et v3, v1 en lecture) ✅, `.litematic`
-(v4–v7, packing **à chevauchement**) ✅, `.nbt` de structure ✅. Reste : le
-`.schematic` d'avant 1.13 (il faudrait la table d'aplatissement 1.12 → 1.13),
-les boutons de la coque, et un vrai fichier de chaque outil passé à
-`--example lire`.
+(v4–v7, packing **à chevauchement**) ✅, `.nbt` de structure ✅. Dans la
+coque ✅ : exporter la sélection là où l'outil qui la lira la cherche, sans
+jamais écraser un fichier ; importer — les dossiers habituels, un chemin
+collé, un fichier glissé sur la fenêtre ; et l'outil « Coller », avec le
+contour de ce qu'il va poser. Reste : le `.schematic` d'avant 1.13 (il
+faudrait la table d'aplatissement 1.12 → 1.13), un vrai fichier de chaque
+outil passé à `--example lire`, et un presse-papiers qui survive à un
+changement de monde (aujourd'hui, on passe par un fichier).
 
 C'est ce qui manque pour la parité MCEdit, et c'est ce qui permet d'échanger
 un build avec quelqu'un qui n'a pas titiforge.
