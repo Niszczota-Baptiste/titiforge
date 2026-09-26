@@ -11,6 +11,8 @@
 //! - `nuancier` : choisir un bloc sans connaître son identifiant — le visé,
 //!   les récents, ce que le monde porte, ce que le pack déclare. Pur.
 //! - `interface` : le dessin egui. Il LIT l'état, il ne décide rien.
+//! - `regles` : les règles de rotation des états, dérivées en fond et
+//!   données au fil moteur.
 //! - `scene` : le montage du monde vers l'arène GPU.
 //! - `chargeur` : le fil qui lit les régions, une réponse par cellule.
 //! - `pilote` : la boucle caméra → demande → fil → scène. Dans la
@@ -26,6 +28,7 @@ pub mod interface;
 pub mod moteur;
 pub mod nuancier;
 pub mod pilote;
+pub mod regles;
 pub mod scene;
 
 pub use etat::{Etat, Quadrillage, ResumeSelection, SousLeReticule};

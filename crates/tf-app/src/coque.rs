@@ -80,8 +80,16 @@ pub fn lancer(
         rayon,
         HAUTEUR,
     );
+    // **Les règles de rotation, dérivées dans un fil à elles** pendant que la
+    // fenêtre s'ouvre : 629 ms sur le codex, qu'aucune image ne paie. Le
+    // moteur ne les attend que le jour où l'on tourne un extrait.
+    let regles = ouvert.assets.regles_en_fond();
+    if let Some(m) = &moteur {
+        m.poser_regles(regles.clone());
+    }
     let mut app = Coque {
         ouvert,
+        regles,
         moteur,
         depart,
         accueil_vu: false,
@@ -129,6 +137,9 @@ struct Gpu {
 
 struct Coque {
     ouvert: scene::Ouvert,
+    /// Les règles de rotation des assets en service. Rederivées seulement
+    /// quand un monde d'une autre installation change les assets.
+    regles: tf_app::regles::Regles,
     /// `None` pour la fixture : elle n'a pas de save derrière elle.
     ///
     /// **Déclaré APRÈS `ouvert`, et c'est voulu** : les champs tombent dans
@@ -519,6 +530,8 @@ impl Coque {
         }
         if let Some(r) = racine_assets {
             self.depart.assets = r;
+            // D'autres assets, d'autres blocs : d'autres règles.
+            self.regles = self.ouvert.assets.regles_en_fond();
         }
         // L'ancien s'arrête MAINTENANT — sa séance se ferme dans son fil.
         if let Some(mut m) = self.moteur.take() {
@@ -533,13 +546,15 @@ impl Coque {
             HAUTEUR,
         );
         let st = seance.staging();
-        self.moteur = Some(Moteur::lancer_en_seance(
+        let moteur = Moteur::lancer_en_seance(
             st,
             tf_world::Dimension::Overworld,
             journal,
             Some(chemin.clone()),
             Box::new(seance),
-        ));
+        );
+        moteur.poser_regles(self.regles.clone());
+        self.moteur = Some(moteur);
         self.remailler = None;
         if let Some(f) = self
             .depart

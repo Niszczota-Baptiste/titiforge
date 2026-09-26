@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **989**, zéro échec |
+| Tests | **995**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-989 tests, répartis par ce qu'ils PROUVENT :
+995 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -83,6 +83,7 @@ cargo test --workspace
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
 | `tf-app` interface | 10 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; et, en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin |
+| `tf-app` regles | 6 | qu'une rotation lancée DEPUIS LA COQUE tourne aussi les états — un pack écrit à la volée, des règles dérivées de lui, le fil moteur, la copie de travail relue ; que sans règles la case bouge, l'orientation non, et que la réponse le DIT ; qu'un bloc que le pack ne sait pas tourner se signale autrement ; qu'un `//set` n'attend pas une dérivation en cours quand une rotation, si ; et qu'une dérivation MORTE vaut « aucune règle » au lieu d'un moteur qui attend pour toujours — chaque scénario dans un fil témoin à attente bornée |
 | `tf-app` nuancier | 9 | le SÉLECTEUR DE BLOCS : le visé, puis les récents, puis le monde — pas le pack entier — quand rien n'est tapé ; la correspondance classe avant l'origine, et chaque mot d'une recherche compte ; les états que le JEU a écrits passent avant le nom nu ; la syntaxe du jeu tapée à la main trouve ses états ; un ordre TOTAL, le même quel que soit l'ordre d'entrée ; des récents canoniques, sans air ni doublon, bornés, qui survivent au fichier ; et un bloc inconnu du pack ET du monde qui se signale |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 23 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter ; et qu'un bloc TAPÉ — `stone`, `Minecraft:Stone`, `oak_stairs[half=top,facing=east]` — arrive au moteur sous la clé que le décodeur rend pour le même bloc, pour CHAQUE paramètre de bloc du catalogue et chaque entrée de mélange, qu'un bloc illisible est refusé en nommant l'opération et le paramètre, et qu'un mélange tapé ne se coupe pas entre crochets |
@@ -611,6 +612,32 @@ L'autre retirait la borne des récents à l'écriture : la lecture plafonne à
 dix, ce qui cachait un fichier d'une ligne de trop — et le dernier geste du
 test, re-noter un monde déjà présent, le ramenait justement à dix. Le compte
 se vérifie maintenant juste après la boucle.
+
+### Une rotation dans la coque tourne aussi les états
+
+La coque passait `regle: None` au moteur. Un « Copier vers » tourné d'un
+quart de tour DANS LA FENÊTRE déplaçait donc les cases et laissait chaque
+escalier, chaque porte, chaque échelle dans son orientation d'origine — sans
+un mot, alors que la ligne de commande, elle, le disait. C'est le build « à
+moitié tourné » que `presse.rs` interdit de taire, et il est passé parce que
+le moteur et la ligne de commande étaient testés, pas la jonction de la coque.
+
+Les règles se dérivent du pack dans un fil à elles dès l'ouverture — 629 ms sur
+le codex du serveur (`cargo run --release -p tf-blocks --example deriver`),
+qu'aucune image ne paie — et le moteur ne les ATTEND que la première fois
+qu'une opération lui demande de tourner un état. Un monde d'une autre
+installation apporte d'autres assets, donc d'autres règles, sans relancer le
+moteur. La réponse dit maintenant les deux cas : aucune règle, ou des états que
+le pack ne sait pas tourner (les `multipart` — murs, clôtures, vitres — n'ont
+pas de règles dérivées, voir § 5).
+
+7 mutations : 6 tuées, 1 équivalente — un défaut « en attente » ne peut pas
+bloquer, puisqu'une livraison abandonnée vaut « aucune règle ». **La première
+exécution a PENDU** : la mutation qui laisse une livraison lâchée muette
+faisait attendre le moteur pour toujours, et le test ne rougissait pas — il
+pendait dans le `Drop` du moteur, qui joint son fil. Chaque scénario tourne
+maintenant dans un fil témoin à attente bornée, et la même faute sort en une
+phrase.
 
 ### Choisir un bloc sans connaître son identifiant
 
@@ -1142,6 +1169,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Le sélecteur ne cherche qu'en identifiants** | « oak st » trouve l'escalier de chêne, « escalier chêne » ne trouve rien. Les noms français sont dans `fr_fr.json`, que le launcher range parmi ses objets hachés (`assets/indexes/*.json`) et non dans le `.jar` ; ceux des `minefield:*` sont dans le pack du serveur |
 | **Un état PARTIEL tapé se complète chez le jeu, pas ici** | `oak_stairs[facing=east]` part tel quel : le jeu remplit les propriétés manquantes par leurs défauts au chargement, mais notre rendu prend la PREMIÈRE variante déclarée pour ce qu'il ne sait pas, et la palette tient une clé différente de l'état complet que le jeu écrit — un `//replace` de l'état complet ne le verrait pas. Les défauts sont dans le code du jeu, pas dans le pack. Le sélecteur propose donc d'abord les états COMPLETS que le monde porte |
 | **`//replace` ne vise qu'un état exact** | WorldEdit remplace tous les états d'un bloc quand on n'en donne que le nom (`//replace oak_stairs …`) ; ici le masque est un état. Remplacer par NOM en gardant les propriétés — chêne → sapin sans perdre une orientation — reste à écrire |
+| **La coque donne-t-elle bien ses règles au moteur ?** | le moteur, les règles et leur dérivation en fond sont testés ; l'appel qui les relie dans la fenêtre (`coque.rs`, au lancement et au changement de monde) ne l'est pas — il vit derrière winit |
 | **La garde du clavier n'a pas de test** | elle vit dans le gestionnaire d'événements de la fenêtre (`coque.rs`), derrière winit |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 

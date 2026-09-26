@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (989 tests aujourd’hui)
+cargo test            # tous les crates (995 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -412,6 +412,9 @@ crates/
                  récents, un chemin collé ou un dossier glissé ; le travail
                  pas encore écrit SIGNALÉ ; un monde s'ouvre là où l'on joue
                  (`level.dat`) et se change dans la même fenêtre
+               · RÈGLES DE ROTATION ✅ (`regles.rs`) : dérivées du pack en
+                 fond, données au fil moteur, attendues seulement par ce
+                 qui tourne un état
                · SÉLECTEUR DE BLOCS ✅ (`nuancier.rs`) : chaque champ de
                  bloc propose le visé, les récents, ce que le monde porte
                  sous l'état EXACT, puis le pack ; pipette (Alt + clic)
@@ -2155,6 +2158,19 @@ propres à ce dépôt.
   clavier ; les relâchements passent toujours — sinon une touche de vol
   enfoncée avant le focus resterait tenue — et les modificateurs se suivent
   dans tous les cas.
+- **La coque tournait les cases sans tourner les états.** Elle passait
+  `regle: None` au moteur : un « Copier vers » tourné dans la fenêtre laissait
+  chaque escalier dans son orientation d'origine, sans un mot — pendant que la
+  ligne de commande, elle, le disait. Le moteur et la ligne de commande étaient
+  testés ; la jonction de la COQUE non. Quatrième forme de « déclaré, branché,
+  testé — et inatteignable » : les règles existaient, dérivées et vérifiées, et
+  l'hôte qui compte ne les donnait pas.
+- **Un test qui pend, deuxième fois — et dans un `Drop`.** Un moteur qui
+  attend des règles qui ne viendront pas ne rend pas d'erreur : il attend. Le
+  test ne rougissait pas, il pendait, au plus tard quand le `Drop` du moteur
+  joignait son fil. Tout scénario où un fil peut attendre tourne dans un fil
+  TÉMOIN à attente bornée — et une livraison abandonnée vaut « aucune règle »
+  (`Livraison::drop`), pour que la faute ne soit jamais un blocage.
 - **`gained_focus` ne voit pas un focus donné avant l'image.** egui compare au
   focus de l'image PRÉCÉDENTE : un focus posé d'avance (la capture, un
   raccourci) ne « s'acquiert » jamais, et la liste de propositions ne

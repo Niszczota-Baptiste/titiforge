@@ -184,6 +184,11 @@ pub struct Moteur {
     en_vol: usize,
     vivant: bool,
     fil: Option<std::thread::JoinHandle<()>>,
+    /// Les règles de rotation des états, partagées avec le fil. Une case et
+    /// non un paramètre de lancement : un monde d'une autre installation
+    /// apporte ses propres assets, donc ses propres règles, sans relancer le
+    /// moteur.
+    regles: std::sync::Arc<std::sync::Mutex<crate::regles::Regles>>,
 }
 
 impl Moteur {
@@ -238,6 +243,8 @@ impl Moteur {
     {
         let (vers, commandes) = channel::<Commande>();
         let (reponses, depuis) = channel::<Reponse>();
+        let regles = std::sync::Arc::new(std::sync::Mutex::new(crate::regles::Regles::absentes()));
+        let regles_du_fil = regles.clone();
         let fil = std::thread::Builder::new()
             .name("moteur".into())
             .spawn(move || {
@@ -248,6 +255,7 @@ impl Moteur {
                     interner: Interner::new(),
                     monde,
                     carnet,
+                    regles: regles_du_fil,
                 };
                 while let Ok(cmd) = commandes.recv() {
                     if matches!(cmd, Commande::Arreter) {
@@ -271,6 +279,19 @@ impl Moteur {
             en_vol: 0,
             vivant: true,
             fil: Some(fil),
+            regles,
+        }
+    }
+
+    /// **Donne au fil les règles de rotation des états.** Sans elles, une
+    /// opération qui tourne un extrait déplace les cases et laisse chaque
+    /// orientation telle quelle — et la réponse le dit.
+    ///
+    /// Elles peuvent être encore EN COURS de dérivation : le fil ne les attend
+    /// que le jour où une opération en demande une.
+    pub fn poser_regles(&self, r: crate::regles::Regles) {
+        if let Ok(mut g) = self.regles.lock() {
+            *g = r;
         }
     }
 
@@ -360,6 +381,7 @@ struct Chantier<S: RegionSource, O: RegionStore> {
     /// La séance, quand il y en a une. `None` : rien ne survit à la
     /// fermeture — une copie jetable, ou un test.
     carnet: Option<Box<dyn Carnet>>,
+    regles: std::sync::Arc<std::sync::Mutex<crate::regles::Regles>>,
 }
 
 impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
@@ -431,12 +453,21 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             Ok(t) => t,
             Err(e) => return Reponse::Echec(e.to_string()),
         };
+        // **La règle est demandée, pas supposée.** Elle n'attend la
+        // dérivation qu'au premier état qu'une opération veut tourner : un
+        // `//set` lancé pendant qu'elle tourne encore ne l'attend pas.
+        let regles = self.regles.lock().map(|r| r.clone()).unwrap_or_default();
+        let demandee = std::cell::Cell::new(false);
+        let regle = |cle: &str, t: tf_blocks::Transfo| {
+            demandee.set(true);
+            regles.table().and_then(|table| table.transformer(cle, t))
+        };
         let opts = Options {
             compter,
             seed,
             avec_air: false,
             forme,
-            regle: None,
+            regle: Some(&regle),
         };
         let cr = match executer(
             &travail,
@@ -484,6 +515,21 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         }
         if !cr.approches.is_empty() {
             blocs.push_str(&format!(" · {} entité(s) approchée(s)", cr.approches.len()));
+        }
+        // **Un build à moitié tourné se DIT.** Sans règles, aucune
+        // orientation n'a bougé ; avec, celles que le pack ne sait pas tourner
+        // sont restées telles quelles. Les deux se lisent pareil à l'écran.
+        if demandee.get() && regles.table().is_none() {
+            blocs.push_str(
+                " · orientations NON réécrites : les règles de rotation du pack \
+                 manquent — les escaliers, portes et échelles regardent toujours \
+                 du même côté",
+            );
+        } else if !cr.intacts.is_empty() {
+            blocs.push_str(&format!(
+                " · {} état(s) que le pack ne sait pas tourner, laissés tels quels",
+                cr.intacts.len()
+            ));
         }
         blocs.push_str(&note);
         Reponse::Fait {

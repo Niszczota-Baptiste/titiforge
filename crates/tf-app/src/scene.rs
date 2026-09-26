@@ -261,7 +261,9 @@ impl Monde {
 /// coûte des secondes. Une opération d'édition remaille la zone ; elle ne doit
 /// pas relire deux mille modèles au passage.
 pub struct Assets {
-    cat: tf_assets::Catalogue,
+    /// Partagé : les règles de rotation s'en dérivent dans un fil à elles
+    /// (`regles_en_fond`), pendant que la scène s'en sert.
+    cat: std::sync::Arc<tf_assets::Catalogue>,
     src: tf_assets::Pile,
     disposition: tf_assets::catalogue::Disposition,
     translucides: std::collections::BTreeSet<String>,
@@ -270,6 +272,13 @@ pub struct Assets {
 }
 
 impl Assets {
+    /// **Les règles de rotation de ce pack, dérivées dans un fil à elles** —
+    /// 629 ms sur le codex du serveur, qu'aucune image ne doit payer. Le
+    /// moteur ne les attend que quand une opération tourne un extrait.
+    pub fn regles_en_fond(&self) -> crate::regles::Regles {
+        crate::regles::Regles::deriver_en_fond(self.cat.clone())
+    }
+
     /// **Les noms de blocs que le pack déclare** — ce que le sélecteur
     /// propose sous « pack ».
     pub fn noms(&self) -> impl Iterator<Item = &str> + '_ {
@@ -287,7 +296,7 @@ impl Assets {
         let translucides = tf_assets::catalogue::blocs_translucides(&cat, &atlas_complet);
         let climat = tf_assets::climat::Climat::charger(&src);
         Ok(Assets {
-            cat,
+            cat: std::sync::Arc::new(cat),
             src,
             disposition,
             translucides,
