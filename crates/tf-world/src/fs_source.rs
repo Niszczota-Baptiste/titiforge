@@ -220,6 +220,48 @@ impl RegionSource for FsSource {
         out.sort();
         Ok(out)
     }
+
+    /// À la racine, préfixé : `titiforge-<nom>`. Le jeu n'y regarde pas, et
+    /// le préfixe dit à qui l'ouvre d'où il vient.
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        let p = self.root.join(format!("titiforge-{}", safe_name(nom)?));
+        match fs::read(&p) {
+            Ok(b) => Ok(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(SourceError::NotFound),
+            Err(e) => Err(io(e)),
+        }
+    }
+
+    /// Les `titiforge-<nom>` de la racine.
+    ///
+    /// **Pas le temporaire d'une écriture interrompue** (`….tmp`, voir
+    /// `write_atomic`) : `safe_name` l'accepterait, et une écriture dans la
+    /// save le recopierait comme un fichier du monde.
+    fn meta_names(&self) -> Result<Vec<String>> {
+        let Ok(entrees) = fs::read_dir(&self.root) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for e in entrees {
+            let e = e.map_err(io)?;
+            if !e.file_type().map_err(io)?.is_file() {
+                continue;
+            }
+            let Some(nom) = e
+                .file_name()
+                .to_str()
+                .and_then(|n| n.strip_prefix("titiforge-"))
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if !nom.ends_with(".tmp") && safe_name(&nom).is_ok() {
+                out.push(nom);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
 }
 
 /// `c.X.Z.mcc` → `(X, Z)`. `None` pour tout le reste.
@@ -282,11 +324,14 @@ impl RegionSink for FsSource {
         self.write_atomic(&p, bytes)
     }
 
-    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+    fn remove_meta(&self, nom: &str) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
         let p = self.root.join(format!("titiforge-{}", safe_name(nom)?));
-        match fs::read(&p) {
-            Ok(b) => Ok(b),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(SourceError::NotFound),
+        match fs::remove_file(&p) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(io(e)),
         }
     }

@@ -70,9 +70,14 @@ impl Carnet for Seance {
     fn fermer(self: Box<Self>) -> String {
         match Seance::fermer(*self) {
             Ok(Fermeture::Effacee) => "séance close : la save porte tout".into(),
-            Ok(Fermeture::Gardee { regions }) => format!(
-                "séance gardée : {regions} région(s) modifiée(s) pas encore écrites dans \
-                 la save — elles seront là à la prochaine ouverture de ce monde"
+            Ok(Fermeture::Gardee { regions, fichiers }) => format!(
+                "séance gardée : {regions} région(s) modifiée(s){} pas encore écrites dans \
+                 la save — elles seront là à la prochaine ouverture de ce monde",
+                if fichiers > 0 {
+                    " et le document des composants"
+                } else {
+                    ""
+                }
             ),
             Err(e) => format!("{e} — la séance est gardée telle quelle"),
         }

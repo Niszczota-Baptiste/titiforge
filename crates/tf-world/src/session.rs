@@ -92,6 +92,9 @@ pub enum Reprise {
         actions: usize,
         /// Régions dont la copie porte du travail que la save n'a pas.
         regions: usize,
+        /// Fichiers du monde qui ne sont pas des régions — le document des
+        /// composants — que la copie porte autrement que la save.
+        fichiers: usize,
         /// Régions périmées, relues depuis la save.
         rafraichies: usize,
         /// Une action commencée et jamais finie : la copie peut la porter à
@@ -111,6 +114,7 @@ impl Reprise {
             Reprise::Reprise {
                 actions,
                 regions,
+                fichiers,
                 rafraichies,
                 interrompue,
             } => {
@@ -118,6 +122,9 @@ impl Reprise {
                     "séance reprise : {regions} région(s) modifiée(s) pas encore écrites \
                      dans la save, {actions} action(s) dans l'historique"
                 );
+                if *fichiers > 0 {
+                    t.push_str(" · le document des composants attend aussi d'être écrit");
+                }
                 if *rafraichies > 0 {
                     t.push_str(&format!(
                         " · {rafraichies} région(s) relue(s) depuis la save, que le jeu a \
@@ -157,7 +164,8 @@ pub enum Fermeture {
     /// La save porte tout : la séance est effacée.
     Effacee,
     /// Du travail attend d'être écrit : la séance reste, et se reprendra.
-    Gardee { regions: usize },
+    /// `fichiers` : le document des composants, quand c'est lui qui attend.
+    Gardee { regions: usize, fichiers: usize },
 }
 
 #[derive(Debug)]
@@ -246,11 +254,13 @@ impl Seance {
             .filter(|(_, e)| *e == EtatRegion::Perimee)
             .count();
         let regions = etats.iter().filter(|(_, e)| e.porte_du_travail()).count();
+        let fichiers = staging.fichiers_en_attente()?.len();
         // Dit une fois : la marque ne doit pas revenir à chaque ouverture.
         let _ = fs::remove_file(dossier.join(EN_COURS));
         fs::write(dossier.join(MONDE), texte_du_chemin(monde))?;
 
         let rien = regions == 0
+            && fichiers == 0
             && journal.entrees().is_empty()
             && rafraichies == 0
             && interrompue.is_none();
@@ -260,6 +270,7 @@ impl Seance {
             Reprise::Reprise {
                 actions: journal.entrees().len(),
                 regions,
+                fichiers,
                 rafraichies,
                 interrompue,
             }
@@ -357,7 +368,11 @@ impl Seance {
     pub fn fermer(mut self) -> Result<Fermeture, ErreurSeance> {
         let etats = self.staging.etats()?;
         let regions = etats.iter().filter(|(_, e)| e.porte_du_travail()).count();
-        if regions > 0 {
+        // Le document des composants est du travail, au même titre qu'une
+        // région : une séance qui n'aurait que lui en attente ne s'efface pas.
+        self.staging.alleger_fichiers()?;
+        let fichiers = self.staging.fichiers_en_attente()?.len();
+        if regions > 0 || fichiers > 0 {
             // Ce qui reste ne garde que le travail : une région sans travail
             // gardée jusqu'à la prochaine séance y deviendrait un conflit si
             // le joueur y jouait entre-temps.
@@ -367,7 +382,7 @@ impl Seance {
                 .map(|(c, _)| c)
                 .collect();
             self.staging.rafraichir_regions(&rendre)?;
-            return Ok(Fermeture::Gardee { regions });
+            return Ok(Fermeture::Gardee { regions, fichiers });
         }
         // Tout lâcher avant d'effacer : Windows n'efface pas un fichier tenu.
         self.journal = None;

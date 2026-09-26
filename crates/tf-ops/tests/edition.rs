@@ -22,7 +22,7 @@ use tf_ops::Presse;
 use tf_ops::{Masque, Motif};
 use tf_world::coords::{BBox, BlockPos, RegionPos};
 use tf_world::journal::Journal;
-use tf_world::source::{Dimension, Folder, MemorySource, RegionSource};
+use tf_world::source::{Dimension, Folder, MemorySource, RegionSink, RegionSource};
 use tf_world::Staging;
 
 const SURFACE: Dimension = Dimension::Overworld;
@@ -1477,4 +1477,159 @@ fn une_region_ecrite_dans_la_couche_reste_visible_a_une_grande_selection() {
         "la région de la couche doit être visitée, pas seulement celles de la source"
     );
     assert!(r.blocs.unwrap_or(0) > 0);
+}
+
+/// Une entrée qui porte les correctifs d'un vrai `//replace` ET celui d'un
+/// fichier du monde — ce que fera la mise à jour d'un composant.
+fn entree_avec_document(
+    st: &Staging<MemorySource, MemorySource>,
+    interner: &Interner,
+    avant: &[u8],
+    apres: &[u8],
+) -> Journal {
+    use tf_world::journal::{Correction, FichierPatch, Genre};
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let sel = BBox::new(BlockPos::new(0, -64, 0), BlockPos::new(15, 0, 15));
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+    let rap = appliquer(st, &SURFACE, DOSSIER, &sel, &plan, interner).unwrap();
+    st.ecrire_fichier("projet", apres).unwrap();
+    let mut genre = rap.genre("composant", Vec::new());
+    if let Genre::Operation { corrections, .. } = &mut genre {
+        corrections.push(Correction::Fichier(
+            FichierPatch::entre("projet", avant, apres).unwrap(),
+        ));
+    }
+    let mut journal = Journal::new();
+    journal.pousser("Mettre à jour", 0, genre);
+    journal
+}
+
+/// **Un Ctrl+Z défait les blocs ET le document**, et refaire les rend tous
+/// les deux — la moitié qui fait qu'un composant mis à jour s'annule d'un
+/// geste.
+#[test]
+fn une_entree_defait_ses_chunks_et_son_document_ensemble() {
+    use tf_ops::edition::{rejouer, Sens};
+    let (src, brut) = monde();
+    src.write_meta("projet", b"trois fenetres").unwrap();
+    let interner = interner_de(&brut);
+    let st = staging(src);
+    let mut journal = entree_avec_document(&st, &interner, b"trois fenetres", b"quatre fenetres");
+    let apres = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+
+    let (e, _) = journal.annuler().unwrap();
+    rejouer(&st, e, Sens::Annuler).unwrap();
+    assert_eq!(st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(), brut);
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"trois fenetres");
+    assert!(
+        st.fichiers_en_attente().unwrap().is_empty(),
+        "revenu à celui de la save, le document quitte la copie"
+    );
+
+    let (e, _) = journal.refaire().unwrap();
+    rejouer(&st, e, Sens::Refaire).unwrap();
+    assert_eq!(
+        tf_world::journal::empreinte(&st.read_region(&SURFACE, DOSSIER, ZERO).unwrap()),
+        tf_world::journal::empreinte(&apres)
+    );
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"quatre fenetres");
+}
+
+/// Un document changé sous le journal refuse l'entrée ENTIÈRE, avant
+/// d'écrire la moindre région — sinon les blocs seraient défaits et le
+/// document non, et plus rien ne saurait rejouer l'entrée.
+#[test]
+fn un_document_qui_diverge_n_ecrit_aucune_region() {
+    use tf_ops::edition::{rejouer, Erreur, Sens};
+    let (src, brut) = monde();
+    let interner = interner_de(&brut);
+    let st = staging(src);
+    let mut journal = entree_avec_document(&st, &interner, b"", b"quatre fenetres");
+    st.ecrire_fichier("projet", b"retouche ailleurs").unwrap();
+    let avant = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+
+    let (e, _) = journal.annuler().unwrap();
+    let r = rejouer(&st, e, Sens::Annuler);
+    assert!(matches!(r, Err(Erreur::DivergenceFichier { .. })), "{r:?}");
+    assert_eq!(st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(), avant);
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"retouche ailleurs");
+}
+
+/// **Une correction qu'on ne comprend pas fait refuser l'entrée entière.**
+/// N'en rejouer que les chunks — ce que faisait `rejouer` jusqu'ici, en
+/// sautant en silence tout ce qui n'en était pas — défaisait la moitié d'une
+/// action écrite par une version plus récente.
+#[test]
+fn une_entree_d_un_genre_inconnu_est_refusee_entiere() {
+    use tf_ops::edition::{rejouer, Erreur, Sens};
+    use tf_world::journal::{Correction, Genre};
+    let (src, brut) = monde();
+    let interner = interner_de(&brut);
+    let pierre = interner.get("minecraft:stone").unwrap();
+    let terre = interner.get("minecraft:dirt").unwrap();
+    let st = staging(src);
+    let sel = BBox::new(BlockPos::new(0, -64, 0), BlockPos::new(15, 0, 15));
+    let plan = Plan::nouveau(Masque::Etat(pierre), Motif::Bloc(terre));
+    let rap = appliquer(&st, &SURFACE, DOSSIER, &sel, &plan, &interner).unwrap();
+    let mut genre = rap.genre("greffon", Vec::new());
+    if let Genre::Operation { corrections, .. } = &mut genre {
+        corrections.push(Correction::Inconnu {
+            genre: 200,
+            octets: b"un PNJ".to_vec(),
+        });
+    }
+    let mut journal = Journal::new();
+    journal.pousser("Poser un PNJ", 0, genre);
+    let avant = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+
+    let (e, _) = journal.annuler().unwrap();
+    let r = rejouer(&st, e, Sens::Annuler);
+    assert!(matches!(r, Err(Erreur::Incomprise { genre: 200 })), "{r:?}");
+    assert_eq!(
+        st.read_region(&SURFACE, DOSSIER, ZERO).unwrap(),
+        avant,
+        "pas même la moitié qu'on comprenait"
+    );
+}
+
+/// Deux correctifs sur le MÊME fichier dans une entrée s'enchaînent — dans
+/// l'ordre du sens demandé — et un document CRÉÉ puis annulé, donc retiré de
+/// la copie, se refait depuis « absent », qui vaut vide.
+#[test]
+fn deux_correctifs_d_un_document_s_enchainent_et_une_creation_se_refait() {
+    use tf_ops::edition::{rejouer, Sens};
+    use tf_world::journal::{Correction, FichierPatch, Genre};
+    let (src, _) = monde();
+    let st = staging(src);
+    let (a, b, c): (&[u8], &[u8], &[u8]) = (b"", b"une fenetre", b"deux fenetres");
+    st.ecrire_fichier("projet", c).unwrap();
+    let mut journal = Journal::new();
+    journal.pousser(
+        "Poser deux fois",
+        0,
+        Genre::Operation {
+            op: "composant".into(),
+            params: Vec::new(),
+            bounds: None,
+            corrections: vec![
+                Correction::Fichier(FichierPatch::entre("projet", a, b).unwrap()),
+                Correction::Fichier(FichierPatch::entre("projet", b, c).unwrap()),
+            ],
+        },
+    );
+
+    let (e, _) = journal.annuler().unwrap();
+    rejouer(&st, e, Sens::Annuler).unwrap();
+    assert!(
+        matches!(
+            st.overlay().read_meta("projet"),
+            Err(tf_world::source::SourceError::NotFound)
+        ),
+        "revenu à « rien », comme la save : il quitte la copie"
+    );
+
+    let (e, _) = journal.refaire().unwrap();
+    rejouer(&st, e, Sens::Refaire).unwrap();
+    assert_eq!(st.lire_fichier("projet").unwrap(), c);
 }

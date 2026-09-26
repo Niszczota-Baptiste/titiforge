@@ -257,6 +257,23 @@ pub trait RegionSource: Send + Sync {
     /// deux `.mcc` qui existent vraiment. C'est aussi ce qui permet de rouvrir
     /// un staging sans perdre les charges déportées déjà écrites.
     fn external_names(&self, dim: &Dimension, folder: Folder) -> Result<Vec<String>>;
+
+    /// Relit un petit fichier du monde qui n'est PAS une région — une
+    /// métadonnée de la copie de travail, le document des composants — ou
+    /// `NotFound`.
+    ///
+    /// **Sur la lecture, et non sur l'écriture** : la copie de travail doit
+    /// relire celui de la SAVE, qu'elle ne tient qu'en lecture. Absent par
+    /// défaut — une source d'archive n'en porte pas.
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        let _ = nom;
+        Err(SourceError::NotFound)
+    }
+
+    /// Les noms de ces fichiers, triés. Vide par défaut, pour la même raison.
+    fn meta_names(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Écriture. Séparée de la lecture : une source d'archive, ou une save montée
@@ -293,8 +310,8 @@ pub trait RegionSink: Send + Sync {
     /// qu'une région a changé sous elle. Écrit d'un bloc, atomiquement.
     fn write_meta(&self, nom: &str, bytes: &[u8]) -> Result<()>;
 
-    /// Relit une métadonnée, ou `NotFound`.
-    fn read_meta(&self, nom: &str) -> Result<Vec<u8>>;
+    /// Retire une métadonnée. Déjà absente : c'est le résultat voulu.
+    fn remove_meta(&self, nom: &str) -> Result<()>;
 }
 
 /// État du verrou `session.lock` d'une save.
@@ -452,6 +469,21 @@ impl RegionSource for MemorySource {
             .map(|(_, _, n)| n.clone())
             .collect())
     }
+
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        self.metas
+            .read()
+            .unwrap()
+            .get(nom)
+            .cloned()
+            .ok_or(SourceError::NotFound)
+    }
+
+    fn meta_names(&self) -> Result<Vec<String>> {
+        let mut v: Vec<String> = self.metas.read().unwrap().keys().cloned().collect();
+        v.sort();
+        Ok(v)
+    }
 }
 
 impl RegionSink for MemorySource {
@@ -518,12 +550,11 @@ impl RegionSink for MemorySource {
         Ok(())
     }
 
-    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
-        self.metas
-            .read()
-            .unwrap()
-            .get(nom)
-            .cloned()
-            .ok_or(SourceError::NotFound)
+    fn remove_meta(&self, nom: &str) -> Result<()> {
+        if self.read_only {
+            return Err(SourceError::ReadOnly);
+        }
+        self.metas.write().unwrap().remove(nom);
+        Ok(())
     }
 }

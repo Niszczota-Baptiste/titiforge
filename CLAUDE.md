@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (995 tests aujourd’hui)
+cargo test            # tous les crates (1010 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -446,6 +446,8 @@ couvriront le même terrain.
 | Une case dont une ENTITÉ se souvient (lit, ruche, laisse…) | les tables de `tf-anvil/src/mobiles.rs` (`TRIPLETS`, `COMPOUNDS_CASE`, `TABLEAUX_CASE`) — par son NOM et sa forme exacte, jamais devinée sur l'allure d'un `{X, Y, Z}` — et un cas dans `tf-ops/tests/mobiles.rs`. Elle ne suivra que si le bloc qu'elle désigne suit |
 | Un type d'entité ORIENTÉ (`Facing` qu'on sait lire) | `genre` dans `tf-ops/src/mobiles.rs`. Sans ça, son orientation reste telle quelle et elle est annoncée APPROCHÉE — jamais devinée |
 | Une métadonnée de la copie de travail | `encoder_etat` / `decoder_etat` (`tf-world/src/staging.rs`, format `TFC1`) — le décodeur rend `None` AU MOINDRE DOUTE : une table à moitié comprise donnerait des bases fausses, pire que pas de base du tout |
+| Un fichier du MONDE qui n'est pas une région (le document des composants) | `Staging::lire_fichier` / `ecrire_fichier` avec son nom, et rien d'autre : l'écriture dans la save, la séance et le journal (`Correction::Fichier`) le prennent en charge. Jamais `couche`, qui est la métadonnée interne |
+| Un GENRE de correction de journal | sa variante de `Correction`, écrite ENVELOPPÉE (code, puis un seul blob — ce qu'une version antérieure sait sauter), sa lecture dans `lire_correction`, et son bras dans `rejouer` : sans lui, l'entrée est refusée entière (`Erreur::Incomprise`) |
 | Un fichier dans le dossier d'une SÉANCE | une constante de `session.rs`, ET sa ligne dans `mettre_de_cote` — sinon une séance mise de côté part sans lui |
 | Ce que la reprise d'une séance doit DIRE | `Reprise::texte` : la coque l'affiche à la première image, la ligne de commande l'imprime |
 | Un endroit où chercher des installations | `dossiers_ou_chercher` (`tf-assets/src/jeu.rs`) — le critère reste `versions/`, et `assets_par_defaut` (`tf-app/src/accueil.rs`) écarte ce qui n'a aucune version téléchargée |
@@ -2171,6 +2173,13 @@ propres à ce dépôt.
   joignait son fil. Tout scénario où un fil peut attendre tourne dans un fil
   TÉMOIN à attente bornée — et une livraison abandonnée vaut « aucune règle »
   (`Livraison::drop`), pour que la faute ne soit jamais un blocage.
+- **Rejouer sautait en silence ce qu'il ne comprenait pas.** `rejouer`
+  filtrait les correctifs de chunk et ignorait le reste : une entrée portant
+  une correction d'un genre inconnu — écrite par une version plus récente, ou
+  par un greffon absent — se défaisait À MOITIÉ, sans un mot, pendant que le
+  journal affirmait depuis le début qu'on « refuse de l'annuler ». Trouvé en
+  lui apprenant un genre de plus. Un `_ => None` dans un filtre est une
+  décision : il faut qu'elle soit celle qu'on croit avoir prise.
 - **`gained_focus` ne voit pas un focus donné avant l'image.** egui compare au
   focus de l'image PRÉCÉDENTE : un focus posé d'avance (la capture, un
   raccourci) ne « s'acquiert » jamais, et la liste de propositions ne

@@ -142,7 +142,13 @@ fn le_travail_et_l_annulation_survivent_a_la_fermeture() {
         let (_, curseur) = j.annuler().unwrap();
         s.noter(&mut j, &[curseur]).unwrap();
 
-        assert_eq!(s.fermer().unwrap(), Fermeture::Gardee { regions: 1 });
+        assert_eq!(
+            s.fermer().unwrap(),
+            Fermeture::Gardee {
+                regions: 1,
+                fichiers: 0
+            }
+        );
     }
 
     let (s, j, reprise) = Seance::ouvrir(&racine, &save).unwrap();
@@ -151,6 +157,7 @@ fn le_travail_et_l_annulation_survivent_a_la_fermeture() {
         Reprise::Reprise {
             actions: 2,
             regions: 1,
+            fichiers: 0,
             rafraichies: 0,
             interrompue: None
         }
@@ -224,7 +231,13 @@ fn ecrire_puis_jouer_puis_revenir_ne_fait_aucun_conflit() {
         // Retouché d'un seul côté après l'écriture.
         st.write_region(&SURFACE, R, UN, &octets(31_000, 97))
             .unwrap();
-        assert_eq!(s.fermer().unwrap(), Fermeture::Gardee { regions: 1 });
+        assert_eq!(
+            s.fermer().unwrap(),
+            Fermeture::Gardee {
+                regions: 1,
+                fichiers: 0
+            }
+        );
     }
     // Le joueur joue là où l'on avait écrit — la copie n'y porte plus rien.
     jouer(&save, "r.0.0.mca", 42);
@@ -235,6 +248,7 @@ fn ecrire_puis_jouer_puis_revenir_ne_fait_aucun_conflit() {
         Reprise::Reprise {
             actions: 0,
             regions: 1,
+            fichiers: 0,
             rafraichies: 0,
             interrompue: None
         },
@@ -275,6 +289,7 @@ fn une_region_perimee_se_relit_a_la_reprise() {
         Reprise::Reprise {
             actions: 0,
             regions: 1,
+            fichiers: 0,
             rafraichies: 1,
             interrompue: None
         }
@@ -304,7 +319,13 @@ fn une_region_sans_travail_ne_survit_pas_a_la_fermeture() {
             .unwrap();
         st.write_region(&SURFACE, R, UN, &octets(31_000, 97))
             .unwrap();
-        assert_eq!(s.fermer().unwrap(), Fermeture::Gardee { regions: 1 });
+        assert_eq!(
+            s.fermer().unwrap(),
+            Fermeture::Gardee {
+                regions: 1,
+                fichiers: 0
+            }
+        );
     }
     assert!(
         !dossier_de(&racine, &save)
@@ -343,7 +364,13 @@ fn une_partie_jouee_sur_le_travail_met_la_seance_de_cote() {
                 .unwrap();
             let r = action(&mut j, "Remplir", 10);
             s.noter(&mut j, &r).unwrap();
-            assert_eq!(s.fermer().unwrap(), Fermeture::Gardee { regions: 1 });
+            assert_eq!(
+                s.fermer().unwrap(),
+                Fermeture::Gardee {
+                    regions: 1,
+                    fichiers: 0
+                }
+            );
         }
         jouer(&save, "r.0.0.mca", 42 + tour);
 
@@ -600,4 +627,79 @@ fn une_variable_d_environnement_vide_vaut_absente() {
         racine_selon(&env(&[("HOME", ""), ("LOCALAPPDATA", "")])),
         None
     );
+}
+
+/// **Le document des composants est du travail.** Une séance qui n'a que
+/// lui en attente ne s'efface pas en se fermant — elle perdrait des
+/// définitions que la save n'a jamais reçues — et la reprise le DIT.
+#[test]
+fn une_seance_qui_n_a_que_son_document_se_garde() {
+    let d = TempDir::new("seance-document");
+    let save = save(&d);
+    let racine = d.path().join("seances");
+    {
+        let (s, _, _) = Seance::ouvrir(&racine, &save).unwrap();
+        s.staging()
+            .ecrire_fichier("projet", b"quatre fenetres")
+            .unwrap();
+        assert_eq!(
+            s.fermer().unwrap(),
+            Fermeture::Gardee {
+                regions: 0,
+                fichiers: 1
+            }
+        );
+    }
+    let (s, _, reprise) = Seance::ouvrir(&racine, &save).unwrap();
+    assert!(
+        matches!(reprise, Reprise::Reprise { fichiers: 1, .. }),
+        "{reprise:?}"
+    );
+    assert!(
+        reprise.texte().unwrap().contains("document des composants"),
+        "{reprise:?}"
+    );
+    assert_eq!(
+        s.staging().lire_fichier("projet").unwrap(),
+        b"quatre fenetres"
+    );
+
+    // Écrit dans la save, puis fermé : la save porte tout, la séance s'efface
+    // — et le document est dans le dossier du monde, qui voyage avec lui.
+    s.staging()
+        .commit(
+            &FsSource::open(&save).unwrap(),
+            LockProbe::LIBRE_SUR,
+            false,
+            &mut || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(s.fermer().unwrap(), Fermeture::Effacee);
+    assert_eq!(
+        fs::read(save.join("titiforge-projet")).unwrap(),
+        b"quatre fenetres"
+    );
+    let (s, _, reprise) = Seance::ouvrir(&racine, &save).unwrap();
+    assert_eq!(reprise, Reprise::Neuve);
+    assert_eq!(
+        s.staging().lire_fichier("projet").unwrap(),
+        b"quatre fenetres",
+        "relu depuis la save"
+    );
+}
+
+/// Un document revenu à l'identique de la save — tout annulé — n'est plus du
+/// travail : la séance s'efface.
+#[test]
+fn un_document_revenu_a_celui_de_la_save_n_est_plus_du_travail() {
+    let d = TempDir::new("seance-document-annule");
+    let save = save(&d);
+    fs::write(save.join("titiforge-projet"), b"celui de la save").unwrap();
+    let racine = d.path().join("seances");
+    let (s, _, _) = Seance::ouvrir(&racine, &save).unwrap();
+    s.staging().ecrire_fichier("projet", b"modifie").unwrap();
+    s.staging()
+        .ecrire_fichier("projet", b"celui de la save")
+        .unwrap();
+    assert_eq!(s.fermer().unwrap(), Fermeture::Effacee);
 }

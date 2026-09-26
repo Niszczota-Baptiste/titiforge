@@ -135,6 +135,100 @@ impl ChunkPatch {
     }
 }
 
+/// **Un correctif sur un FICHIER du monde qui n'est pas une région** — le
+/// document des composants. Même principe qu'un chunk : les octets de la
+/// plage qui change, dans les deux sens, et l'empreinte de l'état attendu.
+///
+/// Une seule plage, resserrée sur ce qui diffère — préfixe et suffixe communs
+/// retirés : mettre à jour UNE définition d'un document qui en porte vingt ne
+/// fait porter au journal que celle-là.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FichierPatch {
+    pub nom: String,
+    /// Empreinte du fichier ENTIER avant l'action — absent vaut vide.
+    pub avant_hash: u64,
+    pub apres_hash: u64,
+    /// Où commence la plage qui change, la même dans les deux sens.
+    pub debut: u64,
+    /// Ce que la plage portait avant : ce que l'annulation remet.
+    pub avant: Vec<u8>,
+    /// Ce qu'elle porte après : ce que refaire remet.
+    pub apres: Vec<u8>,
+}
+
+impl FichierPatch {
+    /// Le correctif qui mène de `avant` à `apres`, resserré sur ce qui
+    /// diffère. `None` quand rien ne change — une correction qui ne défait
+    /// rien n'a pas sa place dans une entrée.
+    pub fn entre(nom: &str, avant: &[u8], apres: &[u8]) -> Option<FichierPatch> {
+        if avant == apres {
+            return None;
+        }
+        let prefixe = avant.iter().zip(apres).take_while(|(a, b)| a == b).count();
+        let reste = avant.len().min(apres.len()) - prefixe;
+        let suffixe = avant
+            .iter()
+            .rev()
+            .zip(apres.iter().rev())
+            .take(reste)
+            .take_while(|(a, b)| a == b)
+            .count();
+        Some(FichierPatch {
+            nom: nom.to_string(),
+            avant_hash: empreinte(avant),
+            apres_hash: empreinte(apres),
+            debut: prefixe as u64,
+            avant: avant[prefixe..avant.len() - suffixe].to_vec(),
+            apres: apres[prefixe..apres.len() - suffixe].to_vec(),
+        })
+    }
+
+    pub fn poids(&self) -> usize {
+        self.avant.len() + self.apres.len() + 8
+    }
+
+    /// Le sens ANNULER, appliqué au fichier tel qu'il est.
+    pub fn undo(&self, courant: &[u8]) -> Result<Vec<u8>, JournalError> {
+        self.appliquer(courant, self.apres_hash, &self.apres, &self.avant)
+    }
+
+    /// Le sens REFAIRE.
+    pub fn redo(&self, courant: &[u8]) -> Result<Vec<u8>, JournalError> {
+        self.appliquer(courant, self.avant_hash, &self.avant, &self.apres)
+    }
+
+    fn appliquer(
+        &self,
+        courant: &[u8],
+        attendu: u64,
+        ote: &[u8],
+        mis: &[u8],
+    ) -> Result<Vec<u8>, JournalError> {
+        let vu = empreinte(courant);
+        // L'empreinte d'abord : elle seule dit que la plage est au bon
+        // endroit. Un fichier changé sous le journal refuse, il ne se
+        // raccommode pas à peu près.
+        // Vérifiée : `debut` vient du disque, et une addition qui déborde
+        // ferait paniquer au lieu de refuser.
+        let debut = usize::try_from(self.debut).unwrap_or(usize::MAX);
+        let hors = debut
+            .checked_add(ote.len())
+            .is_none_or(|fin| fin > courant.len());
+        if vu != attendu || hors {
+            return Err(JournalError::DivergenceFichier {
+                nom: self.nom.clone(),
+                attendu,
+                vu,
+            });
+        }
+        let mut out = Vec::with_capacity(courant.len() - ote.len() + mis.len());
+        out.extend_from_slice(&courant[..debut]);
+        out.extend_from_slice(mis);
+        out.extend_from_slice(&courant[debut + ote.len()..]);
+        Ok(out)
+    }
+}
+
 /// Ce qu'une entrée sait défaire.
 ///
 /// L'`enum` est la couture de l'extensibilité : un greffon qui poserait un PNJ
@@ -145,13 +239,21 @@ impl ChunkPatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Correction {
     Chunk(ChunkPatch),
-    Inconnu { genre: u8, octets: Vec<u8> },
+    /// Un fichier du monde qui n'est pas une région : le document des
+    /// composants. C'est lui qui fait qu'UN Ctrl+Z défait la mise à jour
+    /// d'une définition ET les vingt instances qu'elle a réestampées.
+    Fichier(FichierPatch),
+    Inconnu {
+        genre: u8,
+        octets: Vec<u8>,
+    },
 }
 
 impl Correction {
     pub fn poids(&self) -> usize {
         match self {
             Correction::Chunk(p) => p.poids(),
+            Correction::Fichier(p) => p.poids(),
             Correction::Inconnu { octets, .. } => octets.len(),
         }
     }
@@ -553,6 +655,12 @@ pub enum JournalError {
     Tronque,
     /// Genre d'enregistrement qu'on ne sait pas lire.
     Illisible(u8),
+    /// Un fichier du monde a changé sous le journal. Même refus qu'un chunk.
+    DivergenceFichier {
+        nom: String,
+        attendu: u64,
+        vu: u64,
+    },
 }
 
 impl std::fmt::Display for JournalError {
@@ -568,6 +676,11 @@ impl std::fmt::Display for JournalError {
             JournalError::PasUnJournal => write!(f, "ce fichier n'est pas un journal titiforge"),
             JournalError::Tronque => write!(f, "journal tronqué"),
             JournalError::Illisible(g) => write!(f, "enregistrement de genre inconnu ({g})"),
+            JournalError::DivergenceFichier { nom, .. } => write!(
+                f,
+                "le fichier « {nom} » du monde a changé depuis cette action : \
+                 annulation refusée"
+            ),
         }
     }
 }
@@ -707,6 +820,11 @@ const C_OPERATION: u8 = 0;
 const C_REPRISE: u8 = 1;
 
 const K_CHUNK: u8 = 0;
+/// **Un genre neuf s'écrit ENVELOPPÉ** : son code, puis UN blob. C'est la
+/// seule forme qu'une version antérieure sait sauter — elle lit tout genre
+/// inconnu comme `Inconnu { genre, blob }` et le garde tel quel. Écrit à plat
+/// comme `K_CHUNK`, le reste de l'entrée se lirait de travers chez elle.
+const K_FICHIER: u8 = 1;
 
 const D_OVERWORLD: u8 = 0;
 const D_NETHER: u8 = 1;
@@ -819,6 +937,17 @@ fn ecrire_correction(w: &mut W, c: &Correction) {
             ecrire_edits(w, &p.refaire);
             ecrire_edits(w, &p.annuler);
         }
+        Correction::Fichier(p) => {
+            let mut corps = W(Vec::new());
+            corps
+                .texte(&p.nom)
+                .u64(p.avant_hash)
+                .u64(p.apres_hash)
+                .u64(p.debut)
+                .blob(&p.avant)
+                .blob(&p.apres);
+            w.u8(K_FICHIER).blob(&corps.0);
+        }
         Correction::Inconnu { genre, octets } => {
             w.u8(*genre).blob(octets);
         }
@@ -827,6 +956,18 @@ fn ecrire_correction(w: &mut W, c: &Correction) {
 
 fn lire_correction(r: &mut R) -> Result<Correction, JournalError> {
     let genre = r.u8()?;
+    if genre == K_FICHIER {
+        let octets = r.blob()?;
+        let mut c = R::new(&octets);
+        return Ok(Correction::Fichier(FichierPatch {
+            nom: c.texte()?,
+            avant_hash: c.u64()?,
+            apres_hash: c.u64()?,
+            debut: c.u64()?,
+            avant: c.blob()?,
+            apres: c.blob()?,
+        }));
+    }
     if genre != K_CHUNK {
         // On ne comprend pas, mais on garde les octets : réécrire le journal
         // sans eux perdrait l'entrée d'une version plus récente.

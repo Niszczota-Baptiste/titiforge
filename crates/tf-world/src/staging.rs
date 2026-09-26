@@ -128,6 +128,9 @@ pub struct CommitReport {
     pub regions_ecrites: usize,
     pub externes_ecrites: usize,
     pub externes_supprimees: usize,
+    /// Les fichiers du monde qui ne sont pas des régions — le document des
+    /// composants — écrits ou retirés.
+    pub fichiers_ecrits: usize,
 }
 
 /// Pourquoi une écriture a été refusée.
@@ -329,6 +332,71 @@ impl<S: RegionSource, O: RegionStore> Staging<S, O> {
             out.push((cle, e, copie));
         }
         Ok(out)
+    }
+
+    // ── les fichiers du monde qui ne sont pas des régions ───────────────────
+
+    /// **Un fichier du monde qui n'est pas une région** — le document des
+    /// composants : celui de la copie s'il y en a un, sinon celui de la save,
+    /// sinon `NotFound`. Un document VIDE dans la copie en est un : c'est
+    /// l'état d'un document dont on a tout retiré, qui cache celui de la save.
+    ///
+    /// La métadonnée interne de la copie (`couche`) n'en est pas un : elle ne
+    /// se lit pas par ici, et ne partira jamais dans la save.
+    pub fn lire_fichier(&self, nom: &str) -> Result<Vec<u8>> {
+        if nom == META_COUCHE {
+            return Err(SourceError::BadName(nom.to_string()));
+        }
+        match self.overlay.read_meta(nom) {
+            Err(SourceError::NotFound) => self.source.read_meta(nom),
+            autre => autre,
+        }
+    }
+
+    /// L'écrit dans la COPIE. La save ne le reçoit qu'à l'écriture, après la
+    /// sauvegarde — exactement comme une région.
+    pub fn ecrire_fichier(&self, nom: &str, octets: &[u8]) -> Result<()> {
+        if nom == META_COUCHE {
+            return Err(SourceError::BadName(nom.to_string()));
+        }
+        self.overlay.write_meta(nom, octets)
+    }
+
+    /// **Les fichiers que la copie porte AUTREMENT que la save** : du travail,
+    /// au même titre qu'une région en attente — une séance qui n'aurait que
+    /// lui ne s'efface pas en se fermant. Absent et vide se valent : un
+    /// document vidé dans la copie, quand la save n'en a pas, n'attend rien.
+    pub fn fichiers_en_attente(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for nom in self.overlay.meta_names()? {
+            if nom == META_COUCHE {
+                continue;
+            }
+            let copie = self.overlay.read_meta(&nom)?;
+            let save = match self.source.read_meta(&nom) {
+                Ok(b) => b,
+                Err(SourceError::NotFound) => Vec::new(),
+                Err(e) => return Err(e),
+            };
+            if copie != save {
+                out.push(nom);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Rend à la save les fichiers que la copie porte à l'IDENTIQUE — après
+    /// une annulation, ou une écriture. Rend combien.
+    pub fn alleger_fichiers(&self) -> Result<usize> {
+        let attente = self.fichiers_en_attente()?;
+        let mut n = 0;
+        for nom in self.overlay.meta_names()? {
+            if nom != META_COUCHE && !attente.contains(&nom) {
+                self.overlay.remove_meta(&nom)?;
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     /// **Rend à la save les régions que la copie porte à l'identique**, et
@@ -596,6 +664,19 @@ impl<S: RegionSource, O: RegionStore> Staging<S, O> {
             }
         }
 
+        // 4 bis. Les fichiers du monde — le document des composants. Le jeu
+        // n'y touche pas, donc ils n'ont pas de conflit à craindre ; un
+        // document VIDE se retire de la save plutôt que de s'y écrire vide.
+        for nom in self.fichiers_en_attente()? {
+            let octets = self.overlay.read_meta(&nom)?;
+            if octets.is_empty() {
+                sink.remove_meta(&nom)?;
+            } else {
+                sink.write_meta(&nom, &octets)?;
+            }
+            rapport.fichiers_ecrits += 1;
+        }
+
         // 5. Une région que la save porte désormais telle quelle QUITTE la
         // copie : garder une région sans travail, c'est fabriquer un conflit
         // le jour où le joueur y remet les pieds. Ce que la save porte se
@@ -611,6 +692,9 @@ impl<S: RegionSource, O: RegionStore> Staging<S, O> {
             }
         }
         self.rafraichir_regions(&rendre)?;
+        // Même règle pour les fichiers, RELUE elle aussi : si le puits n'était
+        // pas la save, ils attendent toujours.
+        self.alleger_fichiers()?;
         Ok(rapport)
     }
 }
@@ -886,6 +970,21 @@ impl<S: RegionSource, O: RegionStore> RegionSource for Staging<S, O> {
         v.sort();
         v.dedup();
         v.retain(|n| !tombes.contains(&(dim.clone(), folder, n.clone())));
+        Ok(v)
+    }
+
+    /// Le monde tel que la copie le montre : ses fichiers d'abord, ceux de la
+    /// save sinon — comme ses régions.
+    fn read_meta(&self, nom: &str) -> Result<Vec<u8>> {
+        self.lire_fichier(nom)
+    }
+
+    fn meta_names(&self) -> Result<Vec<String>> {
+        let mut v = self.source.meta_names()?;
+        v.extend(self.overlay.meta_names()?);
+        v.retain(|n| n != META_COUCHE);
+        v.sort();
+        v.dedup();
         Ok(v)
     }
 }

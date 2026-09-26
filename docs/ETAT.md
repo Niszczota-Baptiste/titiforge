@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **995**, zéro échec |
+| Tests | **1010**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-995 tests, répartis par ce qu'ils PROUVENT :
+1010 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -52,11 +52,11 @@ cargo test --workspace
 | `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
 | `tf-anvil` mobiles | 7 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
-| `tf-world` journal/staging/residency/coords/source/lecture | 135 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
-| `tf-world` session | 17 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier ; et qu'une variable d'environnement VIDE vaut absente — prise au mot, elle rangeait les séances dans un chemin relatif |
+| `tf-world` journal/staging/residency/coords/source/lecture | 144 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; les FICHIERS DU MONDE qui ne sont pas des régions — la copie d'abord, la save sinon, écrits APRÈS la sauvegarde et jamais sur un refus, un document vidé retiré de la save, un temporaire d'écriture qui n'en est pas un — et leur correctif de journal, resserré, gardé par son empreinte, ENVELOPPÉ pour qu'une version antérieure le saute ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
+| `tf-world` session | 19 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface — mais pas une qui n'a que son DOCUMENT en attente, et la reprise le dit —, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier ; et qu'une variable d'environnement VIDE vaut absente — prise au mot, elle rangeait les séances dans un chemin relatif |
 | `tf-world` niveau | 9 | `level.dat` : le nom, le point d'apparition et le joueur se lisent À TRAVERS ce qu'on saute (réglages de génération, inventaire) ; un joueur dans le Nether fait ouvrir au point d'apparition ; une position qui n'est pas un nombre est ignorée ; aucune troncature ne fait paniquer ni ne rend un point à moitié lu ; et les saves d'une installation se listent de la plus récemment jouée à la plus ancienne, sous le nom du JEU |
 | `tf-blocks` regles | 21 | lois du groupe, et le contrôle de FORME indépendant |
-| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 67 | qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
+| `tf-ops` etages/edition/presse/tirage + 3 unitaires | 71 | qu'un Ctrl+Z défait les chunks ET le document d'une même entrée, qu'un document qui diverge n'écrit aucune région, et qu'une correction d'un genre inconnu fait refuser l'entrée ENTIÈRE ; qu'une édition fait rééclairer SES chunks par le jeu et laisse les autres octet pour octet — et qu'un biome, lui, ne fait rien rééclairer ; les trois étages, la jonction rapport → journal, le presse-papiers, le hachage par plan ; et qu'une sélection démesurée est REFUSÉE ou raccourcie, jamais tentée |
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
 | `tf-ops` poi | 6 | qu'une édition fait relire au jeu les POINTS D'INTÉRÊT de ses chunks — toutes leurs sections, et rien d'autre, pas même un `Valid` de mod glissé dans un enregistrement ; qu'un biome n'en fait relire aucun (sur un terrain qui PORTE des biomes, sans quoi le test ne prouvait rien) ; qu'une section déjà invalide ne salit rien ; et qu'annuler rend la table d'origine |
@@ -638,6 +638,38 @@ faisait attendre le moteur pour toujours, et le test ne rougissait pas — il
 pendait dans le `Drop` du moteur, qui joint son fil. Chaque scénario tourne
 maintenant dans un fil témoin à attente bornée, et la même faute sort en une
 phrase.
+
+### Le document des composants vit dans le monde
+
+La couture des composants, posée avant eux. Un composant a besoin d'un
+DOCUMENT — ses définitions, ses instances — et ce document a les mêmes
+exigences qu'une région : ne jamais toucher la save avant l'écriture, y partir
+après la sauvegarde, survivre à la fermeture, et s'annuler par le même Ctrl+Z
+que les blocs qu'il a fait poser.
+
+Il est donc un **fichier du monde qui n'est pas une région** :
+`titiforge-<nom>` à la racine de la save, comme la métadonnée de la copie de
+travail. La copie d'abord, la save sinon (`Staging::lire_fichier`) ; écrit dans
+la copie seulement (`ecrire_fichier`) ; emporté dans la save par l'écriture,
+APRÈS la sauvegarde et jamais sur un refus ; compté comme du travail par la
+séance, qui ne s'efface pas s'il attend. Dans la save, il voyage avec le
+monde qu'on s'échange.
+
+Le journal a un genre de correction de plus, `Correction::Fichier` : la plage
+qui change, resserrée, dans les deux sens, gardée par l'empreinte du fichier
+entier. Il s'écrit **enveloppé** — son code, puis un seul blob — parce que
+c'est la seule forme qu'une version antérieure lit comme `Inconnu` et garde
+telle quelle ; écrit à plat, il ferait lire de travers tout ce qui le suit.
+
+**Un défaut ancien trouvé en l'écrivant** : `rejouer` sautait en silence toute
+correction qui n'était pas un chunk. Une entrée écrite par une version plus
+récente — ou par un greffon absent — était donc défaite À MOITIÉ, sans un mot,
+alors que le journal promet l'inverse depuis le début. Elle est maintenant
+refusée entière, avant toute écriture.
+
+19 mutations, 19 tuées. Une ligne est partie en chemin : la séance allégeait
+les fichiers identiques à la reprise, ce qui n'achetait rien d'observable —
+la fermeture et l'écriture le font, et « en attente » se juge au contenu.
 
 ### Choisir un bloc sans connaître son identifiant
 

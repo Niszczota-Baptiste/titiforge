@@ -8,8 +8,8 @@
 use tf_anvil::{inverse_edits, splice, Edit};
 use tf_nbt::Span;
 use tf_world::journal::{
-    decoder, empreinte, encoder, entete, Chemin, ChunkPatch, Cible, Correction, Genre, Journal,
-    JournalError, Record,
+    decoder, empreinte, encoder, entete, Chemin, ChunkPatch, Cible, Correction, FichierPatch,
+    Genre, Journal, JournalError, Record,
 };
 use tf_world::{BBox, BlockPos, Dimension, Folder, RegionPos};
 
@@ -908,4 +908,121 @@ fn un_journal_ecrit_avant_les_parametres_se_relit() {
         }
         autre => panic!("attendu une entrée, reçu {autre:?}"),
     }
+}
+
+// ── les fichiers du monde ───────────────────────────────────────────────────
+
+/// Un document de mille octets dont on change dix au milieu.
+fn document() -> (Vec<u8>, Vec<u8>) {
+    let avant: Vec<u8> = (0..1000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let mut apres = avant.clone();
+    for b in &mut apres[400..410] {
+        *b = b.wrapping_add(1);
+    }
+    (avant, apres)
+}
+
+/// **Un correctif de fichier ne porte que ce qui change** — et rend le
+/// fichier d'origine octet pour octet, dans les deux sens.
+#[test]
+fn un_correctif_de_fichier_resserre_rend_les_deux_etats() {
+    let (avant, apres) = document();
+    let p = FichierPatch::entre("projet", &avant, &apres).unwrap();
+    assert_eq!(p.debut, 400);
+    assert_eq!((p.avant.len(), p.apres.len()), (10, 10), "resserré");
+    assert_eq!(p.undo(&apres).unwrap(), avant);
+    assert_eq!(p.redo(&avant).unwrap(), apres);
+
+    // Créer, vider, allonger, raccourcir : les longueurs diffèrent, et le
+    // suffixe commun ne doit pas mordre sur le préfixe.
+    let cas: [(&[u8], &[u8]); 5] = [
+        (b"", b"un document neuf"),
+        (b"un document entier", b""),
+        (b"abcabc", b"abcXabc"),
+        (b"abcXabc", b"abcabc"),
+        (b"aaaa", b"aaaaaa"),
+    ];
+    for (a, b) in cas {
+        let p = FichierPatch::entre("projet", a, b).unwrap();
+        assert_eq!(p.redo(a).unwrap(), b, "{a:?} → {b:?}");
+        assert_eq!(p.undo(b).unwrap(), a, "{b:?} → {a:?}");
+    }
+    assert_eq!(
+        FichierPatch::entre("projet", &avant, &avant),
+        None,
+        "rien ne change : pas de correction"
+    );
+}
+
+/// Un fichier changé sous le journal fait REFUSER — et une plage forgée, qui
+/// sortirait du fichier, refuse aussi au lieu de faire paniquer.
+#[test]
+fn un_fichier_change_sous_le_journal_refuse() {
+    let (avant, apres) = document();
+    let p = FichierPatch::entre("projet", &avant, &apres).unwrap();
+    assert!(matches!(
+        p.undo(&avant),
+        Err(JournalError::DivergenceFichier { .. })
+    ));
+    let mut forge = p.clone();
+    forge.debut = u64::MAX;
+    forge.apres_hash = empreinte(&apres);
+    assert!(forge.undo(&apres).is_err());
+}
+
+/// **Il traverse le fichier du journal**, entre deux correctifs de chunk —
+/// et il s'écrit ENVELOPPÉ : son genre, puis un seul blob. C'est la forme
+/// qu'une version antérieure lit comme `Inconnu` et garde telle quelle ; une
+/// entrée écrite à plat se lirait de travers chez elle, et avec elle tout ce
+/// qui la suit.
+#[test]
+fn un_correctif_de_fichier_traverse_le_journal_et_s_enveloppe() {
+    let (avant, apres) = document();
+    let f = FichierPatch::entre("projet", &avant, &apres).unwrap();
+    let (c1, _) = patch(1, &[1u8; 32], vec![ed(3, 5, b"zz")]);
+    let (c2, _) = patch(2, &[2u8; 32], vec![ed(0, 1, b"y")]);
+    let mut j = Journal::new();
+    let (l, g) = operation(
+        "mettre à jour la fenêtre",
+        vec![
+            Correction::Chunk(c1.clone()),
+            Correction::Fichier(f.clone()),
+            Correction::Chunk(c2.clone()),
+        ],
+    );
+    let recs = j.pousser(&l, 1, g);
+    let (relu, _) = decoder(&fichier(&recs)).unwrap();
+    assert_eq!(
+        relu.entrees()[0].corrections(),
+        [
+            Correction::Chunk(c1),
+            Correction::Fichier(f.clone()),
+            Correction::Chunk(c2)
+        ]
+    );
+
+    // L'enveloppe : ce qu'une version antérieure aurait gardé comme
+    // `Inconnu { genre: 1, blob }` se relit ici comme le même correctif.
+    let mut corps = Vec::new();
+    let texte = |v: &mut Vec<u8>, b: &[u8]| {
+        v.extend_from_slice(&(b.len() as u32).to_le_bytes());
+        v.extend_from_slice(b);
+    };
+    texte(&mut corps, f.nom.as_bytes());
+    corps.extend_from_slice(&f.avant_hash.to_le_bytes());
+    corps.extend_from_slice(&f.apres_hash.to_le_bytes());
+    corps.extend_from_slice(&f.debut.to_le_bytes());
+    texte(&mut corps, &f.avant);
+    texte(&mut corps, &f.apres);
+    let mut k = Journal::new();
+    let (l, g) = operation(
+        "écrit par une version antérieure",
+        vec![Correction::Inconnu {
+            genre: 1,
+            octets: corps,
+        }],
+    );
+    let recs = k.pousser(&l, 1, g);
+    let (relu, _) = decoder(&fichier(&recs)).unwrap();
+    assert_eq!(relu.entrees()[0].corrections(), [Correction::Fichier(f)]);
 }

@@ -131,8 +131,9 @@ impl RegionSink for Puits {
         Ok(())
     }
 
-    fn read_meta(&self, _: &str) -> Result<Vec<u8>> {
-        Err(SourceError::NotFound)
+    fn remove_meta(&self, nom: &str) -> Result<()> {
+        self.ecrits.borrow_mut().push(format!("-m {nom}"));
+        Ok(())
     }
 }
 
@@ -481,6 +482,7 @@ fn le_commit_ecrit_les_regions_les_charges_et_les_suppressions() {
             regions_ecrites: 2,
             externes_ecrites: 1,
             externes_supprimees: 1,
+            fichiers_ecrits: 0,
         }
     );
     let ecrits = puits.ecrits.borrow().clone();
@@ -995,4 +997,159 @@ fn rien_d_une_region_perimee_ne_s_ecrit_pas_meme_ses_charges() {
         b"jeu".to_vec(),
         "et l'effacer aussi"
     );
+}
+
+// ── les fichiers du monde qui ne sont pas des régions ───────────────────────
+
+/// **La copie d'abord, la save sinon** — comme une région. Et la save n'en
+/// voit rien avant l'écriture.
+#[test]
+fn un_fichier_du_monde_se_lit_dans_la_copie_puis_dans_la_save() {
+    let save = origine();
+    save.write_meta("projet", b"celui de la save").unwrap();
+    let st = Staging::new(save, MemorySource::new());
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"celui de la save");
+    assert!(st.fichiers_en_attente().unwrap().is_empty());
+
+    st.ecrire_fichier("projet", b"celui de la copie").unwrap();
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"celui de la copie");
+    assert_eq!(
+        st.source().read_meta("projet").unwrap(),
+        b"celui de la save",
+        "la save n'a rien reçu"
+    );
+    assert_eq!(st.fichiers_en_attente().unwrap(), ["projet"]);
+    // Vue comme une source, la copie montre SON document.
+    assert_eq!(
+        RegionSource::read_meta(&st, "projet").unwrap(),
+        b"celui de la copie"
+    );
+
+    // Revenue à l'identique — une annulation — elle n'attend plus rien, et
+    // s'allège.
+    st.ecrire_fichier("projet", b"celui de la save").unwrap();
+    assert!(st.fichiers_en_attente().unwrap().is_empty());
+    assert_eq!(st.alleger_fichiers().unwrap(), 1);
+    assert!(matches!(
+        st.overlay().read_meta("projet"),
+        Err(SourceError::NotFound)
+    ));
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"celui de la save");
+}
+
+/// Absent et vide se valent — un document vidé dans la copie, quand la save
+/// n'en a pas, n'attend rien ; vidé quand la save en a un, il attend.
+#[test]
+fn un_document_vide_attend_seulement_quand_la_save_en_a_un() {
+    let st = Staging::new(origine(), MemorySource::new());
+    assert!(matches!(
+        st.lire_fichier("projet"),
+        Err(SourceError::NotFound)
+    ));
+    st.ecrire_fichier("projet", b"").unwrap();
+    assert!(st.fichiers_en_attente().unwrap().is_empty());
+
+    let save = origine();
+    save.write_meta("projet", b"un document").unwrap();
+    let st = Staging::new(save, MemorySource::new());
+    st.ecrire_fichier("projet", b"").unwrap();
+    assert_eq!(st.fichiers_en_attente().unwrap(), ["projet"]);
+}
+
+/// La métadonnée INTERNE de la copie n'est pas un fichier du monde : ni lue,
+/// ni écrite par ici, ni jamais comptée comme du travail à écrire.
+#[test]
+fn la_metadonnee_interne_n_est_pas_un_fichier_du_monde() {
+    let st = Staging::new(origine(), MemorySource::new());
+    // Une région écrite fait ranger la métadonnée « couche ».
+    st.write_region(&SURFACE, R, RegionPos::new(0, 0), &octets(21_000, 7))
+        .unwrap();
+    assert!(st.overlay().read_meta("couche").is_ok());
+    assert!(st.lire_fichier("couche").is_err());
+    assert!(st.ecrire_fichier("couche", b"x").is_err());
+    assert!(st.fichiers_en_attente().unwrap().is_empty());
+    assert!(!RegionSource::meta_names(&st)
+        .unwrap()
+        .contains(&"couche".to_string()));
+}
+
+/// **L'écriture emporte le document APRÈS la sauvegarde** — et le retire de
+/// la copie seulement si la save le porte désormais.
+#[test]
+fn l_ecriture_emporte_le_document_apres_la_sauvegarde() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.ecrire_fichier("projet", b"quatre fenetres").unwrap();
+
+    // Vers un puits qui n'est pas la save : l'ordre, et le document reste en
+    // attente — la save, relue, ne l'a pas.
+    let puits = Puits::default();
+    let r = st
+        .commit(&puits, libre(), false, &mut || {
+            puits.ecrits.borrow_mut().push("sauvegarde".into());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(r.fichiers_ecrits, 1);
+    assert_eq!(*puits.ecrits.borrow(), ["sauvegarde", "m projet"]);
+    assert_eq!(st.fichiers_en_attente().unwrap(), ["projet"]);
+
+    // Vers la save elle-même : écrit, et la copie s'allège.
+    let r = st
+        .commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert_eq!(r.fichiers_ecrits, 1);
+    assert_eq!(st.source().read_meta("projet").unwrap(), b"quatre fenetres");
+    assert!(st.fichiers_en_attente().unwrap().is_empty());
+    assert!(matches!(
+        st.overlay().read_meta("projet"),
+        Err(SourceError::NotFound)
+    ));
+
+    // Un document VIDÉ se retire de la save plutôt que de s'y écrire vide.
+    st.ecrire_fichier("projet", b"").unwrap();
+    st.commit(st.source(), libre(), false, &mut sauvegarde_ok())
+        .unwrap();
+    assert!(matches!(
+        st.source().read_meta("projet"),
+        Err(SourceError::NotFound)
+    ));
+}
+
+/// Un refus — la save a changé sous du travail — n'écrit PAS le document
+/// non plus : il part avec les régions, ou pas du tout.
+#[test]
+fn un_refus_n_ecrit_pas_le_document() {
+    let st = Staging::new(origine(), MemorySource::new());
+    st.write_region(&SURFACE, R, RegionPos::new(0, 0), &octets(21_000, 7))
+        .unwrap();
+    st.ecrire_fichier("projet", b"quatre fenetres").unwrap();
+    // Le jeu joue la région pendant ce temps.
+    st.source()
+        .write_region(&SURFACE, R, RegionPos::new(0, 0), &octets(22_000, 8))
+        .unwrap();
+    let puits = Puits::default();
+    assert!(matches!(
+        st.commit(&puits, libre(), false, &mut sauvegarde_ok()),
+        Err(CommitError::SaveModifiee(_))
+    ));
+    assert!(puits.ecrits.borrow().is_empty());
+}
+
+/// Sur disque : `titiforge-<nom>` à la racine, et le temporaire d'une
+/// écriture interrompue n'est pas un fichier du monde.
+#[test]
+fn sur_disque_un_temporaire_n_est_pas_un_fichier_du_monde() {
+    let d = TempDir::new("fichiers-disque");
+    let couche = FsSource::open(d.path()).unwrap();
+    couche.write_meta("projet", b"doc").unwrap();
+    std::fs::write(d.path().join("titiforge-projet.bin.tmp"), b"coupe").unwrap();
+    std::fs::write(d.path().join("level.dat"), b"").unwrap();
+    assert_eq!(couche.meta_names().unwrap(), ["projet"]);
+    assert_eq!(
+        std::fs::read(d.path().join("titiforge-projet")).unwrap(),
+        b"doc"
+    );
+    couche.remove_meta("projet").unwrap();
+    couche.remove_meta("projet").unwrap();
+    assert!(couche.meta_names().unwrap().is_empty());
 }

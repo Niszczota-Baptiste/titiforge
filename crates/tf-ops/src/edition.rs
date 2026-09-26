@@ -231,6 +231,20 @@ pub enum Erreur {
         region: RegionPos,
         chunk: u16,
     },
+    /// Même garde, sur un fichier du monde qui n'est pas une région — le
+    /// document des composants.
+    DivergenceFichier {
+        nom: String,
+    },
+    /// Une entrée porte un correctif d'un genre qu'on ne sait pas rejouer —
+    /// écrit par une version plus récente, ou par un greffon absent.
+    ///
+    /// **Refusée en entier**, avant d'écrire quoi que ce soit : n'en rejouer
+    /// que les chunks défairait une moitié de l'action et laisserait l'autre,
+    /// ce qui est pire que ne rien défaire.
+    Incomprise {
+        genre: u8,
+    },
     /// Un `//move` arriverait dans du terrain JAMAIS généré.
     ///
     /// Un collage n'engendre pas de chunk — on ne sait pas générer le terrain
@@ -280,6 +294,17 @@ impl std::fmt::Display for Erreur {
                 "le chunk {chunk} de la région r.{}.{} a changé depuis : \
                  l'annulation ne s'applique plus. Rien n'a été écrit",
                 region.x, region.z
+            ),
+            Erreur::DivergenceFichier { nom } => write!(
+                f,
+                "le fichier « {nom} » du monde a changé depuis : l'annulation ne \
+                 s'applique plus. Rien n'a été écrit"
+            ),
+            Erreur::Incomprise { genre } => write!(
+                f,
+                "cette action porte une correction d'un genre inconnu ({genre}) — \
+                 écrite par une version plus récente de titiforge. Elle n'est pas \
+                 rejouée, pas même en partie. Rien n'a été écrit"
             ),
             Erreur::TerrainAbsent { absents, exemple } => write!(
                 f,
@@ -970,10 +995,25 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
         Sens::Annuler => entree.a_annuler().collect(),
         Sens::Refaire => entree.a_refaire().collect(),
     };
+    // Un genre inconnu refuse l'entrée ENTIÈRE, avant la moindre lecture :
+    // en sauter les correctifs défairait la moitié d'une action.
+    if let Some(Correction::Inconnu { genre, .. }) = corrections
+        .iter()
+        .find(|c| matches!(c, Correction::Inconnu { .. }))
+    {
+        return Err(Erreur::Incomprise { genre: *genre });
+    }
     let patches: Vec<&ChunkPatch> = corrections
-        .into_iter()
+        .iter()
         .filter_map(|c| match c {
             Correction::Chunk(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    let fichiers: Vec<&tf_world::journal::FichierPatch> = corrections
+        .iter()
+        .filter_map(|c| match c {
+            Correction::Fichier(p) => Some(p),
             _ => None,
         })
         .collect();
@@ -1086,6 +1126,28 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
             touches += n;
         }
     }
+    // Les fichiers du monde, dans la MÊME première passe : un document qui
+    // diverge refuse l'entrée avant qu'aucune région ne soit écrite. Deux
+    // correctifs sur le même fichier s'enchaînent par leurs empreintes, dans
+    // l'ordre du sens demandé. Absent vaut vide, dans les deux sens.
+    let mut fichiers_prets: Vec<(String, Vec<u8>)> = Vec::new();
+    for p in fichiers {
+        let courant = match fichiers_prets.iter().position(|(n, _)| *n == p.nom) {
+            Some(i) => fichiers_prets.remove(i).1,
+            None => match staging.lire_fichier(&p.nom) {
+                Ok(b) => b,
+                Err(SourceError::NotFound) => Vec::new(),
+                Err(e) => return Err(e.into()),
+            },
+        };
+        let neuf = match sens {
+            Sens::Annuler => p.undo(&courant),
+            Sens::Refaire => p.redo(&courant),
+        }
+        .map_err(|_| Erreur::DivergenceFichier { nom: p.nom.clone() })?;
+        fichiers_prets.push((p.nom.clone(), neuf));
+        touches += 1;
+    }
     // Seconde passe : tout a été validé, on écrit. Par le chemin COMMUN : un
     // chunk qui repasse au-delà d'un mégaoctet en rejouant part en `.mcc`, et
     // n'écrire que la région laisserait un talon vers un fichier absent — le
@@ -1094,6 +1156,12 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
     for (dim, folder, pos, sortie, orphelins) in pretes {
         ecrire_sortie(staging, &dim, folder, pos, sortie, orphelins)?;
         ecrites.push((dim, folder, pos));
+    }
+    for (nom, octets) in &fichiers_prets {
+        staging.ecrire_fichier(nom, octets)?;
+    }
+    if !fichiers_prets.is_empty() {
+        staging.alleger_fichiers()?;
     }
     // Une région que l'annulation ramène au contenu de la save QUITTE la
     // copie. Gardée, elle n'aurait l'air de rien — mais recompressée, elle
