@@ -308,8 +308,10 @@ pub fn table_formes(
     let mut t = tf_mesh::TableFormes::new();
     for cle in cles {
         let (forme, _) = forme_et_habillage(cat, None, None, &cle, translucide);
-        t.pousser(forme.air, forme.opaque, forme.cuboides);
-        let _ = &t;
+        let id = t.pousser(forme.air, forme.opaque, forme.cuboides);
+        if let Some(f) = forme.fluide {
+            t.marquer_fluide(id, f);
+        }
     }
     t
 }
@@ -319,6 +321,9 @@ pub struct Forme {
     pub air: bool,
     pub opaque: bool,
     pub cuboides: Vec<Cuboide>,
+    /// Le fluide qu'il porte : l'eau d'un bloc d'eau ou d'un bloc inondé, la
+    /// lave. Indépendant du reste — un escalier inondé garde ses cuboïdes.
+    pub fluide: Option<tf_mesh::Fluide>,
 }
 
 /// La forme d'un état ET l'habillage de chacun de ses cuboïdes, **d'un seul
@@ -339,6 +344,24 @@ fn forme_et_habillage(
     cle: &str,
     translucide: &dyn Fn(&str) -> bool,
 ) -> (Forme, crate::apparence::Habillage) {
+    let (nom, etat) = decouper(cle);
+    let (mut forme, hab) = forme_seule(cat, atlas, teintes, nom, &etat, translucide);
+    // Le fluide se lit dans l'ÉTAT, quelle que soit la forme : un bloc d'eau
+    // est de l'air pour les passes de blocs, un escalier inondé un modèle, et
+    // les deux portent une source.
+    forme.fluide = crate::fluides::fluide_de(nom, &etat);
+    (forme, hab)
+}
+
+/// La forme et l'habillage, sans le fluide.
+fn forme_seule(
+    cat: &Catalogue,
+    atlas: Option<&crate::atlas::Atlas>,
+    teintes: Option<&crate::apparence::Teintes>,
+    nom: &str,
+    etat: &[(String, String)],
+    translucide: &dyn Fn(&str) -> bool,
+) -> (Forme, crate::apparence::Habillage) {
     use crate::apparence::{Apparence, Habillage};
     let vide = |air: bool| {
         (
@@ -346,11 +369,11 @@ fn forme_et_habillage(
                 air,
                 opaque: false,
                 cuboides: Vec::new(),
+                fluide: None,
             },
             Habillage::default(),
         )
     };
-    let (nom, etat) = decouper(cle);
     if nom == "minecraft:air" || nom == "minecraft:cave_air" || nom == "minecraft:void_air" {
         return vide(true);
     }
@@ -377,7 +400,7 @@ fn forme_et_habillage(
     let mut hab: Vec<[Apparence; 6]> = Vec::new();
     let mut plein = false;
     let mut cube = [Apparence::default(); 6];
-    for v in bs.pour(&etat) {
+    for v in bs.pour(etat) {
         let Some(m) = cat.modele(&v.modele) else {
             continue;
         };
@@ -412,6 +435,7 @@ fn forme_et_habillage(
                 air: false,
                 opaque: true,
                 cuboides: Vec::new(),
+                fluide: None,
             },
             Habillage {
                 cube,
@@ -428,6 +452,7 @@ fn forme_et_habillage(
             air: false,
             opaque: false,
             cuboides: cub,
+            fluide: None,
         },
         Habillage {
             cube,
@@ -477,6 +502,9 @@ pub fn prolonger_rendu(
     for cle in cles {
         let (forme, hab) = forme_et_habillage(cat, Some(atlas), Some(teintes), &cle, translucide);
         let id = t.pousser(forme.air, forme.opaque, forme.cuboides);
+        if let Some(f) = forme.fluide {
+            t.marquer_fluide(id, f);
+        }
         // **Le maillon qui fait que le biome arrive jusqu'au quad.**
         //
         // La fusion gloutonne ne casse un quad sur une frontière de biome que

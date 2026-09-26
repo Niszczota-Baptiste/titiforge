@@ -254,6 +254,16 @@ pub fn textures_des_etats(cat: &Catalogue, cles: impl Iterator<Item = String>) -
     let mut v: Vec<String> = Vec::new();
     for cle in cles {
         let (nom, etat) = decouper(&cle);
+        // Un fluide ne cite ses textures dans aucun modèle — `block/water` n'a
+        // pas d'élément — et le jeu les nomme en dur : sans ces lignes, l'eau
+        // serait maillée et dessinée avec la tuile zéro.
+        if let Some(f) = crate::fluides::fluide_de(nom, &etat) {
+            v.extend(
+                crate::fluides::textures(f.genre)
+                    .iter()
+                    .map(|t| t.to_string()),
+            );
+        }
         let Some(bs) = cat.blockstate(nom) else {
             continue;
         };
