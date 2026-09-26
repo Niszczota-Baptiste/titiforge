@@ -121,6 +121,87 @@ impl Lignes {
         }
     }
 
+    /// **Ce qui est dans le champ de cette caméra**, segment par segment —
+    /// découpé aux six plans du tronc de vue, côté processeur.
+    ///
+    /// Le GPU découpe au plan proche, et c'est exact ; mais l'extrémité
+    /// découpée d'un segment qui passe DERRIÈRE la caméra peut tomber très
+    /// loin hors de l'écran — des milliers de fois sa largeur — et un
+    /// rastériseur n'a pas à y garder sa précision. Mesuré sous llvmpipe,
+    /// avec la caméra à l'intérieur de la boîte d'une `.mca` : l'arête qui
+    /// passait derrière elle se dessinait en escalier de marches de 64
+    /// pixels, un aplat rouge au bord de l'image. Découpé ici, plus rien
+    /// de ce qui part au GPU ne sort de l'écran.
+    ///
+    /// `vue_projection` est celle que les shaders reçoivent (colonne par
+    /// colonne, profondeur 0..1 de wgpu). La découpe se fait en coordonnées
+    /// HOMOGÈNES, avant la division : l'espace de découpe est une image
+    /// affine de l'espace monde, donc le paramètre qui coupe l'un coupe
+    /// l'autre, et les extrémités se recalculent EN MONDE sans rien inverser.
+    pub fn dans_le_champ(&self, vue_projection: &[[f32; 4]; 4]) -> Lignes {
+        let clip = |p: [f32; 3]| -> [f32; 4] {
+            let q = [p[0], p[1], p[2], 1.0];
+            let mut c = [0.0f32; 4];
+            for (j, cj) in c.iter_mut().enumerate() {
+                *cj = (0..4).map(|i| q[i] * vue_projection[i][j]).sum();
+            }
+            c
+        };
+        // La distance signée aux six plans : dedans, elles sont toutes
+        // positives. Gauche, droite, bas, haut, proche, lointain.
+        let plans = |c: [f32; 4]| {
+            [
+                c[3] + c[0],
+                c[3] - c[0],
+                c[3] + c[1],
+                c[3] - c[1],
+                c[2],
+                c[3] - c[2],
+            ]
+        };
+        // Découper n'ajoute jamais de segment : la place de tous d'emblée.
+        let mut out = Lignes {
+            sommets: Vec::with_capacity(self.sommets.len()),
+        };
+        for paire in self.sommets.chunks_exact(2) {
+            let (a, b) = (paire[0], paire[1]);
+            let (da, db) = (plans(clip(a.position)), plans(clip(b.position)));
+            let (mut t0, mut t1) = (0.0f32, 1.0f32);
+            let mut dehors = false;
+            for (ka, kb) in da.into_iter().zip(db) {
+                if ka < 0.0 && kb < 0.0 {
+                    dehors = true;
+                    break;
+                }
+                if ka < 0.0 {
+                    t0 = t0.max(ka / (ka - kb));
+                } else if kb < 0.0 {
+                    t1 = t1.min(ka / (ka - kb));
+                }
+            }
+            if dehors || t0 > t1 {
+                continue;
+            }
+            let point = |t: f32| {
+                let (p, q) = (a.position, b.position);
+                [
+                    p[0] + t * (q[0] - p[0]),
+                    p[1] + t * (q[1] - p[1]),
+                    p[2] + t * (q[2] - p[2]),
+                ]
+            };
+            out.sommets.push(Sommet {
+                position: point(t0),
+                couleur: a.couleur,
+            });
+            out.sommets.push(Sommet {
+                position: point(t1),
+                couleur: b.couleur,
+            });
+        }
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.sommets.len() / 2
     }

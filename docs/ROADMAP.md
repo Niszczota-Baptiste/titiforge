@@ -646,7 +646,9 @@ Minecraft ne sait faire, et c'est la raison d'être du projet.
 Ce qui a été laissé de côté sciemment, chiffré : les **fluides** (4,5 % des
 blocs posés de Mosslorn, dont 6,2 M d'eau, aujourd'hui invisibles), les
 **biomes** décodés pour la vraie teinte, l'**occlusion ambiante**, `uvlock`,
-le **LOD** par octree de région, et l'occlusion HZB.
+le **LOD** par octree de région, et l'occlusion HZB. Et la découpe des lignes
+du calque dans le shader de sommets, si le calque dépasse quelques milliers
+de segments : aujourd'hui au processeur, ≈ 33 ns par segment et par image.
 
 > **Sortie.** 60 FPS à un rayon de 4 000 blocs. Sous terre, < 3 % des sections
 > résidentes effectivement dessinées.

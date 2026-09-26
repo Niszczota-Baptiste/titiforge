@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1046**, zéro échec |
+| Tests | **1054**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1046 tests, répartis par ce qu'ils PROUVENT :
+1054 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -72,7 +72,8 @@ cargo test --workspace
 | `tf-assets` pack/textures/rotation/jeu/codex_reel | 68 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 42 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
-| `tf-render` rendu | 30 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; et qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien |
+| `tf-render` rendu | 31 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien ; et qu'une arête qui passe DERRIÈRE la caméra reste une ligne, ni aplat ni rien, même derrière une arête que la découpe retire — et qu'un calque tout entier hors du champ ne coûte pas d'appel |
+| `tf-render` champ | 7 | la découpe des lignes au champ de la caméra : sur 2 000 segments tirés d'une graine, tout ce qui reste est DANS le champ et tout ce qui était visible est RESTÉ ; un segment qui traverse l'œil commence au plan proche, un segment qui file au loin s'arrête au plan lointain, un segment qui sort par le côté s'arrête au bord |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
@@ -949,6 +950,40 @@ La couleur de l'herbe rendue est **(82, 109, 48)** contre **(84, 109, 51)** dans
 le jeu. L'écart est celui entre multiplier en sRGB (ce que fait Minecraft) et
 multiplier en linéaire (ce que fait un pipeline correct).
 
+### Les lignes du calque se découpent AVANT le GPU
+
+```bash
+cargo test -p tf-render --test champ --test rendu
+```
+
+La caméra est presque toujours DANS la boîte d'une `.mca` — 512 blocs de côté,
+toute la hauteur du monde — et certaines de ses arêtes passent donc derrière
+elle. Le GPU les découpe au plan proche, exactement ; mais à 0,1 bloc de l'œil,
+l'extrémité découpée tombe des centaines de largeurs d'écran plus loin, et
+llvmpipe s'y perd. Mesuré sur la même arête, en ne tournant que le regard :
+
+| | pixels dessinés | sans la découpe |
+|---|---:|---:|
+| regard vers l'arête | 288 | **14 842** — un escalier de marches de 64 pixels |
+| regard un peu plus loin | 399 | **0** — la ligne disparaît |
+
+Le premier défaut se voyait (un aplat rouge au bord de la capture des
+composants) ; le second non, et la même capture avait perdu ses arêtes de
+`.mca` sans que personne le remarque. Les lignes se découpent maintenant aux
+six plans du tronc de vue, au processeur, en coordonnées homogènes, à chaque
+dessin (`Lignes::dans_le_champ`) : plus rien de ce qui part au GPU ne sort de
+l'écran, et la capture a retrouvé ses arêtes. **19 mutations, 19 tuées** —
+chacun des six plans, les deux bornes du paramètre, le rejet trivial, les
+extrémités, la transposée de la matrice, l'appel, le compte des sommets et
+celui des appels de dessin.
+
+Le coût est par image, au processeur : **≈ 33 ns par segment** (meilleur de 200,
+segments tirés au hasard — sur mille segments rejoués, le prédicteur de
+branchements apprend la séquence et le chiffre tombe à 11 ns, qui ne vaut
+rien). Les 228 segments d'une capture ordinaire : quelques microsecondes.
+Voir § 7 pour ce que ça devient avec des centaines d'instances de
+composants.
+
 ---
 
 ## 5. Les règles de transformation de blocs
@@ -1347,6 +1382,7 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Les fluides ne sont pas dessinés** | 4,5 % des blocs posés de Mosslorn, dont 6,2 M d'eau. Les fluides n'ont pas de modèle de bloc dans le format : il leur faut leur propre passe |
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
+| **La découpe des lignes se refait à chaque image, au processeur** | ≈ 33 ns par segment : 0,33 ms pour 10 000 segments — les contours de 833 instances de composants — et 3,5 ms pour 100 000, plus leur envoi au GPU. La faire dans le shader de sommets (un segment par instance, découpé là où il se dessine) la rendrait gratuite, au prix d'un second exemplaire de l'algorithme, en WGSL |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
 | **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
 | **L'éclairage et les points d'intérêt après une édition n'ont jamais été vus EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) et de relire leurs points d'intérêt (`Valid` à 0 dans `poi/`) : ce sont ses propres mécanismes de chargement, mais personne ne les a encore regardés dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |

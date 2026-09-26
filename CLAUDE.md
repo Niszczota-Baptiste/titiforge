@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1046 tests aujourd’hui)
+cargo test            # tous les crates (1054 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -385,7 +385,8 @@ crates/
   tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
                pilotage ✅ : le JOUEUR est le point fixe (pur, sans écran)
                viser ✅ : quel bloc, quelle FACE sous le curseur
-               quadrillage ✅ : un calque de lignes, chunks et .mca
+               quadrillage ✅ : un calque de lignes, chunks et .mca,
+               DÉCOUPÉ au champ de la caméra avant de partir au GPU
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
@@ -465,6 +466,7 @@ couvriront le même terrain.
 | Une opération à PLUSIEURS passes (ou une passe de plus à une opération) | chaque passe après la première se branche par `match … Err(e) => return Err(echouer(staging, &total, e))` (`edition.rs`) — jamais un `?` nu : ce que les passes d'avant ont écrit resterait hors de tout journal. Un test la fait échouer À CETTE PASSE (`MemorySource::tomber_en_panne`, avec son dossier) |
 | Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture. Côté coque : sa variante d'`ActionComposant` et son bras dans `Chantier::composant` (`moteur.rs`), sa `demande_*` dans `Etat`, son bouton dans la fiche (`interface::composants`) |
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
+| Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2242,3 +2244,18 @@ propres à ce dépôt.
   par la porte des BORNES, pas par celle du rechargement. Ce qui change se
   décrit en ZONES (une par chunk écrit, tirées des correctifs du journal),
   et une union ne sert qu'à borner chacune d'elles.
+- **Une ligne qui passe derrière la caméra, le GPU la découpe — et le
+  rastériseur ne s'en remet pas.** Le découpage au plan proche est exact,
+  mais à 0,1 bloc de l'œil l'extrémité découpée d'une arête de `.mca` tombe
+  des centaines de largeurs d'écran plus loin, et llvmpipe s'y perd de deux
+  façons, mesurées sur la même arête en ne tournant que le regard : un
+  escalier de marches de 64 pixels (14 842 pixels pour une ligne qui en fait
+  288 — l'aplat rouge au bord d'une capture), ou RIEN (0 pixel pour 399). Le
+  premier se voyait ; le second non, et la même capture avait perdu ses
+  arêtes de `.mca` sans que personne le remarque — une ligne absente ressemble
+  à rien du tout. Les lignes se découpent maintenant aux six plans, au
+  processeur, en coordonnées homogènes (`Lignes::dans_le_champ`), à chaque
+  dessin et pour les deux entrées de la scène : plus rien de ce qui part au
+  GPU ne sort de l'écran. Et le plan lointain ne se vérifie pas en profondeur
+  NORMALISÉE — hyperbolique, elle loge tout l'au-delà dans un millième : le
+  test mesure la profondeur dans le monde.

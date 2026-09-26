@@ -77,8 +77,14 @@ pub struct Scene {
 struct PasseLignes {
     pipeline: wgpu::RenderPipeline,
     liaison: wgpu::BindGroup,
+    /// Les lignes telles qu'on les a posées, dans le monde.
+    brutes: crate::Lignes,
+    /// Ce qui en reste dans le champ de la DERNIÈRE caméra — la place de
+    /// toutes les brutes, puisque découper n'en ajoute jamais.
     sommets: wgpu::Buffer,
-    nombre: u32,
+    /// Combien de sommets de `sommets` sont à dessiner. Une `Cell` : la
+    /// découpe se fait au dessin, qui prend `&self`.
+    nombre: std::cell::Cell<u32>,
 }
 
 /// Ce que la passe de modèles tient au GPU.
@@ -658,12 +664,28 @@ impl Scene {
         // dessine par-dessus. La contrepartie — une ligne lointaine peut
         // recouvrir ce qui est devant — est tenue par le rayon borné du
         // découpage, qui ne montre que le voisinage.
-        if let Some(l) = &self.lignes {
+        if let Some(l) = self.lignes.as_ref().filter(|l| l.nombre.get() > 0) {
             passe.set_pipeline(&l.pipeline);
             passe.set_bind_group(0, &l.liaison, &[]);
             passe.set_vertex_buffer(0, l.sommets.slice(..));
-            passe.draw(0..l.nombre, 0..1);
+            passe.draw(0..l.nombre.get(), 0..1);
         }
+    }
+
+    /// **Découpe les lignes au champ de la caméra qui va dessiner**, et envoie
+    /// ce qui en reste. Au dessin et pas à la pose : la caméra est celle-là,
+    /// et aucun appelant ne peut oublier de découper — ni découper avec une
+    /// autre. Voir `Lignes::dans_le_champ`.
+    fn decouper_lignes(&self, camera: &CameraGpu) {
+        let Some(l) = &self.lignes else {
+            return;
+        };
+        let dans = l.brutes.dans_le_champ(&camera.vue_projection);
+        if !dans.is_empty() {
+            self.queue
+                .write_buffer(&l.sommets, 0, bytemuck::cast_slice(&dans.sommets));
+        }
+        l.nombre.set(dans.sommets.len() as u32);
     }
 
     /// Dessine sur des vues QUELCONQUES — la surface d'une fenêtre, par
@@ -683,39 +705,60 @@ impl Scene {
         hauteur: u32,
         camera: &Camera,
     ) -> Compte {
-        let aspect = largeur as f32 / hauteur.max(1) as f32;
-        self.queue
-            .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera.gpu(aspect)));
         let mut enc = self
             .appareil
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scène"),
             });
-        self.passe(&mut enc, couleur, profondeur);
+        self.dessiner(&mut enc, couleur, profondeur, largeur, hauteur, camera);
         self.queue.submit([enc.finish()]);
         self.compte()
+    }
+
+    /// **Le dessin, pour les DEUX entrées** — la fenêtre et la capture.
+    /// Tout ce qui dépend de la caméra se prépare ici, une fois : l'uniforme,
+    /// et la découpe des lignes. Le recopier dans chaque entrée laisserait la
+    /// fenêtre sans découpe le jour où l'une des deux copies changerait, et
+    /// seule la capture est vérifiée au pixel.
+    fn dessiner(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        couleur: &wgpu::TextureView,
+        profondeur: &wgpu::TextureView,
+        largeur: u32,
+        hauteur: u32,
+        camera: &Camera,
+    ) {
+        let gpu = camera.gpu(largeur as f32 / hauteur.max(1) as f32);
+        self.queue
+            .write_buffer(&self.camera, 0, bytemuck::bytes_of(&gpu));
+        self.decouper_lignes(&gpu);
+        self.passe(enc, couleur, profondeur);
     }
 
     fn compte(&self) -> Compte {
         Compte {
             appels_de_dessin: 1
                 + u32::from(self.modeles.a_dessiner > 0)
-                + u32::from(self.lignes.is_some()),
+                + u32::from(self.lignes.as_ref().is_some_and(|l| l.nombre.get() > 0)),
             instances: self.nombre + self.modeles.a_dessiner,
         }
     }
 
     pub fn rendre(&self, cible: &Cible, camera: &Camera) -> (Vec<u8>, Compte) {
-        let aspect = cible.largeur as f32 / cible.hauteur as f32;
-        self.queue
-            .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera.gpu(aspect)));
-
         let mut enc = self
             .appareil
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scène"),
             });
-        self.passe(&mut enc, &cible.couleur, &cible.profondeur);
+        self.dessiner(
+            &mut enc,
+            &cible.couleur,
+            &cible.profondeur,
+            cible.largeur,
+            cible.hauteur,
+            camera,
+        );
         cible.copier(&mut enc);
         self.queue.submit([enc.finish()]);
 
@@ -1148,10 +1191,12 @@ impl PasseLignes {
             }],
         });
 
+        // La place de TOUTES les lignes : la découpe au dessin n'en ajoute
+        // jamais, elle en retire ou en raccourcit.
         let sommets = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("quadrillage"),
             contents: bytemuck::cast_slice(&lignes.sommets),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1212,8 +1257,9 @@ impl PasseLignes {
         PasseLignes {
             pipeline,
             liaison,
+            brutes: lignes.clone(),
             sommets,
-            nombre: lignes.sommets.len() as u32,
+            nombre: std::cell::Cell::new(lignes.sommets.len() as u32),
         }
     }
 }

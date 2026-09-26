@@ -1181,6 +1181,29 @@ fn un_quadrillage_vide_ne_coute_pas_un_appel() {
     scene.poser_lignes(&l);
     let (_, avec) = scene.rendre(&cible, &camera);
     assert_eq!(avec.appels_de_dessin, 2, "un appel pour le calque");
+
+    // Des lignes posées, mais toutes DERRIÈRE l'œil : la découpe n'en laisse
+    // rien, et rien ne se paie.
+    let d: [f32; 3] = std::array::from_fn(|k| 2.0 * camera.oeil[k] - camera.cible[k]);
+    let mut derriere = tf_render::Lignes::new();
+    derriere.contour(
+        [d[0] - 1.0, d[1] - 1.0, d[2] - 1.0],
+        [d[0] + 1.0, d[1] + 1.0, d[2] + 1.0],
+        tf_render::rgba(255, 255, 255, 255),
+    );
+    scene.poser_lignes(&derriere);
+    let (_, hors_champ) = scene.rendre(&cible, &camera);
+    assert_eq!(
+        hors_champ.appels_de_dessin, 1,
+        "rien dans le champ, rien à payer"
+    );
+    // Et le calque revient dès que la caméra le revoit : la découpe est
+    // refaite à chaque dessin, pas figée au premier.
+    let (_, retourne) = scene.rendre(&cible, &Camera { cible: d, ..camera });
+    assert_eq!(
+        retourne.appels_de_dessin, 2,
+        "la caméra retournée le revoit"
+    );
 }
 
 /// **Une DEMI-teinte ne se délave pas** — et c'est le seul test qui puisse le
@@ -1228,6 +1251,89 @@ fn la_couleur_demandee_est_la_couleur_dessinee() {
         let (image, _) = rendre_avec_lignes(&app, &l);
         let n = pixels_de(&image, [r, v, b], 12);
         assert!(n > 50, "couleur ({r}, {v}, {b}) : {n} pixels seulement");
+    }
+}
+
+/// Des lignes seules, vues d'une caméra QUELCONQUE.
+fn rendre_lignes_vues_de(
+    app: &Appareil,
+    lignes: &tf_render::Lignes,
+    camera: &Camera,
+    cote: u32,
+) -> Vec<u8> {
+    let t = table();
+    let mut g = Grille::new();
+    g.poser(0, 0, section(0, |_, _, _| AIR));
+    let chantier = g.mailler(&t);
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let atlas = atlas_blanc(app);
+    let mut scene = Scene::nouvelle(app, &arene, &atlas);
+    scene.poser_lignes(lignes);
+    let cible = Cible::nouvelle(app, cote, cote);
+    scene.rendre(&cible, camera).0
+}
+
+/// **Une arête qui passe DERRIÈRE la caméra reste une ligne** — ni un aplat,
+/// ni rien.
+///
+/// Le cas de la vraie application : la caméra est DANS la boîte d'une `.mca`
+/// (512 blocs de côté, la hauteur du monde), et une arête de cette boîte part
+/// devant elle pour finir derrière. Le GPU découpe au plan proche — mais à
+/// 0,1 bloc de l'œil, l'extrémité découpée tombe des centaines de largeurs
+/// d'écran plus loin, et llvmpipe s'y perd de DEUX façons, mesurées sur la
+/// même arête en ne changeant que la direction du regard :
+///
+/// - elle se dessine en escalier de marches de 64 pixels — 14 842 pixels
+///   rouges là où la ligne en fait 288 : l'aplat vu au bord d'une capture ;
+/// - elle disparaît — 0 pixel là où elle en fait 399.
+///
+/// Un seul segment visible, donc au plus un pixel par colonne ou par ligne
+/// sur l'axe principal : moins de deux fois le côté de l'image. Et plus d'un
+/// quart du côté, parce que la moitié visible traverse une bonne part de
+/// l'image.
+///
+/// Une arête ENTIÈRE derrière la caméra la précède, comme dans la boîte d'une
+/// `.mca` : la découpe la retire, tout ce qui suit remonte d'un cran dans le
+/// tampon, et ce qui reste au fond — l'arête d'origine, NON découpée — ne doit
+/// pas se dessiner.
+#[test]
+fn une_arete_qui_passe_derriere_la_camera_reste_une_ligne() {
+    let Some(app) = app() else { return };
+    const ROUGE: [u8; 3] = [255, 0, 0];
+    let cote = 512;
+    let mut l = tf_render::Lignes::new();
+    l.segment(
+        [0.0, -64.0, 0.0],
+        [512.0, -64.0, 0.0],
+        tf_render::rgba(255, 0, 0, 255),
+    );
+    l.segment(
+        [0.0, -64.0, 0.0],
+        [0.0, -64.0, 512.0],
+        tf_render::rgba(255, 0, 0, 255),
+    );
+    for (cible, defaut) in [
+        ([30.0, -64.0, 120.0], "l'escalier"),
+        ([0.0, -64.0, 200.0], "la disparition"),
+    ] {
+        let camera = Camera {
+            oeil: [30.0, -40.0, 20.0],
+            cible,
+            fov: 50f32.to_radians(),
+            proche: 0.1,
+            loin: 16.0 * 512.0 + 512.0,
+        };
+        let image = rendre_lignes_vues_de(&app, &l, &camera, cote);
+        let n = pixels_de(&image, ROUGE, 12);
+        assert!(
+            n > cote / 4,
+            "{defaut} : {n} pixels rouges — la partie visible doit se dessiner"
+        );
+        assert!(
+            n < 2 * cote,
+            "{defaut} : {n} pixels rouges pour UN segment sur une image de \
+             {cote} — ce n'est plus une ligne"
+        );
     }
 }
 
