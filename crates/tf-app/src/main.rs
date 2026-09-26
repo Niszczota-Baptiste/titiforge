@@ -36,6 +36,7 @@ fn main() {
     let mut capture: Option<String> = None;
     let mut montrer_accueil = false;
     let mut bloc_tape: Option<String> = None;
+    let mut outil: Option<tf_app::etat::Outil> = None;
     let mut mode = tf_render::controles::Mode::Edition;
     let (mut larg, mut haut) = (1400u32, 900u32);
     // **La distance d'affichage, en CHUNKS.** Un disque de rayon 8 porte 201
@@ -62,6 +63,16 @@ fn main() {
             // La capture montre le SÉLECTEUR DE BLOCS ouvert sur ce texte,
             // dans le champ du bloc en main.
             "--bloc" => bloc_tape = args.next(),
+            // La capture montre la fiche de cet OUTIL de Conception.
+            "--outil" => {
+                let nom = args.next().unwrap_or_default();
+                outil = tf_app::etat::Outil::TOUS
+                    .into_iter()
+                    .find(|o| o.nom().eq_ignore_ascii_case(&nom));
+                if outil.is_none() {
+                    eprintln!("outil inconnu : « {nom} »");
+                }
+            }
             "--zone" => {
                 let v: Vec<i32> = args
                     .next()
@@ -111,7 +122,8 @@ fn main() {
                  usage : titiforge [<assets>] [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
                  \x20       [--rayon <cellules>]\n\
                  \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\
-                 \x20                 [--accueil] [--bloc <texte>] [--mode conception]\n\n\
+                 \x20                 [--accueil] [--bloc <texte>] [--mode conception]\n\
+                 \x20                 [--outil composant]\n\n\
                  <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
                  Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
                  demander de connaître nos formats."
@@ -183,14 +195,35 @@ fn main() {
                 ouvert.monde.etats(),
                 ouvert.monde.nb_etats(),
             );
+            // Les composants du monde, tels que le fil les publierait.
+            let composants = match ouvert.staging.as_deref() {
+                Some(st) => match tf_ops::composant::Projet::lire(st) {
+                    Ok((_, p)) => tf_app::moteur::Composants {
+                        projet: std::sync::Arc::new(p),
+                        erreur: None,
+                        version: 1,
+                    },
+                    Err(e) => tf_app::moteur::Composants {
+                        erreur: Some(e.to_string()),
+                        version: 1,
+                        ..Default::default()
+                    },
+                },
+                None => tf_app::moteur::Composants::default(),
+            };
             capturer(
                 &ouvert.monde,
                 &png,
                 (larg, haut),
                 mode,
                 ouvert.editable(),
-                accueil,
-                (nuancier, bloc_tape),
+                AMontrer {
+                    accueil,
+                    nuancier,
+                    bloc: bloc_tape,
+                    outil,
+                    composants,
+                },
             )
         }
         None => {
@@ -234,6 +267,16 @@ fn ouvrir_seance(dir: &str) -> (tf_world::Seance, tf_world::Journal, tf_world::R
     }
 }
 
+/// Ce que la capture montre en plus de la scène : l'accueil, le sélecteur de
+/// blocs ouvert sur un texte, la fiche d'un outil, les composants du monde.
+struct AMontrer {
+    accueil: Option<tf_app::accueil::Accueil>,
+    nuancier: tf_app::nuancier::Nuancier,
+    bloc: Option<String>,
+    outil: Option<tf_app::etat::Outil>,
+    composants: tf_app::moteur::Composants,
+}
+
 /// Une image de l'interface, sans écran.
 fn capturer(
     m: &scene::Monde,
@@ -241,9 +284,15 @@ fn capturer(
     (larg, haut): (u32, u32),
     mode: tf_render::controles::Mode,
     editable: bool,
-    accueil: Option<tf_app::accueil::Accueil>,
-    (nuancier, bloc): (tf_app::nuancier::Nuancier, Option<String>),
+    montrer: AMontrer,
 ) {
+    let AMontrer {
+        accueil,
+        nuancier,
+        bloc,
+        outil,
+        composants,
+    } = montrer;
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
         Err(e) => {
@@ -288,6 +337,13 @@ fn capturer(
         etat.accueil.ouvert = true;
     }
     etat.nuancier = nuancier;
+    if let Some(o) = outil {
+        etat.mode = tf_render::controles::Mode::Conception;
+        etat.outil = o;
+    }
+    // Le premier composant du monde est choisi : ses instances s'éclairent.
+    etat.composant_choisi = composants.projet.definitions.first().map(|d| d.id);
+    etat.suivre_composants(composants);
     let focus = bloc.map(|t| {
         etat.mode = tf_render::controles::Mode::Conception;
         etat.outil = tf_app::etat::Outil::Poser;
@@ -321,11 +377,17 @@ fn capturer(
     lignes
         .sommets
         .extend(scene::contour_selection(&etat.selection).sommets);
-    println!(
-        "calque : {quadrillage} segment(s) de découpage, {} de sélection",
-        lignes.len() - quadrillage
+    let selection = lignes.len() - quadrillage;
+    let visee = etat.instance_visee().map(|i| i.id);
+    lignes.sommets.extend(
+        scene::contours_composants(&etat.composants.projet, etat.composant_choisi, visee).sommets,
     );
-    if lignes.len() > quadrillage {
+    println!(
+        "calque : {quadrillage} segment(s) de découpage, {selection} de sélection, {} \
+         d'instances de composants",
+        lignes.len() - quadrillage - selection
+    );
+    if selection > 0 {
         let v = &lignes.sommets[quadrillage * 2];
         println!("  premier sommet de sélection : {:?}", v.position);
         println!("  oeil : {:?} · cible : {:?}", camera.oeil, camera.cible);

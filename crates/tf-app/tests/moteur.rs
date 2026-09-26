@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tf_app::moteur::{Carnet, Commande, Moteur, Reponse};
+use tf_app::moteur::{ActionComposant, Carnet, Commande, Moteur, Reponse};
 use tf_bench::{region, Terrain};
 use tf_ops::catalogue::{Params, Valeur};
 use tf_ops::Forme;
@@ -465,4 +465,216 @@ fn les_zones_ne_gardent_que_les_blocs_de_la_dimension_regardee() {
             BlockPos::new(63, 2047, 31)
         )]
     );
+}
+
+// ── les composants ──────────────────────────────────────────────────────────
+
+fn une_case(p: BlockPos, bloc: &str) -> Commande {
+    let mut params = Params::new();
+    params.poser("bloc", Valeur::texte(bloc));
+    Commande::Appliquer {
+        op: "poser",
+        params,
+        sel: BBox::single(p),
+        forme: Forme::Boite,
+        compter: false,
+        seed: 0,
+    }
+}
+
+fn faire(m: &mut Moteur, c: Commande) -> Reponse {
+    assert!(m.envoyer(c));
+    attendre(m)
+}
+
+/// La palette de la première définition, pour voir ce qu'elle porte.
+fn palette(m: &Moteur) -> Vec<String> {
+    m.composants().projet.definitions[0].contenu.palette.clone()
+}
+
+/// **Les composants passent par le fil, et le document PUBLIÉ suit chaque
+/// pas** — créer, poser, mettre à jour, annuler, refaire, détacher, renommer.
+/// L'interface ne décode rien : elle lit ce que le fil a publié, et une
+/// annulation doit s'y voir comme une action.
+#[test]
+fn les_composants_passent_par_le_fil_et_leur_document_suit() {
+    let (mut m, _) = moteur();
+    let c = m.composants();
+    assert!(c.projet.definitions.is_empty() && c.erreur.is_none());
+    let p0 = BlockPos::new(2, -60, 2);
+    assert!(!faire(&mut m, une_case(p0, "minecraft:glass")).echoue());
+
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::Creer {
+            sel: BBox::single(p0),
+            nom: " vitre ".into(),
+        }),
+    );
+    assert!(matches!(r, Reponse::Fait { .. }), "{r:?}");
+    assert!(r.texte().contains("Créer « vitre »"), "{}", r.texte());
+    assert!(r.texte().contains("1 × 1 × 1 · 1 bloc(s)"), "{}", r.texte());
+    let c = m.composants();
+    let (def, proto) = (c.projet.definitions[0].id, c.projet.instances[0].id);
+    assert_eq!(c.projet.definitions[0].nom, "vitre");
+
+    let q = BlockPos::new(30, -60, 30);
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::Poser {
+            definition: def,
+            coin: q,
+            transfo: None,
+        }),
+    );
+    assert!(r.texte().contains("Poser « vitre »"), "{}", r.texte());
+    assert!(r.texte().contains("instance n° 3"), "{}", r.texte());
+    assert!(
+        !r.zones().is_empty(),
+        "une pose écrit : la coque doit remailler"
+    );
+    assert_eq!(m.composants().projet.instances.len(), 2);
+
+    // Le prototype retouché, puis la mise à jour.
+    assert!(!faire(&mut m, une_case(p0, "minecraft:gold_block")).echoue());
+    let v = m.composants().version;
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::MettreAJour { instance: proto }),
+    );
+    for attendu in [
+        "Mettre à jour « vitre »",
+        "1 instance(s) réestampée(s)",
+        "0 case(s) entrée(s)",
+    ] {
+        assert!(r.texte().contains(attendu), "{}", r.texte());
+    }
+    assert!(m.composants().version > v);
+    assert_eq!(palette(&m), vec!["minecraft:gold_block".to_string()]);
+
+    // UN Ctrl+Z : le document publié revient aussi.
+    let r = faire(&mut m, Commande::Annuler);
+    assert!(matches!(r, Reponse::Defait { .. }), "{r:?}");
+    assert!(!r.zones().is_empty());
+    assert_eq!(palette(&m), vec!["minecraft:glass".to_string()]);
+    let r = faire(&mut m, Commande::Refaire);
+    assert!(matches!(r, Reponse::Refait { .. }), "{r:?}");
+    assert_eq!(palette(&m), vec!["minecraft:gold_block".to_string()]);
+
+    let posee = m.composants().projet.instances[1].id;
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::Detacher { instance: posee }),
+    );
+    assert!(matches!(r, Reponse::Fait { .. }), "{r:?}");
+    assert!(
+        r.texte().contains("Détacher l'instance n° 3"),
+        "{}",
+        r.texte()
+    );
+    assert_eq!(m.composants().projet.instances.len(), 1);
+    // Le document ne change pas : sa version non plus, même quand on défait
+    // une opération qui n'y touchait pas.
+    let v = m.composants().version;
+    assert!(!faire(&mut m, une_case(p0, "minecraft:stone")).echoue());
+    assert!(matches!(
+        faire(&mut m, Commande::Annuler),
+        Reponse::Defait { .. }
+    ));
+    assert_eq!(m.composants().version, v);
+
+    let renommer = |nom: &str| {
+        Commande::Composant(ActionComposant::Renommer {
+            definition: def,
+            nom: nom.into(),
+        })
+    };
+    let r = faire(&mut m, renommer("hublot"));
+    assert!(
+        r.texte().contains("« vitre » en « hublot »"),
+        "{}",
+        r.texte()
+    );
+    assert_eq!(m.composants().projet.definitions[0].nom, "hublot");
+    // Un nom inchangé : rien, et surtout pas une entrée qui ne défait rien.
+    assert!(matches!(
+        faire(&mut m, renommer("hublot")),
+        Reponse::Rien(_)
+    ));
+
+    // Une action refusée revient en échec, et le fil continue.
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::MettreAJour { instance: 999 }),
+    );
+    assert!(r.echoue() && r.texte().contains("999"), "{}", r.texte());
+    let r = faire(
+        &mut m,
+        Commande::Composant(ActionComposant::Creer {
+            sel: BBox::single(BlockPos::new(2, 100, 2)),
+            nom: "rien".into(),
+        }),
+    );
+    assert!(
+        r.echoue() && r.texte().contains("aucun bloc"),
+        "{}",
+        r.texte()
+    );
+    assert!(!faire(&mut m, une_case(p0, "minecraft:dirt")).echoue());
+}
+
+/// Un monde qui porte DÉJÀ des composants les montre dès le lancement — et un
+/// document illisible est dit, et jamais réécrit : le premier geste suivant
+/// l'aurait remplacé par ce qu'on en a compris, c'est-à-dire rien.
+#[test]
+fn le_document_est_publie_des_le_lancement_et_jamais_ecrase_s_il_est_illisible() {
+    use tf_world::source::RegionSink;
+    let monde = |doc: &[u8]| {
+        let src = MemorySource::new();
+        src.put_region(SURFACE, Folder::Region, ZERO, region(&Terrain::petite()));
+        src.write_meta("projet", doc).unwrap();
+        let st = Arc::new(Staging::new(src, MemorySource::new()));
+        (
+            Moteur::lancer(st.clone(), SURFACE, Journal::new(), None),
+            st,
+        )
+    };
+
+    let (mut m, _) = moteur();
+    faire(
+        &mut m,
+        une_case(BlockPos::new(2, -60, 2), "minecraft:glass"),
+    );
+    faire(
+        &mut m,
+        Commande::Composant(ActionComposant::Creer {
+            sel: BBox::single(BlockPos::new(2, -60, 2)),
+            nom: "vitre".into(),
+        }),
+    );
+    let doc = m.composants().projet.encoder();
+    let (m2, _) = monde(&doc);
+    let c = m2.composants();
+    assert_eq!(
+        c.projet.definitions.len(),
+        1,
+        "le document du monde n'est pas publié"
+    );
+    assert_eq!(c.version, 1);
+
+    let (mut m3, st) = monde(b"TFP1 abime");
+    assert!(m3.composants().erreur.is_some());
+    let r = faire(
+        &mut m3,
+        Commande::Composant(ActionComposant::Creer {
+            sel: BBox::single(BlockPos::new(2, -60, 2)),
+            nom: "vitre".into(),
+        }),
+    );
+    assert!(
+        r.echoue() && r.texte().contains("rien n'a été écrit"),
+        "{}",
+        r.texte()
+    );
+    assert_eq!(st.lire_fichier("projet").unwrap(), b"TFP1 abime");
 }

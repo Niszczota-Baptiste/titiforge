@@ -13,7 +13,7 @@ n'ont pas :
 |---|---|---|
 | **WorldEdit** | les opérations de masse : sélectionner, remplir, remplacer, tourner, copier. Le geste « change dix millions de blocs d'un coup » | ✅ le socle ET les déplacements ; reste à les brancher à des boutons |
 | **MCEdit** | l'éditeur de MONDE : ouvrir une save, voler dedans, voir ce qu'on édite, échanger des schématiques | la coque s'ouvre sur les saves de la machine, là où l'on joue, VOLE et SÉLECTIONNE, propose les blocs qu'on cherche (visé, récents, monde, pack) et sa séance survit à la fermeture ; les formats d'échange manquent |
-| **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | l'inférence est là et DIT à quoi elle tient, le pousser-tirer aussi ; le MOTEUR des composants est là — une définition, N instances, la mise à jour partout en un Ctrl+Z —, leur interface reste |
+| **SketchUp** | la **construction** : pousser-tirer une face, l'inférence qui accroche au bon endroit, et des **composants** qu'on modifie une fois pour les mettre à jour partout | l'inférence est là et DIT à quoi elle tient, le pousser-tirer aussi ; les COMPOSANTS aussi — une définition, N instances, la mise à jour partout en un Ctrl+Z, et leur outil dans la coque |
 
 Les deux premiers sont des outils d'ÉDITION : on prend ce qui existe et on le
 transforme. SketchUp est un outil de CONCEPTION : on part de rien et on
@@ -624,7 +624,7 @@ Le deuxième tiers de SketchUp, et le seul qui touche à l'architecture. Voir
 | | |
 |---|---|
 | **Groupes** | une sélection nommée qu'on déplace et duplique d'un bloc |
-| **Composants** | une définition + N instances. Modifier la définition met à jour les N — ✅ moteur (`tf-ops/src/composant.rs`), interface à venir |
+| **Composants** | une définition + N instances. Modifier la définition met à jour les N — ✅ moteur (`tf-ops/src/composant.rs`) et outil « Composant » dans la coque |
 | **Réévaluation** | une entrée de journal qu'on rejoue depuis ses paramètres, pas depuis ses octets — la couture est posée (`Genre::Operation::params`), reste à écrire ce qu'on y met |
 | **Identité stable** | l'instance n° 37 reste la 37 — ✅ un identifiant n'est jamais redonné, même après un détachement |
 | **Invalidation par emprise** | rejouer 12..N sur la seule portée de 12 |
@@ -638,7 +638,8 @@ Minecraft ne sait faire, et c'est la raison d'être du projet.
 > les vingt se mettre à jour — et que `Ctrl+Z` défasse la modification, pas
 > les vingt poses. ✅ côté moteur, écrit comme un test
 > (`vingt_instances_suivent_leur_definition_et_un_ctrl_z_defait_la_modification`) ;
-> reste à le faire à la souris.
+> l'outil est dans la coque — reste à l'essayer à la souris sur une vraie
+> machine.
 
 ## Phase 8 — Finitions du rendu
 

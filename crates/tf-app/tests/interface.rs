@@ -332,3 +332,51 @@ fn entree_complete_sans_remplacer_ce_qui_est_deja_un_bloc() {
         "sans proposition, le texte reste — et le champ dit qu'il est inconnu"
     );
 }
+
+/// **La fiche de l'outil Composant se dessine** — avec un document, une
+/// définition choisie et une instance sous le réticule, et avec un document
+/// illisible. Sans fenêtre : c'est l'interface entière qui passe.
+#[test]
+fn la_fiche_des_composants_se_dessine() {
+    use tf_app::etat::{Etat, Outil};
+    use tf_ops::composant::{Contenu, Definition, Instance, Projet};
+    use tf_world::coords::BlockPos;
+    let p = Projet {
+        prochain: 3,
+        definitions: vec![Definition {
+            id: 1,
+            nom: "fenêtre".into(),
+            contenu: Contenu {
+                taille: [3, 2, 1],
+                palette: vec!["minecraft:glass".into()],
+                cases: vec![0; 6],
+                entites: Vec::new(),
+            },
+        }],
+        instances: vec![Instance {
+            id: 2,
+            definition: 1,
+            dim: tf_world::source::Dimension::Overworld,
+            coin: BlockPos::new(0, 0, 0),
+            transfo: Some(tf_blocks::Transfo::Rot90),
+        }],
+    };
+    for erreur in [None, Some("document abîmé".to_string())] {
+        let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+        e.mode = tf_render::controles::Mode::Conception;
+        e.outil = Outil::Composant;
+        e.editable = true;
+        e.composant_choisi = Some(1);
+        e.reticule.case = Some(BlockPos::new(0, 0, 1));
+        e.suivre_composants(tf_app::moteur::Composants {
+            projet: std::sync::Arc::new(p.clone()),
+            erreur,
+            version: 1,
+        });
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            tf_app::interface::dessiner(ctx, &mut e);
+        });
+        assert!(e.demande.is_none(), "dessiner n'envoie rien tout seul");
+    }
+}

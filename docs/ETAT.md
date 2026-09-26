@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1040**, zéro échec |
+| Tests | **1046**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1040 tests, répartis par ce qu'ils PROUVENT :
+1046 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -78,13 +78,13 @@ cargo test --workspace
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 38 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; et que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main |
+| `tf-app` etat | 40 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main ; et l'outil COMPOSANT : il pose la définition choisie au point de pose dans l'orientation choisie, le clic droit la tourne d'un quart de tour, l'instance visée vient du document PUBLIÉ, et une définition disparue — ou un autre monde — fait oublier ce qu'on avait choisi |
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) ; et qu'un `//move` de deux cents blocs en diagonale ne remaille — et ne DÉCOMPRESSE — que ses deux bouts, 11 sections au lieu de 196, annulation comprise, pour la même scène qu'un rechargement complet |
-| `tf-app` moteur | 13 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit |
+| `tf-app` moteur | 15 + 1 unitaire | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit ; et que les COMPOSANTS passent par le fil — créer, poser, mettre à jour, annuler, refaire, détacher, renommer — avec leur document PUBLIÉ qui suit chaque pas, annulation comprise, publié dès le lancement, jamais réécrit s'il est illisible, et dont la version ne bouge pas quand il ne change pas |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
-| `tf-app` interface | 10 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; et, en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin |
+| `tf-app` interface | 11 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin ; et que la fiche des composants se dessine, document lisible ou non, sans rien envoyer d'elle-même |
 | `tf-app` regles | 6 | qu'une rotation lancée DEPUIS LA COQUE tourne aussi les états — un pack écrit à la volée, des règles dérivées de lui, le fil moteur, la copie de travail relue ; que sans règles la case bouge, l'orientation non, et que la réponse le DIT ; qu'un bloc que le pack ne sait pas tourner se signale autrement ; qu'un `//set` n'attend pas une dérivation en cours quand une rotation, si ; et qu'une dérivation MORTE vaut « aucune règle » au lieu d'un moteur qui attend pour toujours — chaque scénario dans un fil témoin à attente bornée |
 | `tf-app` nuancier | 9 | le SÉLECTEUR DE BLOCS : le visé, puis les récents, puis le monde — pas le pack entier — quand rien n'est tapé ; la correspondance classe avant l'origine, et chaque mot d'une recherche compte ; les états que le JEU a écrits passent avant le nom nu ; la syntaxe du jeu tapée à la main trouve ses états ; un ordre TOTAL, le même quel que soit l'ordre d'entrée ; des récents canoniques, sans air ni doublon, bornés, qui survivent au fichier ; et un bloc inconnu du pack ET du monde qui se signale |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
@@ -860,6 +860,27 @@ son test :
   test fait échouer l'écriture à l'endroit voulu avec une copie de travail
   « capricieuse ».
 
+**Dans la coque**, l'outil « Composant » de la Conception : la fiche de
+l'inspecteur liste les définitions du monde, crée depuis la sélection,
+renomme, choisit l'orientation de la pose ; le clic gauche pose la définition
+choisie à la case visée, le droit la tourne d'un quart de tour ; l'instance
+sous le réticule se met à jour ou se détache d'un bouton. Les instances ont
+leur CONTOUR dans la vue — plus vif pour celles de la définition choisie,
+blanc pour celle qu'on vise —, parce que leurs blocs ne sont que des blocs.
+
+```bash
+cargo run --release -p tf-app -- <assets> --monde <save> --outil composant --capture composants.png
+```
+
+Le document ne se décode pas dans l'interface : le fil le PUBLIE (un `Arc`
+et une version) au lancement et après chaque action, annulation et
+rétablissement compris, et la coque ne recopie que ce qui a changé. Le
+document entier plutôt qu'un résumé : un résumé aurait eu sa propre règle
+pour « l'instance sous le réticule », et deux règles pour la même chose
+finissent par diverger. 15 mutations sur ce chemin, toutes tuées (trois au
+second tour) — et une vérification retirée en route, parce qu'elle doublait
+exactement le refus d'un document illisible que `faire` porte déjà.
+
 65 mutations, toutes tuées — trois au second tour, et chacune pour une
 raison qui valait d'être sue. L'une acceptait un indice de case ÉGAL à la
 longueur de la palette : le test forgeait un 99, jamais le cas limite.
@@ -1336,7 +1357,8 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
-| **Les composants n'ont pas encore d'interface** | le moteur est là (`tf-ops/src/composant.rs`, 22 tests) ; la coque ne sait ni en créer, ni en poser, ni les dessiner |
+| **L'outil Composant n'a été vu que par des captures** | le moteur, le fil, l'état et la fiche sont testés, et la capture montre la fiche et les contours ; un clic sur ses boutons, lui, ne l'est pas — il vit derrière winit, comme les autres boutons de l'inspecteur |
+| **Une instance se pose par son COIN, sans aperçu** | son coin de plus petites coordonnées tombe sur la case visée ; rien ne montre où elle ira avant le clic. Ctrl+Z la retire |
 | **Pas de saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste reste à écrire (phase 7) |
 | **Changer de monde EN CLIQUANT n'a été vu par personne** | la séance, la scène (contre une ouverture directe), le moteur et l'accueil sont testés chacun ; la fenêtre, elle, n'a tourné que sous Xvfb, où l'on ne peut pas cliquer. La jonction de la coque (`ouvrir_monde`) attend un essai sur une vraie machine |
 | **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Un dialogue natif demanderait une dépendance de plus |

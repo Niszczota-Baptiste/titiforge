@@ -25,11 +25,13 @@
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 
 use tf_anvil::Interner;
+use tf_blocks::Transfo;
 use tf_ops::catalogue::{construire, Params};
+use tf_ops::composant::{self, Projet};
 use tf_ops::edition::{rejouer, Sens};
 use tf_ops::executer::{executer, Options};
 use tf_ops::Forme;
-use tf_world::coords::BBox;
+use tf_world::coords::{BBox, BlockPos};
 use tf_world::journal::{Journal, Record};
 use tf_world::source::{Dimension, Folder, RegionSource};
 use tf_world::staging::{CommitError, RegionStore, Staging};
@@ -113,8 +115,61 @@ pub enum Commande {
     Ecrire {
         confirme_sans_verrou: bool,
     },
+    /// Une action sur les COMPOSANTS du monde. Une entrée de journal, comme
+    /// une opération : un Ctrl+Z défait la mise à jour d'une définition ET ses
+    /// réestampages.
+    Composant(ActionComposant),
     /// Range le chantier et termine le fil.
     Arreter,
+}
+
+/// Ce qu'on fait aux composants. Les identifiants sont ceux du document que
+/// le fil PUBLIE (`Moteur::composants`) : l'interface ne les invente pas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionComposant {
+    /// La sélection devient un composant — et sa première instance, sur
+    /// place. Le monde n'est pas touché.
+    Creer {
+        sel: BBox,
+        nom: String,
+    },
+    /// Une instance de plus, son coin de plus petites coordonnées en `coin`.
+    Poser {
+        definition: u64,
+        coin: BlockPos,
+        transfo: Option<Transfo>,
+    },
+    /// La définition prend ce que CETTE instance porte, et toutes les autres
+    /// suivent — dans toutes les dimensions.
+    MettreAJour {
+        instance: u64,
+    },
+    /// L'instance garde ses blocs et ne suit plus sa définition.
+    Detacher {
+        instance: u64,
+    },
+    Renommer {
+        definition: u64,
+        nom: String,
+    },
+}
+
+/// **Le document des composants, tel que le fil l'a lu** — publié après chaque
+/// action qui a pu le changer, et au lancement.
+///
+/// Décodé par le FIL : la coque ne décode rien, elle prend un `Arc` sous un
+/// verrou tenu le temps d'un clone. Le document entier plutôt qu'un résumé :
+/// un résumé aurait sa propre règle pour « l'instance sous le réticule », et
+/// deux règles pour la même chose finissent par diverger.
+#[derive(Debug, Clone, Default)]
+pub struct Composants {
+    pub projet: std::sync::Arc<Projet>,
+    /// Le document ne se lit pas : ce qu'il faut en dire. Les actions sur
+    /// les composants sont alors refusées par le moteur — rien n'est écrit
+    /// par-dessus.
+    pub erreur: Option<String>,
+    /// Change à chaque publication : la coque ne recopie que ce qui a changé.
+    pub version: u64,
 }
 
 /// Ce qu'il répond. **Une réponse par commande, toujours** : sans ça, le
@@ -210,6 +265,8 @@ pub struct Moteur {
     /// apporte ses propres assets, donc ses propres règles, sans relancer le
     /// moteur.
     regles: std::sync::Arc<std::sync::Mutex<crate::regles::Regles>>,
+    /// Le document des composants, publié par le fil.
+    composants: std::sync::Arc<std::sync::Mutex<Composants>>,
 }
 
 impl Moteur {
@@ -266,6 +323,11 @@ impl Moteur {
         let (reponses, depuis) = channel::<Reponse>();
         let regles = std::sync::Arc::new(std::sync::Mutex::new(crate::regles::Regles::absentes()));
         let regles_du_fil = regles.clone();
+        // Le document des composants est publié AVANT que le fil ne démarre :
+        // la première image le montre déjà, et rien n'a à l'attendre.
+        let (doc_vu, lu) = lire_document(staging.as_ref());
+        let composants = std::sync::Arc::new(std::sync::Mutex::new(Composants::depuis(lu, 1)));
+        let composants_du_fil = composants.clone();
         let fil = std::thread::Builder::new()
             .name("moteur".into())
             .spawn(move || {
@@ -277,6 +339,8 @@ impl Moteur {
                     monde,
                     carnet,
                     regles: regles_du_fil,
+                    composants: composants_du_fil,
+                    doc_vu,
                 };
                 while let Ok(cmd) = commandes.recv() {
                     if matches!(cmd, Commande::Arreter) {
@@ -301,7 +365,17 @@ impl Moteur {
             vivant: true,
             fil: Some(fil),
             regles,
+            composants,
         }
+    }
+
+    /// **Le document des composants**, tel que le fil l'a publié en dernier.
+    /// Ne bloque pas : le verrou n'est tenu que le temps d'un clone d'`Arc`.
+    pub fn composants(&self) -> Composants {
+        self.composants
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// **Donne au fil les règles de rotation des états.** Sans elles, une
@@ -403,9 +477,99 @@ struct Chantier<S: RegionSource, O: RegionStore> {
     /// fermeture — une copie jetable, ou un test.
     carnet: Option<Box<dyn Carnet>>,
     regles: std::sync::Arc<std::sync::Mutex<crate::regles::Regles>>,
+    /// Le document des composants publié pour la coque.
+    composants: std::sync::Arc<std::sync::Mutex<Composants>>,
+    /// Ses octets à la dernière publication : on ne décode que ce qui a
+    /// changé. `None` : illisible la dernière fois, à relire.
+    doc_vu: Option<Vec<u8>>,
+}
+
+impl Composants {
+    fn depuis(lu: Result<Projet, String>, version: u64) -> Composants {
+        match lu {
+            Ok(p) => Composants {
+                projet: std::sync::Arc::new(p),
+                erreur: None,
+                version,
+            },
+            Err(e) => Composants {
+                projet: std::sync::Arc::default(),
+                erreur: Some(e),
+                version,
+            },
+        }
+    }
+
+    /// Le nom d'une définition, pour les messages.
+    fn nom(&self, definition: u64) -> String {
+        self.projet
+            .definition(definition)
+            .map(|d| d.nom.clone())
+            .unwrap_or_else(|| format!("composant n° {definition}"))
+    }
+}
+
+/// Le document des composants de la copie de travail : ses octets, et ce
+/// qu'ils disent. Des octets `None` quand on n'a pas pu les lire du tout.
+fn lire_document<S: RegionSource, O: RegionStore>(
+    st: &Staging<S, O>,
+) -> (Option<Vec<u8>>, Result<Projet, String>) {
+    match st.lire_fichier(composant::FICHIER) {
+        Ok(b) => {
+            let lu = Projet::decoder(&b);
+            (Some(b), lu)
+        }
+        Err(tf_world::source::SourceError::NotFound) => (Some(Vec::new()), Ok(Projet::default())),
+        Err(e) => (
+            None,
+            Err(format!("document des composants illisible : {e}")),
+        ),
+    }
 }
 
 impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
+    /// **Publie le document des composants** s'il a changé depuis la dernière
+    /// fois — après une action sur eux, une annulation, un rétablissement.
+    fn publier(&mut self) {
+        let (octets, lu) = lire_document(self.staging.as_ref());
+        if octets.is_some() && octets == self.doc_vu {
+            return;
+        }
+        self.doc_vu = octets;
+        if let Ok(mut g) = self.composants.lock() {
+            let version = g.version + 1;
+            *g = Composants::depuis(lu, version);
+        }
+    }
+
+    /// L'étiquette d'une action sur les composants — son entrée de journal
+    /// et ce que la réponse dit.
+    fn label_composant(&self, a: &ActionComposant) -> String {
+        let doc = self
+            .composants
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        match a {
+            ActionComposant::Creer { nom, .. } => format!("Créer « {} »", nom.trim()),
+            ActionComposant::Poser { definition, .. } => {
+                format!("Poser « {} »", doc.nom(*definition))
+            }
+            ActionComposant::MettreAJour { instance } => match doc.projet.instance(*instance) {
+                Some(i) => format!("Mettre à jour « {} »", doc.nom(i.definition)),
+                None => format!("Mettre à jour depuis l'instance n° {instance}"),
+            },
+            ActionComposant::Detacher { instance } => format!("Détacher l'instance n° {instance}"),
+            ActionComposant::Renommer { definition, nom } => {
+                format!(
+                    "Renommer « {} » en « {} »",
+                    doc.nom(*definition),
+                    nom.trim()
+                )
+            }
+        }
+    }
+
     fn traiter(&mut self, c: Commande) -> Reponse {
         let quoi = match &c {
             Commande::Appliquer { op, .. } => tf_ops::catalogue::descripteur(op)
@@ -414,12 +578,22 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             Commande::Annuler => "Annuler".into(),
             Commande::Refaire => "Refaire".into(),
             Commande::Ecrire { .. } => "Écrire dans la save".into(),
+            Commande::Composant(a) => self.label_composant(a),
             Commande::Arreter => "Arrêter".into(),
         };
+        // Ce qui a pu changer le document des composants : une action sur
+        // eux, et le journal qu'on rejoue — il porte leurs correctifs aussi.
+        let doc = matches!(
+            c,
+            Commande::Composant(_) | Commande::Annuler | Commande::Refaire
+        );
         if let Some(k) = &mut self.carnet {
             k.commencer(&quoi);
         }
         let r = self.executer(c);
+        if doc {
+            self.publier();
+        }
         if let Some(k) = &mut self.carnet {
             k.terminer();
         }
@@ -457,7 +631,86 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             Commande::Ecrire {
                 confirme_sans_verrou,
             } => self.ecrire(confirme_sans_verrou),
+            Commande::Composant(a) => self.composant(a),
             Commande::Arreter => Reponse::Rien("arrêt".into()),
+        }
+    }
+
+    /// **Une action sur les composants**, par la seule porte qui en fait UNE
+    /// entrée de journal (`composant::faire`).
+    fn composant(&mut self, a: ActionComposant) -> Reponse {
+        let label = self.label_composant(&a);
+        // Un document illisible n'est pas réécrit : `faire` le relit, et le
+        // refuse avant la moindre écriture.
+        // La règle est demandée, pas supposée — comme pour une opération.
+        let regles = self.regles.lock().map(|r| r.clone()).unwrap_or_default();
+        let demandee = std::cell::Cell::new(false);
+        let regle = |cle: &str, t: Transfo| {
+            demandee.set(true);
+            regles.table().and_then(|table| table.transformer(cle, t))
+        };
+        let staging = self.staging.as_ref();
+        let dim = self.dim.clone();
+        let interner = &mut self.interner;
+        let fait = composant::faire(
+            staging,
+            &mut self.journal,
+            &label,
+            horodatage(),
+            |p| match &a {
+                ActionComposant::Creer { sel, nom } => {
+                    composant::creer(staging, &dim, sel, nom, p, interner)
+                }
+                ActionComposant::Poser {
+                    definition,
+                    coin,
+                    transfo,
+                } => composant::poser(
+                    staging,
+                    &dim,
+                    p,
+                    *definition,
+                    *coin,
+                    *transfo,
+                    interner,
+                    Some(&regle),
+                ),
+                ActionComposant::MettreAJour { instance } => {
+                    composant::mettre_a_jour(staging, p, *instance, interner, Some(&regle))
+                }
+                ActionComposant::Detacher { instance } => composant::detacher(p, *instance),
+                ActionComposant::Renommer { definition, nom } => {
+                    composant::renommer(p, *definition, nom)
+                }
+            },
+        );
+        let (action, records) = match fait {
+            Ok(x) => x,
+            Err(e) => return Reponse::Echec(format!("{label} : {e}")),
+        };
+        let Some(records) = records else {
+            return Reponse::Rien(label);
+        };
+        let mut resume = resume_composant(&a, &action);
+        if demandee.get() && regles.table().is_none() {
+            resume.push_str(
+                " · orientations NON réécrites : les règles de rotation du pack \
+                 manquent — les escaliers, portes et échelles regardent toujours \
+                 du même côté",
+            );
+        } else if action.intacts > 0 {
+            resume.push_str(&format!(
+                " · {} état(s) que le pack ne sait pas tourner, laissés tels quels",
+                action.intacts
+            ));
+        }
+        resume.push_str(&self.noter(&records));
+        let r = &action.rapport;
+        Reponse::Fait {
+            op: label,
+            resume,
+            bornes: r.bornes,
+            zones: zones_de(r.patches.iter().map(|p| &p.cible), r.bornes, &self.dim),
         }
     }
 
@@ -667,6 +920,49 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
     }
 }
 
+/// Ce qu'une action sur les composants a fait, en une phrase.
+fn resume_composant(a: &ActionComposant, act: &composant::Action) -> String {
+    let def = act.projet.definition(act.definition);
+    let mut s = match a {
+        ActionComposant::Creer { .. } => {
+            let (t, m) = def.map_or(([0; 3], 0), |d| (d.contenu.taille, d.contenu.matiere()));
+            format!(
+                "composant n° {} · {} × {} × {} · {m} bloc(s)",
+                act.definition, t[0], t[1], t[2]
+            )
+        }
+        ActionComposant::Poser { .. } => format!(
+            "instance n° {} · {} chunk(s)",
+            act.instance.unwrap_or(0),
+            act.rapport.patches.len()
+        ),
+        ActionComposant::MettreAJour { .. } => {
+            let mut s = format!("{} instance(s) réestampée(s)", act.reestampees);
+            if act.ailleurs > 0 {
+                s.push_str(&format!(" dont {} dans une autre dimension", act.ailleurs));
+            }
+            // Ce qui entre dans le composant se DIT : une instance posée dans
+            // un mur en prend le mur, et rien d'autre ne le montrerait.
+            s.push_str(&format!(
+                " · {} case(s) entrée(s) dans le composant, {} sortie(s)",
+                act.gagnees, act.perdues
+            ));
+            s
+        }
+        ActionComposant::Detacher { instance } => {
+            format!("l'instance n° {instance} garde ses blocs et ne suit plus sa définition")
+        }
+        ActionComposant::Renommer { .. } => "l'identité ne change pas".into(),
+    };
+    if act.entites_laissees > 0 {
+        s.push_str(&format!(
+            " · {} entité(s) laissée(s) hors du composant (cadres, bêtes…)",
+            act.entites_laissees
+        ));
+    }
+    s
+}
+
 /// **Les zones à remailler**, une par chunk de BLOCS écrit dans la dimension
 /// `dim` : la colonne du chunk, bornée par ce que l'opération a écrit.
 ///
@@ -722,4 +1018,29 @@ fn horodatage() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ce que le compte rendu d'une mise à jour DIT, et qu'aucun monde de test
+    /// à une seule dimension ne ferait dire : les instances d'ailleurs, et les
+    /// entités laissées hors du composant.
+    #[test]
+    fn le_compte_rendu_dit_l_ailleurs_et_les_entites_laissees() {
+        let a = ActionComposant::MettreAJour { instance: 2 };
+        let mut act = composant::Action {
+            reestampees: 3,
+            ..Default::default()
+        };
+        let texte = resume_composant(&a, &act);
+        assert!(!texte.contains("autre dimension"), "{texte}");
+        assert!(!texte.contains("entité"), "{texte}");
+        act.ailleurs = 1;
+        act.entites_laissees = 2;
+        let texte = resume_composant(&a, &act);
+        assert!(texte.contains("dont 1 dans une autre dimension"), "{texte}");
+        assert!(texte.contains("2 entité(s) laissée(s)"), "{texte}");
+    }
 }

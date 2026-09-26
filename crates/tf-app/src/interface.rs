@@ -273,6 +273,10 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
             ui.selectable_value(&mut e.outil, o, o.nom());
         }
     });
+    if e.outil == Outil::Composant {
+        composants(ui, e);
+        return;
+    }
     if e.outil != Outil::Tirer {
         ui.label(
             RichText::new(
@@ -338,6 +342,145 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
         }
     }
     bloc_en_main(ui, e);
+}
+
+/// **La fiche de l'outil Composant** : les définitions du monde, la création
+/// depuis la sélection, l'orientation de la pose, et l'instance visée.
+///
+/// Rien n'est décidé ici : chaque bouton envoie ce que l'état construit
+/// (`Etat::demande_*`), et les identifiants viennent du document que le fil
+/// a publié.
+fn composants(ui: &mut Ui, e: &mut Etat) {
+    use crate::etat::{nom_orientation, ORIENTATIONS};
+    ui.add_space(6.0);
+    ui.label(RichText::new("COMPOSANTS").strong().color(GRIS));
+    if let Some(err) = &e.composants.erreur {
+        ui.colored_label(ROUGE, format!("{err} — rien n'y sera écrit"));
+    }
+    let actif = e.editable && !e.occupe && e.composants.erreur.is_none();
+
+    // ── créer, renommer
+    ui.horizontal(|ui| {
+        ui.label("nom");
+        ui.add(
+            egui::TextEdit::singleline(&mut e.nom_composant)
+                .desired_width(150.0)
+                .hint_text("fenêtre, porte…"),
+        );
+    });
+    let creer = e.demande_creer_composant();
+    let renommer = e.demande_renommer();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                actif && creer.is_some(),
+                egui::Button::new("Créer depuis la sélection"),
+            )
+            .on_hover_text(
+                "La sélection devient un composant, et sa première instance sur \
+                 place. L'air n'en fait pas partie : une instance y est \
+                 transparente, et le terrain autour reste.",
+            )
+            .clicked()
+        {
+            e.demande = creer;
+        }
+        if ui
+            .add_enabled(
+                actif && renommer.is_some(),
+                egui::Button::new("Renommer le choisi"),
+            )
+            .clicked()
+        {
+            e.demande = renommer;
+        }
+    });
+    if e.selection.boite().is_none() {
+        ui.label(
+            RichText::new("créer demande une sélection — en Édition, gauche et droit")
+                .small()
+                .color(GRIS),
+        );
+    }
+
+    // ── les définitions du monde
+    ui.add_space(4.0);
+    let projet = std::sync::Arc::clone(&e.composants.projet);
+    if projet.definitions.is_empty() {
+        ui.label(RichText::new("aucun composant dans ce monde").color(GRIS));
+    }
+    for d in &projet.definitions {
+        let n = projet.instances_de(d.id).count();
+        let [x, y, z] = d.contenu.taille;
+        let texte = format!("{} — {x} × {y} × {z} · {n} instance(s)", d.nom);
+        if ui
+            .selectable_label(e.composant_choisi == Some(d.id), texte)
+            .clicked()
+        {
+            e.composant_choisi = Some(d.id);
+        }
+    }
+
+    // ── la pose
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("la pose met le coin de plus petites coordonnées sur la case visée")
+            .small()
+            .color(GRIS),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for t in ORIENTATIONS {
+            ui.selectable_value(&mut e.orientation, t, nom_orientation(t));
+        }
+    });
+
+    // ── l'instance sous le réticule
+    ui.add_space(6.0);
+    match e.instance_visee().cloned() {
+        None => {
+            ui.label(RichText::new("sous le réticule : aucune instance").color(GRIS));
+        }
+        Some(i) => {
+            let nom = projet
+                .definition(i.definition)
+                .map_or("?", |d| d.nom.as_str());
+            ui.label(format!(
+                "sous le réticule : instance n° {} de « {nom} » ({})",
+                i.id,
+                nom_orientation(i.transfo)
+            ));
+            let maj = e.demande_mettre_a_jour();
+            let detacher = e.demande_detacher();
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(actif, egui::Button::new(format!("Mettre à jour « {nom} »")))
+                    .on_hover_text(
+                        "La définition prend TOUT ce que la boîte de cette instance \
+                         contient — un mur autour y entre, et le compte rendu le \
+                         dit. Toutes les autres instances suivent ; un Ctrl+Z défait \
+                         le tout.",
+                    )
+                    .clicked()
+                {
+                    e.demande = maj;
+                }
+                if ui
+                    .add_enabled(actif, egui::Button::new("Détacher"))
+                    .on_hover_text("Elle garde ses blocs et ne suit plus sa définition.")
+                    .clicked()
+                {
+                    e.demande = detacher;
+                }
+            });
+        }
+    }
+    ui.label(
+        RichText::new(
+            "une retouche faite dans une instance survit, sauf là où la définition change",
+        )
+        .small()
+        .color(GRIS),
+    );
 }
 
 /// L'identifiant du champ « bloc en main » : un seul dans l'interface, et

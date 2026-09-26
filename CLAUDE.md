@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1040 tests aujourd’hui)
+cargo test            # tous les crates (1046 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -376,7 +376,7 @@ crates/
                COMPOSANTS ✅ (`composant.rs`) : une définition, N instances,
                la mise à jour PARTOUT (toutes les dimensions) en une entrée
                de journal ; n'écrit que ce qui CHANGE entre deux définitions,
-               rogné ; tout ou rien (`defaire_rapport`). Interface à venir
+               rogné ; tout ou rien (`defaire_rapport`)
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
@@ -423,7 +423,10 @@ crates/
                · SÉLECTEUR DE BLOCS ✅ (`nuancier.rs`) : chaque champ de
                  bloc propose le visé, les récents, ce que le monde porte
                  sous l'état EXACT, puis le pack ; pipette (Alt + clic)
-               · interface des composants et saisie chiffrée à écrire.
+               · COMPOSANTS ✅ : l'outil « Composant » (poser, tourner,
+                 mettre à jour, détacher), leurs contours dans la vue, et le
+                 document PUBLIÉ par le fil — l'interface ne décode rien
+               · saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -460,7 +463,7 @@ couvriront le même terrain.
 | Un endroit où l'on tape un BLOC | `interface::champ_de_bloc` — jamais un `TextEdit` nu : c'est lui qui propose (`Nuancier`) et qui dit tout de suite ce qui ne se lit pas. Côté moteur rien à faire : un paramètre `Saisie::Bloc` passe par `cle_de_bloc` dans le normaliseur |
 | Une source de propositions de blocs | une `Origine` dans `nuancier.rs` — son RANG dans l'enum est sa préférence à correspondance égale — et sa place dans la chaîne de `chercher` |
 | Une opération à PLUSIEURS passes (ou une passe de plus à une opération) | chaque passe après la première se branche par `match … Err(e) => return Err(echouer(staging, &total, e))` (`edition.rs`) — jamais un `?` nu : ce que les passes d'avant ont écrit resterait hors de tout journal. Un test la fait échouer À CETTE PASSE (`MemorySource::tomber_en_panne`, avec son dossier) |
-| Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture |
+| Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture. Côté coque : sa variante d'`ActionComposant` et son bras dans `Chantier::composant` (`moteur.rs`), sa `demande_*` dans `Etat`, son bouton dans la fiche (`interface::composants`) |
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 

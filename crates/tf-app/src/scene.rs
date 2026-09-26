@@ -1887,6 +1887,38 @@ pub fn quadrillage(q: &Quadrillage, centre: BlockPos, y: (i32, i32)) -> Lignes {
     l
 }
 
+/// **Les boîtes des instances de composants** de la dimension regardée :
+/// violettes, plus vives pour celles de la définition choisie — ce qu'une
+/// mise à jour réestamperait —, blanche pour celle que le réticule désigne.
+///
+/// Une instance ne se voit pas autrement : ses blocs sont des blocs. Sans son
+/// contour, rien ne dit qu'une fenêtre est l'une des vingt et pas une copie
+/// détachée.
+pub fn contours_composants(
+    p: &tf_ops::composant::Projet,
+    choisie: Option<u64>,
+    visee: Option<u64>,
+) -> Lignes {
+    let mut l = Lignes::new();
+    for i in p
+        .instances
+        .iter()
+        .filter(|i| i.dim == crate::etat::DIMENSION_VUE)
+    {
+        let Some(b) = p.boite(i) else { continue };
+        let (min, max) = b.coins();
+        let couleur = if Some(i.id) == visee {
+            tf_render::rgba(255, 255, 255, 255)
+        } else if Some(i.definition) == choisie {
+            tf_render::rgba(205, 150, 255, 255)
+        } else {
+            tf_render::rgba(150, 110, 220, 150)
+        };
+        l.contour(min, max, couleur);
+    }
+    l
+}
+
 /// Le contour de la sélection, en vert.
 pub fn contour_selection(sel: &tf_world::Selection) -> Lignes {
     let mut l = Lignes::new();

@@ -990,3 +990,146 @@ fn la_pipette_prend_le_bloc_vise_sous_son_etat_exact() {
     assert!(!e.pipette());
     assert_eq!(e.bloc_tirage, "minecraft:oak_stairs[facing=east,half=top]");
 }
+
+// ── l'outil Composant ───────────────────────────────────────────────────────
+
+/// Un document d'un composant 3 × 1 × 1 et d'une instance posée sur la case
+/// visée par la caméra devant le mur.
+fn document(case: BlockPos) -> tf_app::moteur::Composants {
+    use tf_ops::composant::{Contenu, Definition, Instance, Projet};
+    let p = Projet {
+        prochain: 3,
+        definitions: vec![Definition {
+            id: 1,
+            nom: "banc".into(),
+            contenu: Contenu {
+                taille: [3, 1, 1],
+                palette: vec!["minecraft:oak_planks".into()],
+                cases: vec![0; 3],
+                entites: Vec::new(),
+            },
+        }],
+        instances: vec![Instance {
+            id: 2,
+            definition: 1,
+            dim: tf_world::source::Dimension::Overworld,
+            coin: BlockPos::new(case.x - 1, case.y, case.z),
+            transfo: None,
+        }],
+    };
+    tf_app::moteur::Composants {
+        projet: std::sync::Arc::new(p),
+        erreur: None,
+        version: 1,
+    }
+}
+
+/// **L'outil Composant** pose la définition CHOISIE au point de pose, dans
+/// l'orientation choisie ; le clic droit la tourne d'un quart de tour, et
+/// quatre quarts reviennent au départ. Sans définition choisie, rien ne part
+/// — et on le dit.
+#[test]
+fn l_outil_composant_pose_le_choisi_et_le_droit_le_tourne() {
+    use tf_app::moteur::{ActionComposant, Commande};
+    use tf_blocks::Transfo;
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    assert!(e.poser_un_composant().is_none());
+    assert!(e.message.contains("aucun composant"), "{}", e.message);
+
+    e.composant_choisi = Some(1);
+    let coin = e.point_de_pose().unwrap();
+    let pose = |e: &mut tf_app::etat::Etat| match e.poser_un_composant() {
+        Some(Commande::Composant(ActionComposant::Poser {
+            definition,
+            coin: c,
+            transfo,
+        })) => {
+            assert_eq!((definition, c), (1, coin));
+            transfo
+        }
+        autre => panic!("{autre:?}"),
+    };
+    assert_eq!(pose(&mut e), None);
+    for attendu in [
+        Some(Transfo::Rot90),
+        Some(Transfo::Rot180),
+        Some(Transfo::Rot270),
+        None,
+    ] {
+        e.tourner_le_composant();
+        assert_eq!(pose(&mut e), attendu);
+    }
+    // Un miroir choisi dans l'inspecteur : le clic droit repart de « tel
+    // quel », il ne compose pas au jugé.
+    e.orientation = Some(Transfo::MiroirX);
+    e.tourner_le_composant();
+    assert_eq!(e.orientation, None);
+}
+
+/// **L'instance sous le réticule vient du document PUBLIÉ** — et les actions
+/// qui la visent portent son identifiant. Une définition choisie qui
+/// disparaît du document est oubliée, et changer de monde oublie tout : des
+/// identifiants d'un document ne désignent rien dans un autre.
+#[test]
+fn l_instance_visee_vient_du_document_publie() {
+    use tf_app::moteur::{ActionComposant, Commande};
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let case = e.reticule.case.unwrap();
+    assert!(e.instance_visee().is_none());
+    e.suivre_composants(document(case));
+    assert_eq!(e.instance_visee().map(|i| i.id), Some(2));
+    assert!(matches!(
+        e.demande_mettre_a_jour(),
+        Some(Commande::Composant(ActionComposant::MettreAJour {
+            instance: 2
+        }))
+    ));
+    assert!(matches!(
+        e.demande_detacher(),
+        Some(Commande::Composant(ActionComposant::Detacher {
+            instance: 2
+        }))
+    ));
+
+    // Sans nom tapé, un composant s'appelle « composant » — jamais rien.
+    assert!(matches!(
+        e.demande_creer_composant(),
+        Some(Commande::Composant(ActionComposant::Creer { ref nom, .. })) if nom == "composant"
+    ));
+    // Créer et renommer prennent le nom tapé, sans ses espaces.
+    e.nom_composant = "  table ".into();
+    assert!(matches!(
+        e.demande_creer_composant(),
+        Some(Commande::Composant(ActionComposant::Creer { ref nom, .. })) if nom == "table"
+    ));
+    assert!(e.demande_renommer().is_none(), "aucun composant choisi");
+    e.composant_choisi = Some(1);
+    let tape = std::mem::replace(&mut e.nom_composant, "   ".into());
+    assert!(e.demande_renommer().is_none(), "un nom vide ne renomme pas");
+    e.nom_composant = tape;
+    assert!(matches!(
+        e.demande_renommer(),
+        Some(Commande::Composant(ActionComposant::Renommer { definition: 1, ref nom })) if nom == "table"
+    ));
+
+    // La même version n'est pas recopiée ; une version neuve sans la
+    // définition choisie la fait oublier.
+    let mut vide = tf_app::moteur::Composants {
+        version: 1,
+        ..Default::default()
+    };
+    e.suivre_composants(vide.clone());
+    assert_eq!(e.composant_choisi, Some(1), "même version : rien ne change");
+    vide.version = 2;
+    e.suivre_composants(vide);
+    assert_eq!(e.composant_choisi, None);
+    assert!(e.instance_visee().is_none());
+
+    e.suivre_composants(document(case));
+    e.composant_choisi = Some(1);
+    e.recadrer([0.0; 3], [32.0; 3], 1.0);
+    assert_eq!(e.composant_choisi, None);
+    assert!(e.composants.projet.instances.is_empty());
+}

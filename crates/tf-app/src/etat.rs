@@ -229,16 +229,20 @@ pub enum Outil {
     Poser,
     /// Casser le bloc visé.
     Casser,
+    /// Poser le COMPOSANT choisi, et tenir ses instances : les mettre à jour,
+    /// les détacher.
+    Composant,
 }
 
 impl Outil {
-    pub const TOUS: [Outil; 3] = [Outil::Tirer, Outil::Poser, Outil::Casser];
+    pub const TOUS: [Outil; 4] = [Outil::Tirer, Outil::Poser, Outil::Casser, Outil::Composant];
 
     pub const fn nom(self) -> &'static str {
         match self {
             Outil::Tirer => "Tirer une face",
             Outil::Poser => "Poser",
             Outil::Casser => "Casser",
+            Outil::Composant => "Composant",
         }
     }
 
@@ -250,7 +254,38 @@ impl Outil {
             Outil::Tirer => "gauche : tirer une FACE · droit : abandonner",
             Outil::Poser => "gauche : poser · droit : casser",
             Outil::Casser => "gauche : casser · droit : poser",
+            Outil::Composant => {
+                "gauche : poser le composant choisi · droit : le tourner d'un quart de tour"
+            }
         }
+    }
+}
+
+/// La dimension que la scène montre. La coque ne dessine que la surface
+/// aujourd'hui (`scene.rs`) ; une instance d'une autre dimension n'est donc
+/// jamais « sous le réticule ».
+pub const DIMENSION_VUE: tf_world::source::Dimension = tf_world::source::Dimension::Overworld;
+
+/// Les orientations d'une pose, dans l'ordre où l'inspecteur les propose.
+pub const ORIENTATIONS: [Option<tf_blocks::Transfo>; 6] = [
+    None,
+    Some(tf_blocks::Transfo::Rot90),
+    Some(tf_blocks::Transfo::Rot180),
+    Some(tf_blocks::Transfo::Rot270),
+    Some(tf_blocks::Transfo::MiroirX),
+    Some(tf_blocks::Transfo::MiroirZ),
+];
+
+/// Ce qu'une orientation veut dire, en mots.
+pub const fn nom_orientation(t: Option<tf_blocks::Transfo>) -> &'static str {
+    use tf_blocks::Transfo::*;
+    match t {
+        None => "telle quelle",
+        Some(Rot90) => "quart de tour",
+        Some(Rot180) => "demi-tour",
+        Some(Rot270) => "trois quarts de tour",
+        Some(MiroirX) => "miroir est-ouest",
+        Some(MiroirZ) => "miroir nord-sud",
     }
 }
 
@@ -349,6 +384,16 @@ pub struct Etat {
     /// L'état de la case visée, tel que la scène le tient : ce que la pipette
     /// prend, et la première proposition de chaque champ de bloc.
     pub bloc_vise: Option<String>,
+    /// Le document des composants, tel que le fil l'a PUBLIÉ. L'interface ne
+    /// le lit jamais du disque.
+    pub composants: crate::moteur::Composants,
+    /// La définition que l'outil « Composant » pose.
+    pub composant_choisi: Option<u64>,
+    /// Le nom tapé pour créer un composant, ou renommer le choisi.
+    pub nom_composant: String,
+    /// L'orientation de la prochaine pose. Un choix de l'utilisateur : elle
+    /// survit au changement de monde.
+    pub orientation: Option<tf_blocks::Transfo>,
 }
 
 /// La face que `viser` rend, dite dans le vocabulaire de la sélection.
@@ -391,6 +436,10 @@ impl Etat {
             accueil: crate::accueil::Accueil::default(),
             nuancier: crate::nuancier::Nuancier::default(),
             bloc_vise: None,
+            composants: crate::moteur::Composants::default(),
+            composant_choisi: None,
+            nom_composant: String::new(),
+            orientation: None,
         }
     }
 
@@ -410,6 +459,109 @@ impl Etat {
         self.demande = None;
         self.jeu_ferme = false;
         self.message.clear();
+        // Les identifiants de composants sont ceux d'un DOCUMENT : ceux de
+        // l'ancien monde désigneraient, dans le nouveau, autre chose ou rien.
+        self.composants = crate::moteur::Composants::default();
+        self.composant_choisi = None;
+    }
+
+    /// **Le fil a publié le document des composants.** Une définition choisie
+    /// qui n'y est plus est oubliée : on ne pose pas un fantôme. Rien n'est
+    /// recopié quand la version n'a pas bougé.
+    pub fn suivre_composants(&mut self, c: crate::moteur::Composants) {
+        if c.version == self.composants.version {
+            return;
+        }
+        if let Some(d) = self.composant_choisi {
+            if c.projet.definition(d).is_none() {
+                self.composant_choisi = None;
+            }
+        }
+        self.composants = c;
+    }
+
+    /// L'instance sous le réticule — la plus récente si plusieurs s'y
+    /// chevauchent, selon la règle du document lui-même.
+    pub fn instance_visee(&self) -> Option<&tf_ops::composant::Instance> {
+        let c = self.reticule.case?;
+        self.composants.projet.instance_en(&DIMENSION_VUE, c)
+    }
+
+    /// La sélection devient un composant.
+    pub fn demande_creer_composant(&self) -> Option<crate::moteur::Commande> {
+        let sel = self.selection.boite()?;
+        let nom = self.nom_composant.trim();
+        Some(crate::moteur::Commande::Composant(
+            crate::moteur::ActionComposant::Creer {
+                sel,
+                nom: if nom.is_empty() { "composant" } else { nom }.into(),
+            },
+        ))
+    }
+
+    /// **Pose le composant choisi** là où l'inférence le désigne — son coin de
+    /// plus petites coordonnées sur la case de pose, dans l'orientation
+    /// choisie.
+    pub fn poser_un_composant(&mut self) -> Option<crate::moteur::Commande> {
+        let Some(definition) = self.composant_choisi else {
+            self.message = "aucun composant choisi — l'inspecteur les liste".into();
+            return None;
+        };
+        let coin = self.point_de_pose()?;
+        Some(crate::moteur::Commande::Composant(
+            crate::moteur::ActionComposant::Poser {
+                definition,
+                coin,
+                transfo: self.orientation,
+            },
+        ))
+    }
+
+    /// Le clic droit de l'outil « Composant » : un quart de tour de plus. Un
+    /// miroir choisi dans l'inspecteur repart de « tel quel ».
+    pub fn tourner_le_composant(&mut self) {
+        use tf_blocks::Transfo::*;
+        self.orientation = match self.orientation {
+            None => Some(Rot90),
+            Some(Rot90) => Some(Rot180),
+            Some(Rot180) => Some(Rot270),
+            _ => None,
+        };
+        self.message = format!(
+            "orientation du composant : {}",
+            nom_orientation(self.orientation)
+        );
+    }
+
+    /// La définition de l'instance visée prend ce que CETTE instance porte.
+    pub fn demande_mettre_a_jour(&self) -> Option<crate::moteur::Commande> {
+        let i = self.instance_visee()?;
+        Some(crate::moteur::Commande::Composant(
+            crate::moteur::ActionComposant::MettreAJour { instance: i.id },
+        ))
+    }
+
+    /// L'instance visée ne suit plus sa définition.
+    pub fn demande_detacher(&self) -> Option<crate::moteur::Commande> {
+        let i = self.instance_visee()?;
+        Some(crate::moteur::Commande::Composant(
+            crate::moteur::ActionComposant::Detacher { instance: i.id },
+        ))
+    }
+
+    /// Le composant choisi prend le nom tapé.
+    pub fn demande_renommer(&self) -> Option<crate::moteur::Commande> {
+        let definition = self.composant_choisi?;
+        let nom = self.nom_composant.trim();
+        if nom.is_empty() {
+            return None;
+        }
+        Some(crate::moteur::Commande::Composant(
+            crate::moteur::ActionComposant::Renommer {
+                definition,
+                nom: nom.into(),
+            },
+        ))
     }
 
     /// **Nomme la case visée** : l'état que la scène y tient. La coque le

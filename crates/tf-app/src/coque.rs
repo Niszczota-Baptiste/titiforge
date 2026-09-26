@@ -348,6 +348,12 @@ impl ApplicationHandler for Coque {
                                 | (Outil::Casser, MouseButton::Left) => {
                                     g.etat.demande = g.etat.casser_un_bloc();
                                 }
+                                (Outil::Composant, MouseButton::Left) => {
+                                    g.etat.demande = g.etat.poser_un_composant();
+                                }
+                                (Outil::Composant, MouseButton::Right) => {
+                                    g.etat.tourner_le_composant();
+                                }
                                 _ => {}
                             }
                         }
@@ -410,6 +416,11 @@ impl ApplicationHandler for Coque {
                 // blocs.
                 self.remailler
                     .extend(ramasser(&mut self.moteur, &mut g.etat));
+                // Le document des composants, tel que le fil l'a publié —
+                // recopié seulement quand sa version a bougé.
+                if let Some(m) = &self.moteur {
+                    g.etat.suivre_composants(m.composants());
+                }
                 g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
                 g.etat.editable = self.ouvert.editable();
                 // La table d'états de la scène ne fait que grandir entre deux
@@ -853,6 +864,11 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
     lignes
         .sommets
         .extend(scene::contour_selection(&g.etat.selection).sommets);
+    let visee = g.etat.instance_visee().map(|i| i.id);
+    lignes.sommets.extend(
+        scene::contours_composants(&g.etat.composants.projet, g.etat.composant_choisi, visee)
+            .sommets,
+    );
     g.scene.poser_lignes(&lignes);
 
     g.scene.dessiner_sur(
