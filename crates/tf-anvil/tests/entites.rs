@@ -363,3 +363,30 @@ fn une_edition_d_entites_ne_chevauche_pas_celles_des_sections() {
     let mut edits: Vec<Edit> = vec![ed];
     assert!(splice(&brut, &mut edits).is_ok());
 }
+
+/// **Une block entity faite de ses seuls octets** — la forme des fichiers
+/// d'échange — se situe comme dans un chunk ; sans ses trois coordonnées elle
+/// n'est pas une entité qu'on sait poser, et des octets en trop après le
+/// compound la font refuser : ils partiraient dans la save sans que personne
+/// sache ce qu'ils sont.
+#[test]
+fn une_block_entity_se_fait_de_ses_seuls_octets() {
+    let mut w = tf_nbt::Writer::new();
+    w.field(tf_nbt::tag::STRING, "id")
+        .raw_str("minecraft:chest");
+    w.field(tf_nbt::tag::INT, "x").i32_payload(4);
+    w.field(tf_nbt::tag::INT, "y").i32_payload(-7);
+    w.field(tf_nbt::tag::INT, "z").i32_payload(9);
+    w.end();
+    let nbt = w.into_bytes();
+    let e = Entite::depuis_compound(nbt.clone()).unwrap().unwrap();
+    assert_eq!(e.case, [4, -7, 9]);
+    assert_eq!(e.octets(), nbt, "rien n'est ré-encodé");
+    let mut plus = nbt.clone();
+    plus.push(0);
+    assert!(Entite::depuis_compound(plus).is_err());
+    let mut sans_z = tf_nbt::Writer::new();
+    sans_z.field(tf_nbt::tag::INT, "x").i32_payload(1);
+    sans_z.end();
+    assert_eq!(Entite::depuis_compound(sans_z.into_bytes()), Ok(None));
+}

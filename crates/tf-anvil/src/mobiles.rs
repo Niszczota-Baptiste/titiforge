@@ -220,18 +220,26 @@ pub fn balayer_liste(c: &mut Cur) -> R<Vec<MobileRepere>> {
     // La longueur vient du FICHIER : on ne la réserve pas telle quelle.
     let mut out = Vec::with_capacity(n.min(256));
     for _ in 0..n {
-        let start = c.pos();
-        let mut corps = vec![Corps::default()];
-        lire_corps(c, &mut corps, 0, 0)?;
-        out.push(MobileRepere {
-            span: Span {
-                start,
-                end: c.pos(),
-            },
-            corps,
-        });
+        out.push(balayer_compound(c)?);
     }
     Ok(out)
+}
+
+/// Balaye UNE entité, le curseur étant sur la charge de son compound.
+///
+/// La même lecture que dans un chunk : c'est ce qui fait qu'une entité venue
+/// d'un fichier d'échange se situe exactement comme une entité de la save.
+pub fn balayer_compound(c: &mut Cur) -> R<MobileRepere> {
+    let start = c.pos();
+    let mut corps = vec![Corps::default()];
+    lire_corps(c, &mut corps, 0, 0)?;
+    Ok(MobileRepere {
+        span: Span {
+            start,
+            end: c.pos(),
+        },
+        corps,
+    })
 }
 
 /// Les triplets d'entiers qu'une entité peut porter à plat, et ce qu'ils
@@ -539,6 +547,21 @@ impl Mobile {
             corps,
             data_version,
         }
+    }
+
+    /// Une entité faite de ses seuls octets — la charge d'un compound, `TAG_End`
+    /// compris — comme en portent les fichiers d'échange. Ses champs situés
+    /// sont relevés par le MÊME balayage que dans un chunk.
+    ///
+    /// Des octets en trop après le compound sont une erreur : ils seraient
+    /// recopiés dans la save sans que personne sache ce qu'ils sont.
+    pub fn depuis_compound(nbt: Vec<u8>, data_version: Option<i32>) -> R<Mobile> {
+        let mut c = Cur::new(&nbt);
+        let r = balayer_compound(&mut c)?;
+        if !c.is_end() {
+            return Err(Trunc);
+        }
+        Ok(Mobile::depuis(&nbt, &r, data_version))
     }
 
     pub fn pos(&self) -> Option<[f64; 3]> {

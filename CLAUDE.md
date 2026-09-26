@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1054 tests aujourd’hui)
+cargo test            # tous les crates (1093 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -377,7 +377,9 @@ crates/
                la mise à jour PARTOUT (toutes les dimensions) en une entrée
                de journal ; n'écrit que ce qui CHANGE entre deux définitions,
                rogné ; tout ou rien (`defaire_rapport`)
-  tf-formats/  .schem · .schematic · .litematic · .nbt
+  tf-formats/  .schem (Sponge v1–v3) ✅ · .litematic (v4–v7) ✅ · .nbt de
+               structure ✅ — entre un fichier et le presse-papiers ; le
+               .schematic d'avant 1.13 est refusé et NOMMÉ
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
@@ -467,6 +469,7 @@ couvriront le même terrain.
 | Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture. Côté coque : sa variante d'`ActionComposant` et son bras dans `Chantier::composant` (`moteur.rs`), sa `demande_*` dans `Etat`, son bouton dans la fiche (`interface::composants`) |
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
+| Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2259,3 +2262,24 @@ propres à ce dépôt.
   GPU ne sort de l'écran. Et le plan lointain ne se vérifie pas en profondeur
   NORMALISÉE — hyperbolique, elle loge tout l'au-delà dans un millième : le
   test mesure la profondeur dans le monde.
+- **Deux outils lisent le même `.schem` v2 de deux façons.** WorldEdit y
+  écrit la position des entités dans le repère du monde copié, Litematica la
+  lit relative au coin : un fichier « correct » pour l'un pose les entités de
+  l'autre à mille blocs de là. On écrit le coin à l'ORIGINE, où les deux
+  lectures coïncident. Une spécification ne dit pas ce que font les outils :
+  les lecteurs et les écrivains de `tf-formats` suivent leur CODE, lu ligne à
+  ligne.
+- **Litematica réécrit la position d'un cadre, pas sa case.** `TileX/Y/Z`
+  restent dans le repère du monde d'origine, et c'est la case qui décide où
+  le jeu repose le cadre : lue telle quelle, elle l'envoie à des milliers de
+  blocs de son mur. La case se RETROUVE depuis la position — la formule du jeu
+  à l'envers, et la parité d'un tableau se lit dans la position elle-même.
+- **Quelques octets peuvent annoncer une boîte de deux gigaoctets.** Une
+  taille est un nombre dans un fichier ; la grille qu'elle fait réserver est
+  de la mémoire. Un lecteur ne réserve qu'une fois que le fichier a montré de
+  quoi la remplir — un varint par case pour Sponge, des régions qui
+  remplissent leur boîte englobante pour Litematica.
+- **Un `.nbt` de structure est une LISTE.** Mesuré : 6,9 s et 32,6 Mo pour
+  12,6 millions de cases, contre 0,3 s et 1 Mo en `.schem`. Le format n'a pas
+  été fait pour un build entier, et son plafond (128³) le dit au lieu de
+  laisser l'utilisateur attendre.

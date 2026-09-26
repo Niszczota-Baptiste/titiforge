@@ -99,7 +99,8 @@ pub fn balayer_liste(c: &mut Cur) -> R<Vec<EntiteReperee>> {
     Ok(out)
 }
 
-fn balayer_une(c: &mut Cur) -> R<EntiteReperee> {
+/// Balaye UNE block entity, le curseur étant sur la charge de son compound.
+pub fn balayer_une(c: &mut Cur) -> R<EntiteReperee> {
     let start = c.pos();
     let mut xyz: [Option<(i32, usize)>; 3] = [None; 3];
     while let Some((t, key)) = c.next_field()? {
@@ -167,6 +168,19 @@ impl Entite {
                 a.champs[2] - debut,
             ],
         })
+    }
+
+    /// Une block entity faite de ses seuls octets — la charge d'un compound,
+    /// `TAG_End` compris — comme en portent les fichiers d'échange. `None` si
+    /// elle ne porte pas ses trois coordonnées : c'est à qui la lit de les
+    /// lui donner.
+    pub fn depuis_compound(nbt: Vec<u8>) -> R<Option<Entite>> {
+        let mut c = Cur::new(&nbt);
+        let r = balayer_une(&mut c)?;
+        if !c.is_end() {
+            return Err(Trunc);
+        }
+        Ok(Entite::depuis(&nbt, &r))
     }
 
     /// Une entrée qu'on ne sait pas SITUER — il lui manque une coordonnée.

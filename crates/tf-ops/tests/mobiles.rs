@@ -24,7 +24,7 @@ use tf_ops::edition::{copier, rejouer, Sens};
 use tf_ops::executer::{executer, CompteRendu, Options};
 use tf_ops::mobiles::{
     face2_apres, face3_apres, lacet_apres, position_apres, rotation_objet_apres,
-    transformer_mobile, uuid_derive, vecteur_apres, PAS_2D, PAS_3D,
+    transformer_mobile, tuile_depuis_pos, uuid_derive, vecteur_apres, PAS_2D, PAS_3D,
 };
 use tf_ops::TransfoBoite;
 use tf_world::coords::{BBox, BlockPos, RegionPos};
@@ -1303,4 +1303,82 @@ fn un_uuid_derive_est_de_version_4_et_depend_de_la_position() {
     );
     assert_ne!(a, uuid_derive(CADRE_MUR, [1.5, 64.0, 2.5]));
     assert_ne!(a, STAND);
+}
+
+/// **La case d'accroche se RETROUVE depuis la position**, pour chaque face et
+/// chaque parité de tableau — contre la formule du jeu écrite à part, dans le
+/// générateur de fixtures (`Occupant::cadre`, `Occupant::tableau`).
+///
+/// C'est ce que la lecture d'un fichier d'échange demande : Litematica réécrit
+/// la position d'une entité dans le repère de sa région mais laisse
+/// `TileX/Y/Z` dans celui du monde d'origine, et c'est la case qui décide où
+/// le jeu repose le cadre.
+#[test]
+fn la_case_d_accroche_se_retrouve_depuis_la_position() {
+    let cases = [
+        [0, 64, 0],
+        [-1, -64, -1],
+        [7, 319, -9],
+        [-30_000, 5, 29_999],
+    ];
+    let mut vus = 0;
+    for tuile in cases {
+        for facing in 0..6i8 {
+            let o = Occupant::cadre(tuile, facing, "minecraft:map", 0, [1, 2, 3, 4]);
+            assert_eq!(
+                tuile_depuis_pos("minecraft:item_frame", o.pos, Some(facing)),
+                Some(tuile),
+                "cadre, face {facing}, {:?}",
+                o.pos
+            );
+            assert_eq!(
+                tuile_depuis_pos("minecraft:glow_item_frame", o.pos, Some(facing)),
+                Some(tuile)
+            );
+            vus += 1;
+        }
+        for facing in 0..4i8 {
+            // Une largeur et une hauteur de chaque parité.
+            for motif in [
+                "minecraft:kebab",
+                "minecraft:pool",
+                "minecraft:bouquet",
+                "minecraft:fighters",
+                "minecraft:skeleton",
+            ] {
+                let o = Occupant::tableau(tuile, facing, motif, [1, 2, 3, 4]);
+                assert_eq!(
+                    tuile_depuis_pos("minecraft:painting", o.pos, Some(facing)),
+                    Some(tuile),
+                    "{motif}, face {facing}, {:?}",
+                    o.pos
+                );
+                vus += 1;
+            }
+        }
+    }
+    assert_eq!(vus, 4 * (6 + 4 * 5));
+    // Un nœud de laisse : la case où il est.
+    assert_eq!(
+        tuile_depuis_pos("minecraft:leash_knot", [-3.5, 70.5, 12.5], None),
+        Some([-4, 70, 12])
+    );
+    // Ce qu'on ne sait pas accrocher ne se devine pas.
+    assert_eq!(
+        tuile_depuis_pos("minecraft:item_frame", [0.5; 3], None),
+        None
+    );
+    assert_eq!(
+        tuile_depuis_pos("minecraft:item_frame", [0.5; 3], Some(6)),
+        None
+    );
+    assert_eq!(
+        tuile_depuis_pos("minecraft:painting", [0.5; 3], Some(4)),
+        None
+    );
+    assert_eq!(tuile_depuis_pos("unmod:cadre", [0.5; 3], Some(2)), None);
+    assert_eq!(
+        tuile_depuis_pos("minecraft:item_frame", [f64::NAN, 0.0, 0.0], Some(2)),
+        None
+    );
 }

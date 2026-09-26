@@ -2106,6 +2106,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tf-formats"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "tf-anvil",
+ "tf-bench",
+ "tf-nbt",
+ "tf-ops",
+ "tf-world",
+]
+
+[[package]]
 name = "tf-mesh"
 version = "0.1.0"
 dependencies = [

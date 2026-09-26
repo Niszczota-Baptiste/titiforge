@@ -237,3 +237,24 @@ fn un_souvenir_qui_n_a_pas_la_forme_d_une_position_n_en_est_pas_une() {
         .collect();
     assert_eq!(r, [[1, 2, 3]]);
 }
+
+/// Une entité faite de ses seuls octets se situe comme dans un chunk — et des
+/// octets en trop après son compound la font refuser.
+#[test]
+fn une_entite_se_fait_de_ses_seuls_octets() {
+    let mut w = Writer::new();
+    w.field(tag::STRING, "id").raw_str("minecraft:armor_stand");
+    w.field(tag::LIST, "Pos").list_header(tag::DOUBLE, 3);
+    for v in [1.5f64, 64.0, -2.5] {
+        w.raw(&v.to_bits().to_be_bytes());
+    }
+    w.end();
+    let nbt = w.into_bytes();
+    let m = Mobile::depuis_compound(nbt.clone(), Some(2975)).unwrap();
+    assert_eq!(m.pos(), Some([1.5, 64.0, -2.5]));
+    assert_eq!(m.id(), Some("minecraft:armor_stand"));
+    assert_eq!(m.octets(), nbt);
+    let mut plus = nbt;
+    plus.extend_from_slice(&[0, 0]);
+    assert!(Mobile::depuis_compound(plus, None).is_err());
+}

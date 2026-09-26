@@ -21,11 +21,10 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1054**, zéro échec |
+| Tests | **1093**, zéro échec |
 | `cargo clippy --all-targets` | propre |
-| Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
+| Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
-| Crates non commencés | **tf-formats** (schematics) |
 | Vraies saves vérifiées | 2 — Minefield 1.18, vanilla 1.20.1 |
 | Blocs réellement réécrits puis annulés au bit près | **606 M** |
 | Coût du suivi des block entities sur le balayage | **nul** (6,04 ms contre 6,07, médiane de 3) |
@@ -42,15 +41,15 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1054 tests, répartis par ce qu'ils PROUVENT :
+1093 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
-| `tf-nbt` reader/writer | 29 | longueurs signées, profondeur, charges forgées |
+| `tf-nbt` reader/writer | 31 | longueurs signées, profondeur, charges forgées ; et que les primitifs des formats d'échange — shorts, longs, flottants par leurs BITS, tableaux — se relisent à l'identique |
 | `tf-anvil` region/section/lossless/versions/external/robustesse | 104 | round-trip octet pour octet, 1.13→1.21, `.mcc` ; que les DEUX dispositions se font rééclairer par le jeu (`isLightOn`, `Heightmaps`, à la racine comme sous `Level`) ; et qu'un emplacement qui pointe hors du fichier est laissé vide ET COMPTÉ |
 | `tf-anvil` biomes | 11 | la SECONDE palette : liste de chaînes, 64 cellules, pas de plancher à 4 bits |
-| `tf-anvil` entites | 13 | les block entities : repérage, déplacement, disposition `Level` |
-| `tf-anvil` mobiles | 7 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ |
+| `tf-anvil` entites | 14 | les block entities : repérage, déplacement, disposition `Level` ; et qu'une block entity faite de ses seuls octets — la forme d'un fichier d'échange — se situe pareil, et refuse des octets en trop |
+| `tf-anvil` mobiles | 8 | le balayage des chunks d'ENTITÉS face au fichier : un champ de la mauvaise forme n'est pas relevé et ressort tel quel, une chaîne de passagers forgée est refusée sans déborder la pile, un chunk tronqué ne fait jamais paniquer, un souvenir qui n'a pas EXACTEMENT la forme d'une position n'en est pas une, et un chunk neuf se relit par le décodeur GELÉ ; et qu'une entité faite de ses seuls octets se situe comme dans un chunk |
 | `tf-anvil` croisement | 2 | un `.mca` écrit par un **producteur tiers** (le moteur JS) |
 | `tf-world` journal/staging/residency/coords/source/lecture | 144 | annuler ↔ refaire sur le CONTENU, division plancher, emprise bornée ; les FICHIERS DU MONDE qui ne sont pas des régions — la copie d'abord, la save sinon, écrits APRÈS la sauvegarde et jamais sur un refus, un document vidé retiré de la save, un temporaire d'écriture qui n'en est pas un — et leur correctif de journal, resserré, gardé par son empreinte, ENVELOPPÉ pour qu'une version antérieure le saute ; et qu'une entrée porte de quoi se REJOUER ; la table de vérité à trois empreintes de la copie de travail — qu'écrire par-dessus une partie jouée est refusé AVANT la sauvegarde, qu'une région déjà écrite ne se réécrit pas, qu'une région périmée n'écrit ni elle ni ses charges déportées, qu'une région recompressée est à jour, et que bases et pierres tombales survivent à une reprise — une table abîmée, elle, fait douter plutôt que croire |
 | `tf-world` session | 19 | la SÉANCE sur de vrais dossiers : le travail et l'annulation survivent à la fermeture, une séance sans travail s'efface — mais pas une qui n'a que son DOCUMENT en attente, et la reprise le dit —, le va-et-vient avec le jeu ne fait aucun conflit, une partie jouée sur le travail met la séance de côté INTACTE (deux fois de suite sans s'écraser), deux fenêtres sur un monde sont refusées, un journal tronqué est coupé AVANT qu'on y ajoute, une action interrompue se dit une fois, le plafond élague ET rétrécit le fichier ; et qu'une variable d'environnement VIDE vaut absente — prise au mot, elle rangeait les séances dans un chemin relatif |
@@ -60,7 +59,12 @@ cargo test --workspace
 | `tf-ops` coffres | 11 | copier → tourner → coller emporte le contenu des coffres |
 | `tf-ops` tout_ou_rien | 7 | qu'une opération qui ÉCHOUE en route ne laisse rien : un `//set` dont la seconde région refuse défait la première, et l'action d'avant sur les mêmes chunks se défait encore ; un `//move` dont la copie — ou les entités — refusent ne perd pas le build ; un `//stack` défait ses copies d'avant ; un collage dont les entités refusent défait ses blocs ; des points d'intérêt qui refusent après les blocs les font défaire ; et un échec qu'on ne peut pas défaire se DIT. La panne est provoquée, dossier par dossier (`MemorySource::tomber_en_panne`) |
 | `tf-ops` composant | 22 | les COMPOSANTS : vingt instances dans les six orientations suivent leur définition case par case, et UN Ctrl+Z rend l'ancienne partout et dans le document ; qu'une mise à jour n'écrit que ce qui change — un coffre rempli dans une instance le reste, une retouche survit hors du changement, même sur un bloc orienté d'une instance tournée — et ne relit qu'une section sous chaque instance quand seul le sommet d'un mât change (compté) ; que toutes les dimensions suivent ; qu'une maison intacte ne se croit pas changée, d'où qu'on la copie ; qu'une action qui échoue en route DÉFAIT ce qu'elle avait écrit, que le terrain se vérifie sous toutes les instances avant la première écriture, et qu'un échec qu'on ne peut défaire se dit ; qu'aucune block entity ne se pose sur de l'air ; qu'un composant trop grand pour être RELU est refusé à la création ; et que le document se relit à l'identique et refuse — jamais en rendant un document vide — ce qu'il ne comprend pas |
-| `tf-ops` mobiles | 28 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu |
+| `tf-ops` mobiles | 29 | les ENTITÉS suivent les builds, relues par le décodeur GELÉ : une copie a de nouveaux UUID et laisse l'original octet pour octet, un déplacement garde les siens et ne laisse rien derrière ; un cadre de façade suit le mur qui le porte, pas la case où il flotte ; un lit suit, un poste de travail resté dans l'autre bâtiment non, un souvenir d'une autre dimension non plus ; une laisse suit la COPIE du marchand ; deux collages identiques ne doublent rien ; sans terrain ou dans un chunk d'une autre version, l'entité reste à sa place et le rapport le dit ; annuler efface un chunk créé et traverse un chunk déporté (`.mcc`) ; et les règles pures — un tableau couvre les mêmes cases, un cadre reste accroché à son bloc, l'objet d'un cadre suit les matrices du RENDU du jeu, et la case d'accroche se RETROUVE depuis la position pour chaque face et chaque parité de tableau |
+| `tf-formats` aller_retour | 9 | chaque format rend ce qu'il a reçu, relu avec un interner NEUF ; l'écriture est déterministe ; et chaque fichier écrit est relu par le décodeur GELÉ et confronté à ce qu'attend l'outil d'origine — le repère de WorldEdit 7.2 et 7.3, les indices À CHEVAL de Litematica relus par son `getAt` porté ligne à ligne, la liste de blocs du jeu |
+| `tf-formats` outils | 5 | les fichiers tels que WorldEdit, Litematica et le jeu les ÉCRIVENT, construits par un écrivain d'arbre indépendant : un coin loin de l'origine et des entités absolues, des propriétés dans le désordre, des varints de deux octets, trois régions dont une de taille NÉGATIVE et une qui en recouvre une autre, un passager dans le repère du monde, des cases vides, des variantes ; et une entité accrochée de mod, traduite ou nommée |
+| `tf-formats` robustesse | 14 | aucun fichier tronqué — à CHAQUE longueur — ni corrompu (6 000 essais) ne fait paniquer ; une boîte géante est refusée AVANT d'allouer, y compris par deux régions minuscules très éloignées ; un fichier incohérent est refusé plutôt que deviné ; les formats d'avant 1.13 sont NOMMÉS |
+| `tf-formats` bout_en_bout | 1 | copier, exporter, réimporter, COLLER — et obtenir, relu par le décodeur gelé, le monde qu'un collage direct aurait donné, coffres, entités et lit du villageois compris |
+| `tf-formats` unitaires | 5 | une bombe gzip s'arrête au plafond, les varints, les clés d'état écrites par WorldEdit, et le rangement à cheval de 2 à 32 bits |
 | `tf-ops` poi | 6 | qu'une édition fait relire au jeu les POINTS D'INTÉRÊT de ses chunks — toutes leurs sections, et rien d'autre, pas même un `Valid` de mod glissé dans un enregistrement ; qu'un biome n'en fait relire aucun (sur un terrain qui PORTE des biomes, sans quoi le test ne prouvait rien) ; qu'une section déjà invalide ne salit rien ; et qu'annuler rend la table d'origine |
 | `tf-ops` deplacer | 9 | `//move` et `//stack`, et l'annulation d'une opération à PLUSIEURS passes ; qu'un `//move` vers du terrain jamais généré est REFUSÉ avant d'effacer quoi que ce soit — un chunk à charge vide compte comme absent — mais qu'un extrait bordé d'air peut déborder sur du vide |
 | `tf-ops` biome | 10 | `//setbiome`, et que sa grille est de 4 blocs et pas d'un |
@@ -893,6 +897,67 @@ les autres instances tournées les comptaient à sa place. Elle a aussi montré
 que le compte ADDITIONNAIT le même état vu dans trois orientations ; ce sont
 maintenant des états distincts.
 
+### Les formats d'échange : ce que les outils écrivent, pas ce qu'ils disent
+
+```bash
+cargo test -p tf-formats
+cargo run --release -p tf-formats --example mesurer
+cargo run --release -p tf-formats --example lire -- <fichier>
+```
+
+`tf-formats` lit et écrit `.schem` (Sponge v1 à v3 — v1 en lecture),
+`.litematic` (v4 à v7) et le `.nbt` des blocs de structure, entre un fichier et
+le presse-papiers du moteur. Chaque lecteur et chaque écrivain suit le CODE
+de l'outil d'origine (`SpongeSchematicV2Writer`, `LitematicaSchematic`,
+`StructureTemplate`), pas seulement la spécification — et c'est là qu'est la
+moitié du travail :
+
+- **WorldEdit et Litematica ne lisent pas le même `.schem` v2 de la même
+  façon.** WorldEdit y écrit la position des entités dans le repère du monde
+  copié ; Litematica, qui l'ouvre aussi, la prend relative au coin. On écrit
+  donc le coin à l'ORIGINE : les deux lectures coïncident, et l'ancre voyage
+  dans `WEOffset`. À la lecture, un v2 aux entités relatives se reconnaît à ce
+  qu'elles tombent dans la boîte sans décalage.
+- **Litematica 1.18 n'ouvre pas le `.schem` v3** : pour le serveur, c'est le
+  v2 qui voyage partout.
+- **Litematica laisse `TileX/Y/Z` dans le repère du monde d'origine** — la
+  position d'un cadre est réécrite, sa case d'accroche non, et c'est elle qui
+  décide où le jeu le repose. La case se RETROUVE depuis la position par la
+  formule du jeu prise à l'envers ; la parité d'un tableau s'y lit au
+  demi-bloc près, sans table de motifs. Une entité accrochée de mod, elle, se
+  traduit quand le repère est connu, et se NOMME sinon.
+- **Rien n'est ré-encodé** : un coffre, un porte-armure, une donnée de mod
+  voyagent par leurs octets ; seuls les champs qui les situent sont écrits.
+  Un `minefield:*` reste un `minefield:*`.
+- **Un fichier ne fait jamais allouer plus que ce qu'il contient** : les
+  données Sponge doivent porter un varint par case AVANT qu'on réserve la
+  grille ; deux régions Litematica minuscules à vingt mille blocs l'une de
+  l'autre sont refusées ; une structure est plafonnée ; une bombe gzip
+  s'arrête au plafond.
+
+Mesuré (`--example mesurer`), un extrait de 256 × 192 × 256 = 12,6 millions de
+cases, 768 coffres, médiane de trois :
+
+| format | écrire | lire | taille |
+|---|---:|---:|---:|
+| `.litematic` | 213 ms | 104 ms | 1,34 Mo |
+| `.schem` v2 | 298 ms | 85 ms | 0,97 Mo |
+| `.schem` v3 | 282 ms | 80 ms | 0,97 Mo |
+| `.nbt` de structure | 6 945 ms | 4 877 ms | 32,6 Mo |
+
+Le `.nbt` est une LISTE de blocs — une trentaine d'octets par case, air
+compris — d'où son plafond à 128³ cases, dans les deux sens : un bloc de
+structure n'en sauve de toute façon pas plus de 48³.
+
+**61 mutations, toutes tuées** — trois au second tour : une entité accrochée
+de mod dans un repère connu, et les octets en trop après une entité ou une
+block entity faite de ses seuls octets. Dresser la liste des mutations AVANT
+de les lancer avait déjà montré dix cas qu'aucun test ne prenait : un passager
+dans le repère du monde, une entité sans `Pos`, un `.schem` v1, une block
+entity dans une région Litematica qui ne commence pas à l'origine, la
+frontière exacte de la v7 (1.20.5), des indices trop courts, une entité sans
+`id`, des block entities hors de la boîte ou en double, un champ en double.
+
 ---
 
 ## 4. Le rendu
@@ -1392,7 +1457,11 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La pose d'un porte-armure n'est pas reflétée sous miroir** | annoncée comme approchée : il faudrait échanger bras et jambes gauches et droits, donc réécrire le compound au lieu de quelques octets |
 | **Les tampons GPU ne rétrécissent jamais** | ils grandissent par moitiés et gardent leur pic : après un rechargement sur une zone plus petite, la mémoire GPU reste celle de la plus grande scène vue. Bornée, puisque la résidence borne les arènes — mais pas rendue |
 | **L'atlas remonte ENTIER quand il change** | un état jamais vu l'allonge d'une couche, et le GPU reçoit toutes les couches et leurs mips. Rare une fois la séance chaude, mais c'est de l'O(atlas) là où l'O(couche) suffirait |
-| **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
+| **Les formats d'échange ne sont pas encore dans la coque** | le moteur lit et écrit les quatre formats, testés de bout en bout ; aucun bouton ne les appelle encore |
+| **Aucun fichier produit par Litematica ou WorldEdit n'a encore été lu EN VRAI** | les lecteurs suivent leur code et sont éprouvés contre des fichiers construits comme eux les écrivent ; `--example lire -- <fichier>` le vérifie sur un vrai fichier en une commande |
+| **Le `.schematic` d'avant 1.13 (MCEdit, Schematica) n'est pas lu** | il numérote ses blocs : il faudrait la table d'aplatissement du jeu. Il est refusé et NOMMÉ |
+| **Les biomes d'un fichier ne sont pas repris** | le presse-papiers n'en porte pas ; le compte rendu le dit |
+| **Les souvenirs d'entités d'un `.litematic` ou d'un `.nbt` ne suivent pas** | le lit, la ruche, le poste de travail y sont dans le repère d'un monde inconnu : ils restent tels quels, comme les laisse Litematica lui-même, et le compte rendu les compte |
 | **L'outil Composant n'a été vu que par des captures** | le moteur, le fil, l'état et la fiche sont testés, et la capture montre la fiche et les contours ; un clic sur ses boutons, lui, ne l'est pas — il vit derrière winit, comme les autres boutons de l'inspecteur |
 | **Une instance se pose par son COIN, sans aperçu** | son coin de plus petites coordonnées tombe sur la case visée ; rien ne montre où elle ira avant le clic. Ctrl+Z la retire |
 | **Pas de saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste reste à écrire (phase 7) |

@@ -225,6 +225,58 @@ pub fn rotation_objet_apres(t: Transfo, r: i8, face: i8, carte: bool) -> i8 {
     n.rem_euclid(8) as i8
 }
 
+/// La case d'accroche d'une entité accrochée, RETROUVÉE depuis sa position —
+/// la formule du jeu (`HangingEntity`), prise à l'envers.
+///
+/// Sert là où la case écrite ne peut pas être crue : un fichier d'échange
+/// réécrit la position de l'entité dans son propre repère, mais laisse souvent
+/// `TileX/Y/Z` dans celui du monde d'où elle vient (Litematica le fait). Or
+/// c'est la case qui décide — le jeu recalcule la position depuis elle au
+/// chargement — et une case venue d'un autre monde reposerait le cadre à
+/// des milliers de blocs de son mur.
+///
+/// Le jeu pose le centre à `case + ½ − face × 0,46875`, décalé d'un
+/// demi-bloc sur la gauche (vue de face) et vers le haut pour un tableau de
+/// largeur ou de hauteur PAIRE. La parité n'a pas besoin du motif : elle se
+/// LIT dans la position, au demi-bloc près. Rend `None` pour ce qu'on ne sait
+/// pas accrocher (une entité de mod, une face hors table).
+pub fn tuile_depuis_pos(id: &str, pos: [f64; 3], facing: Option<i8>) -> Option<[i32; 3]> {
+    if !pos.iter().all(|x| x.is_finite() && x.abs() < 1.0e9) {
+        return None;
+    }
+    let entier = |v: f64| v.round() as i32;
+    // Sans décalage de parité, `v` tombe sur un entier ; avec, sur un
+    // demi-entier. On tranche au quart.
+    let demi = |v: f64| (v - v.floor() - 0.5).abs() < 0.25;
+    match id {
+        "minecraft:leash_knot" => case_de(pos),
+        _ => {
+            let g = genre(Some(id))?;
+            let f = pas_de(g, facing?)?;
+            let v: [f64; 3] = std::array::from_fn(|a| pos[a] - 0.5 + f[a] as f64 * 0.46875);
+            match g {
+                Genre::Trois => Some([entier(v[0]), entier(v[1]), entier(v[2])]),
+                Genre::Deux => {
+                    // La gauche de qui regarde le tableau : la face tournée
+                    // d'un quart de tour dans le sens inverse des aiguilles
+                    // d'une montre, vue d'en haut.
+                    let gauche = [f[2], 0, -f[0]];
+                    let t: [i32; 3] = std::array::from_fn(|a| {
+                        let decale = gauche[a] != 0 || a == 1;
+                        if decale && demi(v[a]) {
+                            let sens = if a == 1 { 1.0 } else { gauche[a] as f64 };
+                            entier(v[a] - 0.5 * sens)
+                        } else {
+                            entier(v[a])
+                        }
+                    });
+                    Some(t)
+                }
+            }
+        }
+    }
+}
+
 /// Ce qu'une transformation n'a pas su porter EXACTEMENT, nommé.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approche {

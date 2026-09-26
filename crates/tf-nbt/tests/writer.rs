@@ -256,3 +256,49 @@ fn round_trip_sur_une_palette_de_quatre_mille_entrees() {
     assert_eq!(relu_pal[4095].0, "modtest:bloc_4095");
     assert_eq!(relu_data, data);
 }
+
+/// **Les types primitifs des formats d'échange se relisent à l'identique**,
+/// flottants compris — relus par leurs BITS, pas recalculés : un `-0.0`, un
+/// `NaN` et le plus petit sous-normal ressortent tels quels.
+#[test]
+fn les_primitifs_se_relisent_a_l_identique() {
+    let mut w = Writer::new();
+    w.i16_payload(-12_345)
+        .i16_payload(i16::MIN)
+        .i64_payload(-9_876_543_210_123)
+        .f32_payload(-0.0)
+        .f32_payload(f32::from_bits(0x7fc0_0001))
+        .f64_payload(f64::from_bits(1))
+        .f64_payload(-1234.5678)
+        .byte_array_payload(&[0, 255, 7])
+        .int_array_payload(&[-1, i32::MAX, 0]);
+    let b = w.into_bytes();
+    let mut c = Cur::new(&b);
+    assert_eq!(c.i16().unwrap(), -12_345);
+    assert_eq!(c.i16().unwrap(), i16::MIN);
+    assert_eq!(c.i64().unwrap(), -9_876_543_210_123);
+    assert_eq!(c.f32().unwrap().to_bits(), (-0.0f32).to_bits());
+    assert_eq!(c.f32().unwrap().to_bits(), 0x7fc0_0001);
+    assert_eq!(c.f64().unwrap().to_bits(), 1);
+    assert_eq!(c.f64().unwrap(), -1234.5678);
+    assert_eq!(c.byte_array().unwrap(), &[0, 255, 7]);
+    assert_eq!(c.int_array().unwrap(), vec![-1, i32::MAX, 0]);
+    assert!(c.is_end());
+}
+
+/// Un tableau dont la longueur annoncée dépasse le tampon est une erreur, et
+/// n'alloue rien — la même garde que `long_array`.
+#[test]
+fn un_tableau_trop_long_pour_le_tampon_est_refuse() {
+    for tableau in [0usize, 1] {
+        let mut b = (1_000_000i32).to_be_bytes().to_vec();
+        b.extend_from_slice(&[1, 2, 3]);
+        let mut c = Cur::new(&b);
+        let r = if tableau == 0 {
+            c.byte_array().map(|_| ())
+        } else {
+            c.int_array().map(|_| ())
+        };
+        assert!(r.is_err());
+    }
+}

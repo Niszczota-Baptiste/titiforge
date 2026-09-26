@@ -1,10 +1,15 @@
-//! Écriture des seuls tags qu'Anvil demande.
+//! Écriture des seuls tags qu'Anvil demande — et de ceux des formats d'échange.
 //!
 //! Volontairement minuscule : on ne réécrit JAMAIS un chunk entier. Seule la
 //! charge d'un `block_states` modifié est reconstruite, puis splicée dans le
 //! chunk inflaté d'origine. Un écrivain NBT complet serait à la fois inutile
 //! et dangereux — il donnerait la possibilité de ré-émettre des champs qu'on
 //! ne comprend pas, donc de les abîmer.
+//!
+//! Les formats d'échange (`tf-formats`) écrivent, eux, des fichiers ENTIERS —
+//! mais ce qu'ils ne comprennent pas (le contenu d'un coffre, les données
+//! d'une entité) y voyage encore par ses octets d'origine, recopiés avec
+//! `raw`. Ce qui s'ajoute ici n'est que des types primitifs.
 
 use crate::tag;
 
@@ -71,6 +76,45 @@ impl Writer {
 
     pub fn i8_payload(&mut self, v: i8) -> &mut Self {
         self.buf.push(v as u8);
+        self
+    }
+
+    pub fn i16_payload(&mut self, v: i16) -> &mut Self {
+        self.buf.extend_from_slice(&v.to_be_bytes());
+        self
+    }
+
+    pub fn i64_payload(&mut self, v: i64) -> &mut Self {
+        self.buf.extend_from_slice(&v.to_be_bytes());
+        self
+    }
+
+    /// Un flottant s'écrit par ses BITS, en big-endian : relu, il rend le même
+    /// nombre à l'unité près, pas une approximation.
+    pub fn f32_payload(&mut self, v: f32) -> &mut Self {
+        self.buf.extend_from_slice(&v.to_bits().to_be_bytes());
+        self
+    }
+
+    pub fn f64_payload(&mut self, v: f64) -> &mut Self {
+        self.buf.extend_from_slice(&v.to_bits().to_be_bytes());
+        self
+    }
+
+    /// `TAG_Byte_Array` : longueur puis les octets.
+    pub fn byte_array_payload(&mut self, v: &[u8]) -> &mut Self {
+        self.i32_payload(i32::try_from(v.len()).expect("byte array > i32::MAX"));
+        self.buf.extend_from_slice(v);
+        self
+    }
+
+    /// `TAG_Int_Array` : longueur puis les entiers en BIG-endian.
+    pub fn int_array_payload(&mut self, v: &[i32]) -> &mut Self {
+        self.i32_payload(i32::try_from(v.len()).expect("int array > i32::MAX"));
+        self.buf.reserve(v.len() * 4);
+        for &x in v {
+            self.buf.extend_from_slice(&x.to_be_bytes());
+        }
         self
     }
 

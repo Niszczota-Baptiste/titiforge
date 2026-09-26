@@ -111,6 +111,11 @@ impl<'a> Cur<'a> {
     }
 
     #[inline]
+    pub fn i16(&mut self) -> R<i16> {
+        Ok(self.u16()? as i16)
+    }
+
+    #[inline]
     pub fn i32(&mut self) -> R<i32> {
         self.need(4)?;
         let v = i32::from_be_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
@@ -143,6 +148,44 @@ impl<'a> Cur<'a> {
         let s = core::str::from_utf8(&self.buf[self.pos..self.pos + n]).map_err(|_| Trunc)?;
         self.pos += n;
         Ok(s)
+    }
+
+    #[inline]
+    pub fn i64(&mut self) -> R<i64> {
+        Ok(self.u64()? as i64)
+    }
+
+    /// Un flottant se relit par ses BITS : aucun arrondi entre l'octet et le
+    /// nombre.
+    #[inline]
+    pub fn f32(&mut self) -> R<f32> {
+        Ok(f32::from_bits(self.i32()? as u32))
+    }
+
+    #[inline]
+    pub fn f64(&mut self) -> R<f64> {
+        Ok(f64::from_bits(self.u64()?))
+    }
+
+    /// Un `TAG_Byte_Array`, emprunté au tampon : aucune copie.
+    pub fn byte_array(&mut self) -> R<&'a [u8]> {
+        let n = self.count()?;
+        self.need(n)?;
+        let s = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+
+    /// Un `TAG_Int_Array`. La place est vérifiée AVANT de réserver, comme
+    /// pour `long_array`.
+    pub fn int_array(&mut self) -> R<Vec<i32>> {
+        let n = self.count()?;
+        self.need(n.checked_mul(4).ok_or(Trunc)?)?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(self.i32()?);
+        }
+        Ok(out)
     }
 
     #[inline]

@@ -1,0 +1,22 @@
+[package]
+name = "tf-formats"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Les formats d'échange : .schem (Sponge v1 à v3), .litematic, et le .nbt des blocs de structure"
+
+[dependencies]
+tf-nbt.workspace = true
+tf-anvil.workspace = true
+tf-ops.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+# Les entités de test — cadres, tableaux, passagers — telles que le jeu les
+# écrit, par le générateur de fixtures ; et le décodeur GELÉ de `tf-anvil`
+# pour relire ce qu'on écrit sans passer par nos propres lecteurs.
+tf-bench = { path = "../tf-bench" }
+# Pour le test de bout en bout et la mesure : copier d'un monde, exporter,
+# réimporter, coller — et relire le monde collé.
+tf-world.workspace = true
