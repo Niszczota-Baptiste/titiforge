@@ -219,9 +219,6 @@ pub struct Monde {
 }
 
 impl Monde {
-    /// **La couture vers le monde, pour viser.** Un prédicat, comme le
-    /// mailleur en prend un : la coque demande « cette case arrête-t-elle le
-    /// rayon ? » et ne sait rien d'autre.
     /// **Le nom de l'état posé en `(x, y, z)`**, tel que la scène le tient —
     /// `minecraft:air` hors de ce qu'elle porte.
     ///
@@ -234,6 +231,21 @@ impl Monde {
             .unwrap_or("minecraft:air")
     }
 
+    /// **Les états que la scène a rencontrés**, dans l'ordre de sa table —
+    /// qui ne fait que grandir : un lecteur qui en a vu `n` n'a qu'à lire la
+    /// suite. Ce que le sélecteur de blocs propose sous « monde ».
+    pub fn etats(&self) -> impl Iterator<Item = &str> + '_ {
+        (0..self.interner.len() as StateId).filter_map(|i| self.interner.resolve(i))
+    }
+
+    /// Combien d'états la table de la scène porte.
+    pub fn nb_etats(&self) -> usize {
+        self.interner.len()
+    }
+
+    /// **La couture vers le monde, pour viser.** Un prédicat, comme le
+    /// mailleur en prend un : la coque demande « cette case arrête-t-elle le
+    /// rayon ? » et ne sait rien d'autre.
     pub fn solide(&self) -> impl Fn([i32; 3]) -> bool + '_ {
         move |c| {
             let id = self.grille.bloc(c[0], c[1], c[2]);
@@ -258,6 +270,12 @@ pub struct Assets {
 }
 
 impl Assets {
+    /// **Les noms de blocs que le pack déclare** — ce que le sélecteur
+    /// propose sous « pack ».
+    pub fn noms(&self) -> impl Iterator<Item = &str> + '_ {
+        self.cat.blocs().map(|(n, _)| n.as_str())
+    }
+
     pub fn charger(racine: &str) -> Result<Assets, String> {
         let (cat, src, genre) =
             tf_assets::jeu::catalogue(racine).map_err(|e| format!("assets illisibles : {e:?}"))?;

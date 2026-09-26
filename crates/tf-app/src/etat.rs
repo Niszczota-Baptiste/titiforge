@@ -343,6 +343,12 @@ pub struct Etat {
     pub message: String,
     /// L'écran d'ouverture d'un monde.
     pub accueil: crate::accueil::Accueil,
+    /// Ce que les champs de bloc proposent. La coque le nourrit — le pack à
+    /// l'ouverture, les états de la scène à mesure qu'ils arrivent.
+    pub nuancier: crate::nuancier::Nuancier,
+    /// L'état de la case visée, tel que la scène le tient : ce que la pipette
+    /// prend, et la première proposition de chaque champ de bloc.
+    pub bloc_vise: Option<String>,
 }
 
 /// La face que `viser` rend, dite dans le vocabulaire de la sélection.
@@ -383,6 +389,8 @@ impl Etat {
             jeu_ferme: false,
             message: String::new(),
             accueil: crate::accueil::Accueil::default(),
+            nuancier: crate::nuancier::Nuancier::default(),
+            bloc_vise: None,
         }
     }
 
@@ -398,9 +406,41 @@ impl Etat {
         self.selection = Selection::nouvelle();
         self.tirage = None;
         self.reticule = SousLeReticule::default();
+        self.bloc_vise = None;
         self.demande = None;
         self.jeu_ferme = false;
         self.message.clear();
+    }
+
+    /// **Nomme la case visée** : l'état que la scène y tient. La coque le
+    /// demande à chaque image, après `relever_reticule` — l'état ne lit pas le
+    /// monde lui-même. Rien n'est alloué tant que la visée ne change pas de
+    /// bloc.
+    pub fn nommer_vise<'a>(&mut self, etat_en: impl FnOnce(BlockPos) -> &'a str) {
+        match self.reticule.case {
+            None => self.bloc_vise = None,
+            Some(c) => {
+                let nom = etat_en(c);
+                if self.bloc_vise.as_deref() != Some(nom) {
+                    self.bloc_vise = Some(nom.to_string());
+                }
+            }
+        }
+    }
+
+    /// **La pipette** : le bloc visé devient le bloc EN MAIN — celui que
+    /// posent « Poser » et le pousser-tirer. C'est le « choisir le bloc » de
+    /// Minecraft : on regarde un bloc, on le prend, sous l'état EXACT que le
+    /// jeu a écrit. Rend `false` quand rien n'est visé.
+    pub fn pipette(&mut self) -> bool {
+        let Some(cle) = self.bloc_vise.clone() else {
+            self.message = "pipette : rien sous le réticule".into();
+            return false;
+        };
+        self.bloc_tirage = catalogue::bloc_affiche(&cle);
+        self.nuancier.utiliser(&cle);
+        self.message = format!("en main : {}", self.bloc_tirage);
+        true
     }
 
     /// Relève ce que le réticule désigne, et ce que l'accrochage en fait.

@@ -523,3 +523,226 @@ fn une_valeur_s_affiche_comme_on_l_ecrirait() {
         }
     }
 }
+
+/// **Un bloc TAPÉ devient sa clé canonique.** Sans ça, la syntaxe du jeu —
+/// `minecraft:oak_stairs[facing=east]`, celle que tout le monde tape — était
+/// internée crochets compris, et l'écriture recopiait dans la save un nom de
+/// bloc que le jeu ne connaît pas.
+#[test]
+fn un_bloc_tape_devient_sa_cle_canonique() {
+    use tf_ops::catalogue::{bloc_affiche, cle_de_bloc};
+    let cas = [
+        ("stone", "minecraft:stone"),
+        ("  Minecraft:Stone ", "minecraft:stone"),
+        (
+            "minecraft:oak_stairs[half=top,facing=east]",
+            "minecraft:oak_stairs|facing=east,half=top",
+        ),
+        (
+            "oak_stairs[ facing = east , half=top ]",
+            "minecraft:oak_stairs|facing=east,half=top",
+        ),
+        (
+            "minecraft:oak_stairs|half=top,facing=east",
+            "minecraft:oak_stairs|facing=east,half=top",
+        ),
+        // Un `minefield:*` garde son espace de noms — invariant n° 3 du
+        // projet, appliqué dès la saisie.
+        (
+            "minefield:chaise[facing=north]",
+            "minefield:chaise|facing=north",
+        ),
+        ("minefield:deco/lampe_2.b", "minefield:deco/lampe_2.b"),
+        ("stone[]", "minecraft:stone"),
+    ];
+    for (tape, cle) in cas {
+        assert_eq!(cle_de_bloc(tape).as_deref(), Ok(cle), "« {tape} »");
+        // Idempotente, et la syntaxe montrée se relit en la même clé.
+        assert_eq!(cle_de_bloc(cle).as_deref(), Ok(cle));
+        assert_eq!(cle_de_bloc(&bloc_affiche(cle)).as_deref(), Ok(cle));
+    }
+    assert_eq!(
+        bloc_affiche("minecraft:oak_stairs|facing=east,half=top"),
+        "minecraft:oak_stairs[facing=east,half=top]"
+    );
+
+    // Refusé EN LE DISANT : deviner aurait écrit un bloc inconnu dans la save.
+    for faux in [
+        "",
+        "   ",
+        "oak_stairs[facing=east",
+        "stone[facing=east]extra",
+        "a:b:c",
+        ":stone",
+        "minecraft:",
+        "stone[facing]",
+        "stone[=east]",
+        "stone[facing=]",
+        "stone[facing=east,facing=west]",
+        "stone[facing=east]|half=top",
+        "pierre taillée",
+    ] {
+        let e = cle_de_bloc(faux);
+        assert!(e.is_err(), "« {faux} » accepté : {e:?}");
+    }
+}
+
+/// Le normaliseur passe TOUT paramètre de bloc par la clé canonique — les
+/// mélanges compris, entrée par entrée. Balayé sur le catalogue entier : une
+/// opération ajoutée demain est couverte sans toucher à ce fichier.
+#[test]
+fn chaque_parametre_de_bloc_sort_canonique() {
+    let tape = "oak_stairs[half=top,facing=east]";
+    let cle = "minecraft:oak_stairs|facing=east,half=top";
+    let mut vus = 0;
+    for d in OPS {
+        let mut p = remplir(d);
+        for decl in d.params {
+            match decl.saisie {
+                Saisie::Bloc => {
+                    p.poser(decl.nom, Valeur::texte(tape));
+                }
+                Saisie::Melange => {
+                    p.poser(
+                        decl.nom,
+                        Valeur::Melange(vec![(2, tape.into()), (1, "Dirt".into())]),
+                    );
+                }
+                _ => {}
+            }
+        }
+        let n = normaliser(d, &p).unwrap();
+        for decl in d.params {
+            match decl.saisie {
+                Saisie::Bloc => {
+                    assert_eq!(
+                        n.get(decl.nom),
+                        Some(&Valeur::texte(cle)),
+                        "« {} » / {}",
+                        d.id,
+                        decl.nom
+                    );
+                    vus += 1;
+                }
+                Saisie::Melange => {
+                    assert_eq!(
+                        n.get(decl.nom),
+                        Some(&Valeur::Melange(vec![
+                            (2, cle.to_string()),
+                            (1, "minecraft:dirt".to_string()),
+                        ])),
+                        "« {} » / {}",
+                        d.id,
+                        decl.nom
+                    );
+                    vus += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(vus >= 8, "le balayage n'a vu que {vus} paramètres de bloc");
+}
+
+/// Un bloc illisible arrête l'opération AVANT qu'elle ne parte, et l'erreur
+/// dit laquelle, quel paramètre, et pourquoi.
+#[test]
+fn un_bloc_illisible_est_refuse_en_nommant_le_parametre() {
+    let d = descripteur("remplacer").unwrap();
+    let mut p = remplir(d);
+    p.poser("vers", Valeur::texte("oak_stairs[facing=east"));
+    match normaliser(d, &p) {
+        Err(e @ Erreur::BlocInvalide { .. }) => {
+            let t = e.to_string();
+            assert!(t.contains("remplacer") && t.contains("vers"), "{t}");
+            assert!(t.contains(']'), "la raison dit ce qui manque : {t}");
+        }
+        autre => panic!("attendu BlocInvalide, reçu {autre:?}"),
+    }
+    let d = descripteur("melanger").unwrap();
+    let mut p = d.defauts();
+    p.poser(
+        "melange",
+        Valeur::Melange(vec![(1, "stone".into()), (1, "a:b:c".into())]),
+    );
+    assert!(matches!(
+        normaliser(d, &p),
+        Err(Erreur::BlocInvalide { .. })
+    ));
+}
+
+/// **De bout en bout** : ce que le moteur interne est la clé canonique — celle
+/// que le décodeur rend pour le même bloc lu dans une save. Deux clés pour un
+/// même état dédoubleraient la palette, et un `//replace` suivant raterait
+/// la moitié des cases.
+#[test]
+fn la_syntaxe_du_jeu_arrive_au_moteur_sous_la_cle_du_decodeur() {
+    let mut i = Interner::new();
+    let mut p = Params::new();
+    p.poser(
+        "bloc",
+        Valeur::texte("minecraft:oak_stairs[half=top,facing=east]"),
+    );
+    let Travail::Direct { plan, .. } = construire("//set", &p, &mut i).unwrap() else {
+        panic!("« poser » doit être directe");
+    };
+    let Motif::Bloc(id) = plan.motif else {
+        panic!("{:?}", plan.motif)
+    };
+    let mut props = vec![
+        ("half".to_string(), "top".to_string()),
+        ("facing".to_string(), "east".to_string()),
+    ];
+    assert_eq!(
+        i.resolve(id),
+        Some(tf_anvil::state_key("minecraft:oak_stairs", &mut props).as_str())
+    );
+
+    let mut p = Params::new();
+    p.poser("de", Valeur::texte("Stone"));
+    p.poser("vers", Valeur::texte("dirt"));
+    let Travail::Direct { plan, .. } = construire("//replace", &p, &mut i).unwrap() else {
+        panic!("« remplacer » doit être directe");
+    };
+    let Masque::Etat(de) = plan.masque else {
+        panic!("{:?}", plan.masque)
+    };
+    assert_eq!(i.resolve(de), Some("minecraft:stone"));
+}
+
+/// **Un mélange tapé** ne se coupe pas entre crochets : les propriétés d'un
+/// bloc ont leurs propres virgules.
+#[test]
+fn un_melange_tape_garde_ses_blocs_entiers() {
+    use tf_ops::catalogue::lire_melange;
+    assert_eq!(
+        lire_melange("3:minecraft:stone, 1:oak_stairs[facing=east,half=top]"),
+        Ok(vec![
+            (3, "minecraft:stone".to_string()),
+            (1, "minecraft:oak_stairs|facing=east,half=top".to_string()),
+        ])
+    );
+    // Des espaces (PowerShell), le poids à la WorldEdit, et pas de poids du
+    // tout ; un préfixe qui n'est pas un nombre est un espace de noms.
+    assert_eq!(
+        lire_melange("50%stone 25%dirt minefield:chaise[facing=north]"),
+        Ok(vec![
+            (50, "minecraft:stone".to_string()),
+            (25, "minecraft:dirt".to_string()),
+            (1, "minefield:chaise|facing=north".to_string()),
+        ])
+    );
+    // Ce qui s'affiche se relit à l'identique.
+    let v = Valeur::Melange(vec![
+        (3, "minecraft:oak_stairs|facing=east,half=top".into()),
+        (1, "minecraft:dirt".into()),
+    ]);
+    let Valeur::Melange(attendu) = &v else {
+        unreachable!()
+    };
+    assert_eq!(lire_melange(&v.to_string()).as_ref(), Ok(attendu));
+
+    for faux in ["", " , ", "-3:stone", "3:oak_stairs[facing", "x:y:z"] {
+        assert!(lire_melange(faux).is_err(), "« {faux} » accepté");
+    }
+}

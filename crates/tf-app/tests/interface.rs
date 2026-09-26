@@ -9,19 +9,25 @@
 //! fonctionner, et rien à l'écran ne le disait.
 
 use tf_app::etat::{Atelier, Etat, Note};
-use tf_app::interface::champ;
+use tf_app::interface::{champ, Aide};
+use tf_app::nuancier::Nuancier;
 use tf_ops::catalogue::{descripteur, Param, Saisie, Valeur, OPS};
 use tf_world::coords::BlockPos;
 
 /// Fait tourner une image d'interface sans surface ni GPU.
 fn dessiner(f: impl FnOnce(&mut egui::Ui)) {
+    dessiner_avec(egui::RawInput::default(), f);
+}
+
+/// La même, avec une entrée donnée — des touches, du texte tapé.
+fn dessiner_avec(entree: egui::RawInput, f: impl FnOnce(&mut egui::Ui)) {
     // `run` prend un `FnMut` — il peut rendre plusieurs images. La fermeture
     // de l'appelant, elle, ne sert qu'une fois : on la met dans une `Option`
     // plutôt que de la lui faire cloner.
     let mut une_fois = Some(f);
     let ctx = egui::Context::default();
     // La sortie décrit ce qu'il faudrait afficher ; ici on ne dessine pas.
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = ctx.run(entree, |ctx| {
         if let Some(g) = une_fois.take() {
             egui::CentralPanel::default().show(ctx, g);
         }
@@ -58,7 +64,12 @@ fn chaque_saisie_a_son_champ() {
         };
         let mut v = valeur_neutre(s);
         let mut dessine = false;
-        dessiner(|ui| dessine = champ(ui, &p, &mut v));
+        let n = Nuancier::default();
+        let aide = Aide {
+            nuancier: &n,
+            vise: None,
+        };
+        dessiner(|ui| dessine = champ(ui, &p, &mut v, aide));
         assert!(dessine, "la saisie {s:?} n'a pas de champ");
     }
 }
@@ -73,7 +84,12 @@ fn chaque_parametre_du_catalogue_se_dessine() {
         for p in d.params {
             let mut v = a.valeur(p.nom);
             let mut dessine = false;
-            dessiner(|ui| dessine = champ(ui, p, &mut v));
+            let n = Nuancier::default();
+            let aide = Aide {
+                nuancier: &n,
+                vise: None,
+            };
+            dessiner(|ui| dessine = champ(ui, p, &mut v, aide));
             assert!(dessine, "« {} » / {} ne se dessine pas", d.id, p.nom);
         }
     }
@@ -93,7 +109,12 @@ fn une_valeur_du_mauvais_genre_ne_se_dessine_pas() {
     };
     let mut v = Valeur::Entier(42);
     let mut dessine = true;
-    dessiner(|ui| dessine = champ(ui, &p, &mut v));
+    let n = Nuancier::default();
+    let aide = Aide {
+        nuancier: &n,
+        vise: None,
+    };
+    dessiner(|ui| dessine = champ(ui, &p, &mut v, aide));
     assert!(!dessine);
     assert_eq!(v, Valeur::Entier(42), "la valeur a été réécrite en silence");
 }
@@ -245,4 +266,69 @@ fn la_palette_a_de_quoi_s_afficher() {
         assert!(d.resume.len() > 20, "« {} » : résumé trop court", d.id);
         assert!(descripteur(d.id).is_some());
     }
+}
+
+/// Un champ de bloc qui a le focus, puis « Entrée » : ce qu'il contient après.
+fn taper_entree(texte: &str, n: &Nuancier, vise: Option<&str>) -> String {
+    use tf_app::interface::champ_de_bloc;
+    let ctx = egui::Context::default();
+    let id = egui::Id::new("essai-bloc");
+    let mut s = texte.to_string();
+    let aide = Aide { nuancier: n, vise };
+    let image = |entree: egui::RawInput, s: &mut String| {
+        let _ = ctx.run(entree, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                champ_de_bloc(ui, id, s, aide, 200.0);
+            });
+        });
+    };
+    ctx.memory_mut(|m| m.request_focus(id));
+    image(egui::RawInput::default(), &mut s);
+    let mut entree = egui::RawInput::default();
+    entree.events.push(egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    image(entree, &mut s);
+    s
+}
+
+/// **Entrée complète ce qui n'est pas encore un bloc** — et ne remplace pas
+/// un identifiant exact tapé à la main par un voisin mieux classé.
+#[test]
+fn entree_complete_sans_remplacer_ce_qui_est_deja_un_bloc() {
+    let mut n = Nuancier::new([
+        "minecraft:stone",
+        "minecraft:oak_stairs",
+        "minecraft:stone_bricks",
+    ]);
+    n.suivre_monde(
+        0,
+        ["minecraft:oak_stairs|facing=east,half=bottom,shape=straight,waterlogged=false"]
+            .into_iter(),
+        1,
+    );
+    assert_eq!(
+        taper_entree("oak_st", &n, None),
+        "minecraft:oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]",
+        "l'état que le jeu a écrit d'abord"
+    );
+    assert_eq!(
+        taper_entree("stone", &n, None),
+        "stone",
+        "déjà un bloc connu"
+    );
+    assert_eq!(
+        taper_entree("", &n, Some("minecraft:stone_bricks")),
+        "minecraft:stone_bricks",
+        "un champ vide prend le bloc visé"
+    );
+    assert_eq!(
+        taper_entree("rien_de_tel", &n, None),
+        "rien_de_tel",
+        "sans proposition, le texte reste — et le champ dit qu'il est inconnu"
+    );
 }

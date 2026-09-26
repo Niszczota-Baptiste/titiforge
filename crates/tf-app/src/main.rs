@@ -35,6 +35,7 @@ fn main() {
     let mut zone: Option<[i32; 4]> = None;
     let mut capture: Option<String> = None;
     let mut montrer_accueil = false;
+    let mut bloc_tape: Option<String> = None;
     let mut mode = tf_render::controles::Mode::Edition;
     let (mut larg, mut haut) = (1400u32, 900u32);
     // **La distance d'affichage, en CHUNKS.** Un disque de rayon 8 porte 201
@@ -58,6 +59,9 @@ fn main() {
             // La capture montre l'ACCUEIL par-dessus la scène : c'est ce qui
             // permet de le regarder depuis une machine sans écran.
             "--accueil" => montrer_accueil = true,
+            // La capture montre le SÉLECTEUR DE BLOCS ouvert sur ce texte,
+            // dans le champ du bloc en main.
+            "--bloc" => bloc_tape = args.next(),
             "--zone" => {
                 let v: Vec<i32> = args
                     .next()
@@ -106,7 +110,8 @@ fn main() {
                 "aucune installation de Minecraft trouvée — désigner des assets :\n\n\
                  usage : titiforge [<assets>] [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
                  \x20       [--rayon <cellules>]\n\
-                 \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\n\
+                 \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\
+                 \x20                 [--accueil] [--bloc <texte>] [--mode conception]\n\n\
                  <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
                  Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
                  demander de connaître nos formats."
@@ -172,6 +177,12 @@ fn main() {
                     .unwrap_or_default();
                 tf_app::accueil::Accueil::explorer(&installations, seances.as_deref(), &recents)
             });
+            let mut nuancier = tf_app::nuancier::Nuancier::new(ouvert.assets.noms());
+            nuancier.suivre_monde(
+                ouvert.rechargements,
+                ouvert.monde.etats(),
+                ouvert.monde.nb_etats(),
+            );
             capturer(
                 &ouvert.monde,
                 &png,
@@ -179,6 +190,7 @@ fn main() {
                 mode,
                 ouvert.editable(),
                 accueil,
+                (nuancier, bloc_tape),
             )
         }
         None => {
@@ -230,6 +242,7 @@ fn capturer(
     mode: tf_render::controles::Mode,
     editable: bool,
     accueil: Option<tf_app::accueil::Accueil>,
+    (nuancier, bloc): (tf_app::nuancier::Nuancier, Option<String>),
 ) {
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -274,6 +287,13 @@ fn capturer(
         etat.accueil = a;
         etat.accueil.ouvert = true;
     }
+    etat.nuancier = nuancier;
+    let focus = bloc.map(|t| {
+        etat.mode = tf_render::controles::Mode::Conception;
+        etat.outil = tf_app::etat::Outil::Poser;
+        etat.bloc_tirage = t;
+        egui::Id::new(interface::ID_BLOC_EN_MAIN)
+    });
 
     let cible = Cible::nouvelle(&app, larg, haut);
     let atlas = AtlasGpu::avec_mips(
@@ -286,6 +306,7 @@ fn capturer(
 
     let camera = etat.vue.camera(&modele_camera(m));
     etat.relever_reticule(&camera, aspect, 256.0, &m.solide());
+    etat.nommer_vise(|c| m.etat_en(c.x, c.y, c.z));
 
     // Le quadrillage suit le JOUEUR, pas le build : c'est autour de lui qu'on
     // veut voir le découpage.
@@ -318,7 +339,7 @@ fn capturer(
     );
 
     // ── l'interface par-dessus, dans la MÊME texture
-    let pixels = dessiner_interface(&app, &mut etat, larg, haut, pixels);
+    let pixels = dessiner_interface(&app, &mut etat, larg, haut, pixels, focus);
 
     ecrire_png(sortie, larg, haut, &pixels);
     println!("→ {sortie}");
@@ -351,9 +372,17 @@ fn dessiner_interface(
     larg: u32,
     haut: u32,
     fond: Vec<u8>,
+    focus: Option<egui::Id>,
 ) -> Vec<u8> {
     let ctx = egui::Context::default();
     ctx.set_pixels_per_point(1.0);
+    // Aucune animation : la capture ne dessine que deux images, et tout ce
+    // qui apparaît en fondu — une fenêtre, une liste de propositions — y
+    // sortait à moitié transparent.
+    ctx.style_mut(|s| s.animation_time = 0.0);
+    if let Some(id) = focus {
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
     let entree = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::pos2(0.0, 0.0),

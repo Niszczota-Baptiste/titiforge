@@ -948,3 +948,45 @@ fn chaque_outil_dit_ce_que_font_les_boutons() {
     }
     assert_eq!(vus.len(), Outil::TOUS.len());
 }
+
+/// **La pipette** : on regarde un bloc, il devient le bloc EN MAIN — sous
+/// l'état exact que la scène tient, pas son seul nom. Et ce que « Poser »
+/// envoie ensuite arrive au moteur sous la clé que le décodeur rend pour ce
+/// même bloc : deux clés pour un état dédoubleraient la palette.
+#[test]
+fn la_pipette_prend_le_bloc_vise_sous_son_etat_exact() {
+    let mut e = etat_devant_le_mur();
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    let visee = e.reticule.case.unwrap();
+    let cle = "minecraft:oak_stairs|facing=east,half=top";
+    let mut demandee = None;
+    e.nommer_vise(|c| {
+        demandee = Some(c);
+        cle
+    });
+    assert_eq!(demandee, Some(visee), "la case qui ARRÊTE le rayon");
+    assert_eq!(e.bloc_vise.as_deref(), Some(cle));
+
+    assert!(e.pipette());
+    assert_eq!(e.bloc_tirage, "minecraft:oak_stairs[facing=east,half=top]");
+    assert_eq!(
+        e.nuancier.recents(),
+        [cle],
+        "le bloc en main est le plus récent"
+    );
+
+    let tf_app::moteur::Commande::Appliquer { op, params, .. } = e.poser_un_bloc().unwrap() else {
+        panic!()
+    };
+    let d = tf_ops::catalogue::descripteur(op).unwrap();
+    let n = tf_ops::catalogue::normaliser(d, &params).unwrap();
+    assert_eq!(n.get("bloc"), Some(&tf_ops::catalogue::Valeur::texte(cle)));
+
+    // Rien sous le réticule : la pipette ne prend rien, et le bloc en main
+    // RESTE — un clic dans le ciel ne doit pas vider la main.
+    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    e.nommer_vise(|_| panic!("rien n'est visé : on ne demande rien à la scène"));
+    assert_eq!(e.bloc_vise, None);
+    assert!(!e.pipette());
+    assert_eq!(e.bloc_tirage, "minecraft:oak_stairs[facing=east,half=top]");
+}

@@ -157,12 +157,17 @@ impl std::fmt::Display for Valeur {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Valeur::Texte(s) if s.is_empty() => write!(f, "—"),
-            Valeur::Texte(s) => write!(f, "{s}"),
+            // Une clé de bloc se montre dans la syntaxe du JEU : c'est celle
+            // qu'on tape, et elle se relit (`cle_de_bloc`, `lire_melange`).
+            Valeur::Texte(s) => write!(f, "{}", bloc_affiche(s)),
             Valeur::Entier(n) => write!(f, "{n}"),
             Valeur::Vecteur([x, y, z]) => write!(f, "{x},{y},{z}"),
             Valeur::Melange(v) if v.is_empty() => write!(f, "aucun"),
             Valeur::Melange(v) => {
-                let parts: Vec<String> = v.iter().map(|(n, b)| format!("{n}:{b}")).collect();
+                let parts: Vec<String> = v
+                    .iter()
+                    .map(|(n, b)| format!("{n}:{}", bloc_affiche(b)))
+                    .collect();
                 write!(f, "{}", parts.join(","))
             }
             Valeur::Direction(d) => write!(f, "{}", d.nom()),
@@ -589,6 +594,13 @@ pub enum Erreur {
         attendu: &'static str,
         recu: &'static str,
     },
+    /// Un bloc qui ne se lit pas comme un identifiant du jeu. Refusé : écrit
+    /// tel quel, il deviendrait un nom de bloc que le jeu ne connaît pas.
+    BlocInvalide {
+        op: String,
+        nom: String,
+        raison: String,
+    },
 }
 
 impl std::fmt::Display for Erreur {
@@ -610,8 +622,170 @@ impl std::fmt::Display for Erreur {
                 f,
                 "« {op} », paramètre « {nom} » : {attendu} attendu, {recu} reçu"
             ),
+            Erreur::BlocInvalide { op, nom, raison } => {
+                write!(f, "« {op} », paramètre « {nom} » : {raison}")
+            }
         }
     }
+}
+
+/// **La clé d'un bloc TAPÉ** : la forme interne, `nom|k=v,k=v` triée, à
+/// partir de ce que l'utilisateur écrit — `stone`, `minecraft:stone`, la
+/// syntaxe du jeu et de WorldEdit `minecraft:oak_stairs[facing=east]`, ou la
+/// clé elle-même.
+///
+/// **Sans elle, un bloc tapé était interné TEL QUEL.** La syntaxe du jeu —
+/// celle que tout le monde tape — devenait un nom de bloc crochets compris,
+/// que l'écriture recopiait dans la save : un bloc que le jeu ne connaît pas.
+/// Refuser coûte une phrase ; deviner aurait coûté un mur.
+///
+/// Sans espace de noms, c'est `minecraft:`, comme dans le jeu. Les
+/// identifiants du jeu sont en minuscules : « Stone » ne désigne rien d'autre
+/// que « stone ».
+pub fn cle_de_bloc(texte: &str) -> Result<String, String> {
+    let t = texte.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return Err("aucun bloc".into());
+    }
+    let (nom, props) = match (t.find('['), t.find('|')) {
+        (Some(i), None) => {
+            let Some(dedans) = t[i + 1..].strip_suffix(']') else {
+                return Err(format!("« {texte} » : un « [ » sans « ] » final"));
+            };
+            (&t[..i], dedans)
+        }
+        (None, Some(i)) => (&t[..i], &t[i + 1..]),
+        (None, None) => (t.as_str(), ""),
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "« {texte} » mélange deux écritures des propriétés — « [k=v] » OU « |k=v »"
+            ))
+        }
+    };
+    let nom = nom.trim();
+    let nom = if nom.contains(':') {
+        nom.to_string()
+    } else {
+        format!("minecraft:{nom}")
+    };
+    let (ns, chemin) = nom.split_once(':').unwrap_or(("", ""));
+    let permis = |c: char, slash: bool| {
+        c.is_ascii_lowercase()
+            || c.is_ascii_digit()
+            || matches!(c, '_' | '-' | '.')
+            || (slash && c == '/')
+    };
+    if ns.is_empty()
+        || chemin.is_empty()
+        || !ns.chars().all(|c| permis(c, false))
+        || !chemin.chars().all(|c| permis(c, true))
+    {
+        return Err(format!(
+            "« {texte} » n'est pas un identifiant de bloc — lettres, chiffres, « _ - . » \
+             seulement, et un seul « : » (minecraft:oak_stairs[facing=east])"
+        ));
+    }
+    let mut paires: Vec<(String, String)> = Vec::new();
+    for kv in props.split(',').map(str::trim).filter(|kv| !kv.is_empty()) {
+        let Some((k, v)) = kv.split_once('=') else {
+            return Err(format!(
+                "« {texte} » : la propriété « {kv} » n'a pas de « = »"
+            ));
+        };
+        let (k, v) = (k.trim(), v.trim());
+        if k.is_empty()
+            || v.is_empty()
+            || !k.chars().all(|c| permis(c, false))
+            || !v.chars().all(|c| permis(c, false))
+        {
+            return Err(format!("« {texte} » : propriété « {kv} » mal formée"));
+        }
+        if paires.iter().any(|(x, _)| x == k) {
+            return Err(format!(
+                "« {texte} » : la propriété « {k} » est donnée deux fois"
+            ));
+        }
+        paires.push((k.to_string(), v.to_string()));
+    }
+    Ok(tf_anvil::state_key(&nom, &mut paires))
+}
+
+/// **Une clé de bloc dans la syntaxe du jeu** : `nom|k=v,k=v` devient
+/// `nom[k=v,k=v]`, un nom seul reste tel quel. C'est ce qu'on montre, et ce
+/// que `cle_de_bloc` relit.
+///
+/// La clé interne a ses raisons — une seule règle de tri, donc une seule
+/// palette — mais une barre verticale n'est pas ce que l'utilisateur tape, et
+/// ses virgules couperaient un mélange en morceaux.
+pub fn bloc_affiche(cle: &str) -> String {
+    match cle.split_once('|') {
+        Some((nom, props)) => format!("{nom}[{props}]"),
+        None => cle.to_string(),
+    }
+}
+
+/// **Lit un mélange tapé** : `3:minecraft:stone, 1:oak_stairs[facing=east,half=top]`.
+///
+/// Les entrées se séparent par des virgules ou des espaces — PowerShell
+/// remplace les unes par les autres — mais JAMAIS à l'intérieur de crochets :
+/// les propriétés d'un bloc sont elles aussi séparées par des virgules, et
+/// couper là ferait d'un escalier orienté deux entrées absurdes.
+///
+/// Le poids est facultatif (`stone` vaut `1:stone`) et s'écrit aussi à la
+/// WorldEdit (`50%stone`). Un préfixe qui n'est pas un nombre est un espace de
+/// noms : `minefield:chaise` est un bloc, pas un poids. Chaque bloc sort sous
+/// sa clé canonique.
+pub fn lire_melange(texte: &str) -> Result<Vec<(u32, String)>, String> {
+    let mut entrees = Vec::new();
+    let mut profondeur = 0usize;
+    let mut debut = 0usize;
+    let mut morceaux = Vec::new();
+    for (i, c) in texte.char_indices() {
+        match c {
+            '[' => profondeur += 1,
+            ']' => profondeur = profondeur.saturating_sub(1),
+            c if profondeur == 0 && (c == ',' || c.is_whitespace()) => {
+                morceaux.push(&texte[debut..i]);
+                debut = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    morceaux.push(&texte[debut..]);
+    for m in morceaux
+        .into_iter()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        let poids_et_bloc = m
+            .split_once('%')
+            .filter(|(p, _)| est_un_nombre(p))
+            .or_else(|| m.split_once(':').filter(|(p, _)| est_un_nombre(p)));
+        let (poids, bloc) = match poids_et_bloc {
+            Some((p, b)) => {
+                let p: u32 = p
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("« {m} » : le poids doit être un entier positif"))?;
+                (p, b)
+            }
+            None => (1, m),
+        };
+        entrees.push((poids, cle_de_bloc(bloc)?));
+    }
+    if entrees.is_empty() {
+        return Err("mélange vide".into());
+    }
+    Ok(entrees)
+}
+
+/// `3`, `-3`, `+3` : de quoi reconnaître un POIDS avant de le lire — même
+/// négatif, pour le refuser en le nommant plutôt que d'en faire un espace de
+/// noms.
+fn est_un_nombre(p: &str) -> bool {
+    let p = p.trim();
+    let chiffres = p.strip_prefix(['-', '+']).unwrap_or(p);
+    !chiffres.is_empty() && chiffres.bytes().all(|b| b.is_ascii_digit())
 }
 
 impl std::error::Error for Erreur {}
@@ -660,7 +834,12 @@ pub fn normaliser(d: &Descripteur, p: &Params) -> Result<Params, Erreur> {
                 })
             }
         };
-        out.poser(decl.nom, serrer(decl.saisie, v));
+        let v = serrer(decl.saisie, v).map_err(|raison| Erreur::BlocInvalide {
+            op: d.id.to_string(),
+            nom: decl.nom.to_string(),
+            raison,
+        })?;
+        out.poser(decl.nom, v);
     }
     Ok(out)
 }
@@ -676,11 +855,20 @@ fn attendu(s: Saisie) -> &'static str {
     }
 }
 
-fn serrer(s: Saisie, v: Valeur) -> Valeur {
-    match (s, v) {
+/// Ramène une valeur dans ce que le descripteur admet : un entier dans ses
+/// bornes, un bloc à sa clé canonique. Idempotent — le normaliseur l'est.
+fn serrer(s: Saisie, v: Valeur) -> Result<Valeur, String> {
+    Ok(match (s, v) {
         (Saisie::Entier { min, max }, Valeur::Entier(n)) => Valeur::Entier(n.clamp(min, max)),
+        (Saisie::Bloc, Valeur::Texte(t)) => Valeur::Texte(cle_de_bloc(&t)?),
+        (Saisie::Melange, Valeur::Melange(entrees)) => Valeur::Melange(
+            entrees
+                .into_iter()
+                .map(|(n, b)| cle_de_bloc(&b).map(|c| (n, c)))
+                .collect::<Result<_, _>>()?,
+        ),
         (_, v) => v,
-    }
+    })
 }
 
 /// Ce qu'une opération demande de faire, une fois ses paramètres tenus pour

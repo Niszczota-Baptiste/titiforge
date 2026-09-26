@@ -8,6 +8,8 @@
 //! - `etat` : ce que l'interface montre et modifie. Pur, testable.
 //! - `accueil` : ouvrir un monde sans ligne de commande — les saves de la
 //!   machine, les récents, un chemin collé. Pur, testable.
+//! - `nuancier` : choisir un bloc sans connaître son identifiant — le visé,
+//!   les récents, ce que le monde porte, ce que le pack déclare. Pur.
 //! - `interface` : le dessin egui. Il LIT l'état, il ne décide rien.
 //! - `scene` : le montage du monde vers l'arène GPU.
 //! - `chargeur` : le fil qui lit les régions, une réponse par cellule.
@@ -22,6 +24,7 @@ pub mod chargeur;
 pub mod etat;
 pub mod interface;
 pub mod moteur;
+pub mod nuancier;
 pub mod pilote;
 pub mod scene;
 

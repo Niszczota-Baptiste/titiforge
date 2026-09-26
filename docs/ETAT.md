@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **973**, zéro échec |
+| Tests | **989**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-973 tests, répartis par ce qu'ils PROUVENT :
+989 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -76,15 +76,16 @@ cargo test --workspace
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 37 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE |
+| `tf-app` etat | 38 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; et que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main |
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
 | `tf-app` moteur | 12 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; et qu'un journal qui ne s'écrit pas se DIT |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
-| `tf-app` interface | 9 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; et qu'une valeur du mauvais genre est refusée au lieu d'être convertie |
+| `tf-app` interface | 10 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; et, en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin |
+| `tf-app` nuancier | 9 | le SÉLECTEUR DE BLOCS : le visé, puis les récents, puis le monde — pas le pack entier — quand rien n'est tapé ; la correspondance classe avant l'origine, et chaque mot d'une recherche compte ; les états que le JEU a écrits passent avant le nom nu ; la syntaxe du jeu tapée à la main trouve ses états ; un ordre TOTAL, le même quel que soit l'ordre d'entrée ; des récents canoniques, sans air ni doublon, bornés, qui survivent au fichier ; et un bloc inconnu du pack ET du monde qui se signale |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
-| `tf-ops` catalogue | 18 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter |
+| `tf-ops` catalogue | 23 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter ; et qu'un bloc TAPÉ — `stone`, `Minecraft:Stone`, `oak_stairs[half=top,facing=east]` — arrive au moteur sous la clé que le décodeur rend pour le même bloc, pour CHAQUE paramètre de bloc du catalogue et chaque entrée de mélange, qu'un bloc illisible est refusé en nommant l'opération et le paramètre, et qu'un mélange tapé ne se coupe pas entre crochets |
 | `tf-world` demande | 25 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
 | `tf-app` rechargement | 11 | qu'éditer une cellule STREAMÉE ne la retire pas de la scène ni n'y fait naître ce qui n'est pas chargé ; qu'un état jamais vu au bord d'une cellule qui arrive cache bien la face de sa voisine ; qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
 | `tf-render` pages | 5 | le tableau par PAGES : que grandir ne déplace aucune page existante, qu'il se comporte comme un `Vec` sur une suite tirée d'une graine, qu'une case recréée vaut `vide` et pas son ancien contenu, et qu'une plage se découpe aux frontières de page |
@@ -611,6 +612,62 @@ dix, ce qui cachait un fichier d'une ligne de trop — et le dernier geste du
 test, re-noter un monde déjà présent, le ramenait justement à dix. Le compte
 se vérifie maintenant juste après la boucle.
 
+### Choisir un bloc sans connaître son identifiant
+
+```bash
+cargo run --release -p tf-app -- <assets> --capture bloc.png --bloc "oak st"
+```
+
+Chaque champ de bloc — ceux des opérations, chaque entrée d'un mélange, et le
+bloc EN MAIN que posent « Poser » et le pousser-tirer — propose sous le texte,
+dans cet ordre : le bloc **visé** par le réticule, les **récents**, ce que le
+**monde** porte déjà sous l'état exact que le jeu a écrit, puis ce que le
+**pack** déclare. On tape `oak st`, on voit les escaliers et les tabourets de
+chêne, vanilla et `minefield:*` mêlés ; Entrée prend le premier, un clic en
+prend un autre. La **pipette** (bouton, ou Alt + clic gauche dans les deux
+modes) met le bloc visé en main. Les récents se gardent d'un lancement à
+l'autre, à côté des séances (`blocs.txt`).
+
+**Le défaut trouvé en l'écrivant était dans le moteur, pas dans l'interface.**
+Un bloc tapé était interné TEL QUEL : `minecraft:oak_stairs[facing=east]` —
+la syntaxe du jeu et de WorldEdit, celle que tout le monde tape — devenait un
+nom de bloc crochets compris, que l'écriture recopiait dans la save. Le
+normaliseur ramène maintenant tout paramètre de bloc à la clé canonique
+(`cle_de_bloc`) : minuscules, `minecraft:` par défaut, propriétés triées, et
+un texte illisible REFUSÉ en nommant l'opération et le paramètre. Un bloc
+lisible mais inconnu du pack et du monde se signale sous le champ — c'est
+presque toujours une faute de frappe, et le jeu remplace ce qu'il ne connaît
+pas par de l'air.
+
+Un second, dans la coque, que le sélecteur aurait rendu quotidien : les
+touches tapées dans un champ de texte pilotaient AUSSI la caméra — chercher
+« dirt » la faisait filer à droite — et **Échap dans un champ quittait
+l'application**. Les appuis sont ignorés tant qu'egui tient le clavier ; les
+relâchements passent toujours, sinon une touche de vol enfoncée avant le focus
+resterait tenue.
+
+23 mutations : 22 tuées, dont deux au second tour, et une ÉQUIVALENTE —
+sauter le premier mot d'un nom dans le test « début de mot » ne changeait
+rien, puisque ce mot est déjà couvert par le préfixe : la ligne a été retirée
+plutôt que défendue. Des deux tuées au second tour, l'une retirait le
+dédoublonnage des récents relus d'un fichier — `stone` et `minecraft:stone`
+sont le même bloc, et le test ne le disait pas. L'autre tient à une règle
+changée en cours de route, sur ce que la CAPTURE montrait : une recherche de
+plusieurs mots prenait le rang de son pire mot, ce qui mettait
+`dark_oak_stool` à égalité avec `oak_stool` pour « oak st ». C'est
+maintenant la somme — et le premier test écrit pour la fixer passait avec
+l'ancienne règle, la longueur départageant déjà dans le bon sens. Il choisit
+maintenant des noms dont la longueur tire dans le MAUVAIS sens. Les deux
+mutations du chemin d'Entrée, elles, pilotent egui sans fenêtre : sans ça, le
+test n'aurait vérifié que la liste, pas ce qu'Entrée en fait.
+
+Relu avant de commiter : le sélecteur suivait la table d'états de la scène en
+devinant qu'elle avait changé quand elle RACCOURCISSAIT. Or un rechargement en
+refait une, et une table rechargée plus longue que l'ancienne en aurait fait
+sauter le début — en gardant les blocs de l'autre. C'est le piège du `StateId`
+relatif à SON interner, une fois de plus : la table se désigne par son NUMÉRO
+(`Ouvert::rechargements`), jamais par sa longueur.
+
 ---
 
 ## 4. Le rendu
@@ -1082,6 +1139,10 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Une séance ne voit pas le jeu changer la save PENDANT qu'elle est ouverte** | les données restent justes — une région écrite a quitté la copie, donc la prochaine opération relit la save — mais ce qui est À L'ÉCRAN date d'avant la partie jusqu'à son prochain remaillage. Et une région où la copie porte du travail, que le jeu change entre-temps, fait refuser l'écriture sans autre issue dans l'application que fermer et rouvrir (la séance est alors mise de côté) |
 | **Pas de bouton « abandonner la copie de travail »** | tout annuler y revient, et une séance en conflit se met de côté d'elle-même ; mais on ne peut pas jeter d'un geste une séance qu'on ne veut plus. Les séances mises de côté ne s'effacent jamais seules |
 | **Rien n'est forcé sur le disque** (`fsync`) | un arrêt du PROGRAMME ne perd rien ; une coupure de courant peut perdre les dernières actions. Et une action interrompue en plein milieu peut laisser la copie à moitié écrite, sans entrée de journal pour la défaire : la reprise le DIT (« … a été interrompue »), elle ne sait pas le réparer |
+| **Le sélecteur ne cherche qu'en identifiants** | « oak st » trouve l'escalier de chêne, « escalier chêne » ne trouve rien. Les noms français sont dans `fr_fr.json`, que le launcher range parmi ses objets hachés (`assets/indexes/*.json`) et non dans le `.jar` ; ceux des `minefield:*` sont dans le pack du serveur |
+| **Un état PARTIEL tapé se complète chez le jeu, pas ici** | `oak_stairs[facing=east]` part tel quel : le jeu remplit les propriétés manquantes par leurs défauts au chargement, mais notre rendu prend la PREMIÈRE variante déclarée pour ce qu'il ne sait pas, et la palette tient une clé différente de l'état complet que le jeu écrit — un `//replace` de l'état complet ne le verrait pas. Les défauts sont dans le code du jeu, pas dans le pack. Le sélecteur propose donc d'abord les états COMPLETS que le monde porte |
+| **`//replace` ne vise qu'un état exact** | WorldEdit remplace tous les états d'un bloc quand on n'en donne que le nom (`//replace oak_stairs …`) ; ici le masque est un état. Remplacer par NOM en gardant les propriétés — chêne → sapin sans perdre une orientation — reste à écrire |
+| **La garde du clavier n'a pas de test** | elle vit dans le gestionnaire d'événements de la fenêtre (`coque.rs`), derrière winit |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 
 Et une limite de méthode : **tous les temps de rendu sont mesurés sur un

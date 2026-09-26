@@ -115,6 +115,8 @@ struct Gpu {
     /// Ctrl est-il tenu ? Regardé, jamais supposé : sans lui, « Z » répondrait
     /// aussi à Ctrl+Z.
     ctrl: bool,
+    /// Alt est-il tenu ? Alt + clic gauche est la pipette, dans les deux modes.
+    alt: bool,
     souris: Option<(f64, f64)>,
     /// L'atlas que la scène a monté : `(rechargements, couches, côté)`.
     /// L'atlas ne change que de trois façons — un rechargement le refait, un
@@ -186,6 +188,16 @@ impl ApplicationHandler for Coque {
                 if let Some(m) = self.depart.message.take() {
                     g.etat.message = m;
                 }
+                g.etat.nuancier = tf_app::nuancier::Nuancier::new(self.ouvert.assets.noms());
+                if let Some(t) = self
+                    .depart
+                    .seances
+                    .as_deref()
+                    .and_then(tf_app::nuancier::fichier_blocs)
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                {
+                    g.etat.nuancier.relire_recents(&t);
+                }
                 g.etat.accueil = self.explorer();
                 g.etat.accueil.ouvert = self.depart.accueil;
                 self.accueil_vu = self.depart.accueil;
@@ -231,6 +243,23 @@ impl ApplicationHandler for Coque {
                 let bas = event.state == ElementState::Pressed;
                 if let PhysicalKey::Code(c) = event.physical_key {
                     match c {
+                        // Les modificateurs se suivent TOUJOURS : ce ne sont
+                        // pas des gestes, et un Ctrl relâché dans un champ de
+                        // texte resterait sinon « tenu » au-dehors.
+                        KeyCode::ControlLeft | KeyCode::ControlRight => g.ctrl = bas,
+                        KeyCode::AltLeft | KeyCode::AltRight => g.alt = bas,
+                        KeyCode::ShiftLeft => {
+                            g.maj = bas;
+                            g.avance[5] = bas && !pris;
+                        }
+                        // **Une lettre tapée dans un champ n'est pas un
+                        // geste.** Sans cette garde, chercher « dirt » dans
+                        // le sélecteur de blocs faisait filer la caméra à
+                        // droite, et Échap dans un champ QUITTAIT
+                        // l'application. Seuls les appuis sont retenus : un
+                        // relâchement passe toujours, sinon une touche de vol
+                        // enfoncée avant le focus resterait tenue.
+                        _ if pris && bas => {}
                         // Échap abandonne d'abord le geste en cours. Quitter
                         // l'application au milieu d'un tirage serait une
                         // surprise coûteuse.
@@ -250,17 +279,12 @@ impl ApplicationHandler for Coque {
                         KeyCode::KeyY if bas && g.ctrl => {
                             g.etat.demande = Some(tf_app::moteur::Commande::Refaire);
                         }
-                        KeyCode::ControlLeft | KeyCode::ControlRight => g.ctrl = bas,
                         KeyCode::KeyW => g.avance[0] = bas,
                         KeyCode::KeyZ => g.avance[0] = bas,
                         KeyCode::KeyS => g.avance[1] = bas,
                         KeyCode::KeyA | KeyCode::KeyQ => g.avance[2] = bas,
                         KeyCode::KeyD => g.avance[3] = bas,
                         KeyCode::Space => g.avance[4] = bas,
-                        KeyCode::ShiftLeft => {
-                            g.avance[5] = bas;
-                            g.maj = bas;
-                        }
                         _ => {}
                     }
                 }
@@ -272,6 +296,15 @@ impl ApplicationHandler for Coque {
                 // qui coupe la caméra entière enferme l'utilisateur.
                 if button == MouseButton::Middle {
                     g.tourne = state == ElementState::Pressed;
+                } else if state == ElementState::Pressed
+                    && !pris
+                    && button == MouseButton::Left
+                    && g.alt
+                {
+                    // **La pipette**, dans les deux modes : le bloc visé
+                    // devient le bloc en main. Alt est un modificateur, donc
+                    // aucun outil n'y perd son bouton.
+                    g.etat.pipette();
                 } else if state == ElementState::Pressed && !pris {
                     match (g.etat.mode, button) {
                         // **Édition** : gauche = coin 1, droit = coin 2. La
@@ -367,12 +400,23 @@ impl ApplicationHandler for Coque {
                 }
                 g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
                 g.etat.editable = self.ouvert.editable();
+                // La table d'états de la scène ne fait que grandir entre deux
+                // rechargements : le sélecteur ne lit que la suite, et rien du
+                // tout quand elle n'a pas bougé.
+                let o = &self.ouvert;
+                g.etat
+                    .nuancier
+                    .suivre_monde(o.rechargements, o.monde.etats(), o.monde.nb_etats());
                 if let Err(e) = dessiner(f, g, &self.ouvert.monde) {
                     eprintln!("image perdue : {e}");
                 }
                 // Ce que l'interface a décidé pendant le dessin part
                 // maintenant : le fil travaillera pendant l'image suivante.
-                envoyer(&mut self.moteur, &mut g.etat);
+                envoyer(
+                    &mut self.moteur,
+                    &mut g.etat,
+                    self.depart.seances.as_deref(),
+                );
                 // L'accueil vient de s'ouvrir : la machine a pu changer.
                 if g.etat.accueil.ouvert && !self.accueil_vu {
                     let neuf = explorer(&self.depart);
@@ -512,6 +556,8 @@ impl Coque {
             let aspect = g.config.width as f32 / g.config.height.max(1) as f32;
             let m = &self.ouvert.monde;
             g.etat.recadrer(m.min, m.max, aspect);
+            // Le pack a pu changer avec l'installation ; les récents restent.
+            g.etat.nuancier.repartir(self.ouvert.assets.noms());
             g.etat.message = reprise.texte().unwrap_or_else(|| {
                 format!(
                     "monde ouvert : {}",
@@ -616,11 +662,20 @@ fn ou_regarde(cam: &tf_render::Camera) -> (tf_world::coords::BlockPos, [f32; 3])
     (oeil, regard)
 }
 
-/// Envoie ce que l'interface a demandé pendant l'image.
-fn envoyer(m: &mut Option<Moteur>, e: &mut Etat) {
+/// Envoie ce que l'interface a demandé pendant l'image — et note les blocs
+/// qu'elle pose ou vise : ce sont les récents du sélecteur, gardés d'un
+/// lancement à l'autre à côté des séances.
+fn envoyer(m: &mut Option<Moteur>, e: &mut Etat, seances: Option<&std::path::Path>) {
     let Some(demande) = e.demande.take() else {
         return;
     };
+    if let tf_app::moteur::Commande::Appliquer { op, params, .. } = &demande {
+        let noue = tf_ops::catalogue::descripteur(op)
+            .is_some_and(|d| e.nuancier.utiliser_params(d, params));
+        if noue {
+            noter_blocs(e, seances);
+        }
+    }
     let Some(moteur) = m else {
         e.message = "la fixture n'a pas de save derrière elle — « Ouvrir un \
                      monde… », en haut à gauche"
@@ -629,6 +684,21 @@ fn envoyer(m: &mut Option<Moteur>, e: &mut Etat) {
     };
     if !moteur.envoyer(demande) {
         e.message = "le moteur s'est arrêté".into();
+    }
+}
+
+/// Écrit les blocs récents. Un échec n'arrête rien — perdre la liste des
+/// récents ne vaut pas une opération refusée — mais il se DIT.
+fn noter_blocs(e: &mut Etat, seances: Option<&std::path::Path>) {
+    let Some(f) = seances.and_then(tf_app::nuancier::fichier_blocs) else {
+        return;
+    };
+    let ecrit = f
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|_| std::fs::write(&f, e.nuancier.recents_en_texte()));
+    if let Err(err) = ecrit {
+        e.message = format!("blocs récents non gardés ({}) : {err}", f.display());
     }
 }
 
@@ -738,6 +808,7 @@ fn preparer(f: &Arc<Window>, o: &mut scene::Ouvert) -> Result<Gpu, String> {
         tourne: false,
         maj: false,
         ctrl: false,
+        alt: false,
         souris: None,
         atlas_monte,
     })
@@ -753,6 +824,7 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
         .create_view(&wgpu::TextureViewDescriptor::default());
     let (camera, aspect) = vue_courante(g);
     g.etat.relever_reticule(&camera, aspect, 256.0, &m.solide());
+    g.etat.nommer_vise(|c| m.etat_en(c.x, c.y, c.z));
 
     let oeil = tf_world::coords::BlockPos::new(
         camera.oeil[0] as i32,

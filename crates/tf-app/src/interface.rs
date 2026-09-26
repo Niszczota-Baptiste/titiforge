@@ -17,6 +17,25 @@ use tf_render::controles::Mode;
 use tf_world::selection::DIRECTIONS;
 
 use crate::etat::{Etat, Note};
+use crate::nuancier::Nuancier;
+
+/// **Ce qu'un champ de bloc propose** : le nuancier, et le bloc visé — la
+/// première proposition, puisqu'on regarde en général ce qu'on veut prendre.
+#[derive(Clone, Copy)]
+pub struct Aide<'a> {
+    pub nuancier: &'a Nuancier,
+    pub vise: Option<&'a str>,
+}
+
+impl<'a> Aide<'a> {
+    /// Celle de l'état : ce que la coque a nourri.
+    pub fn de(e: &'a Etat) -> Aide<'a> {
+        Aide {
+            nuancier: &e.nuancier,
+            vise: e.bloc_vise.as_deref(),
+        }
+    }
+}
 
 /// Les couleurs du quadrillage, partagées avec ce qui le dessine en 3D —
 /// une seule table, sinon la légende finit par mentir sur ce qu'on voit.
@@ -264,14 +283,7 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
             .small()
             .color(GRIS),
         );
-        ui.horizontal(|ui| {
-            ui.label("bloc");
-            ui.add(
-                egui::TextEdit::singleline(&mut e.bloc_tirage)
-                    .desired_width(180.0)
-                    .hint_text("minecraft:stone"),
-            );
-        });
+        bloc_en_main(ui, e);
         return;
     }
     ui.add_space(6.0);
@@ -325,14 +337,40 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
             }
         }
     }
+    bloc_en_main(ui, e);
+}
+
+/// L'identifiant du champ « bloc en main » : un seul dans l'interface, et
+/// la capture sait ainsi lui donner le focus.
+pub const ID_BLOC_EN_MAIN: &str = "bloc-en-main";
+
+/// **Le bloc EN MAIN** — celui que posent « Poser » et le pousser-tirer — et
+/// la pipette qui le prend sous le réticule.
+fn bloc_en_main(ui: &mut Ui, e: &mut Etat) {
     ui.horizontal(|ui| {
         ui.label("bloc");
-        ui.add(
-            egui::TextEdit::singleline(&mut e.bloc_tirage)
-                .desired_width(180.0)
-                .hint_text("minecraft:stone"),
-        );
+        if ui
+            .small_button("pipette")
+            .on_hover_text(
+                "Prend le bloc sous le réticule, sous l'état exact que le jeu a \
+                 écrit. Aussi : Alt + clic gauche.",
+            )
+            .clicked()
+        {
+            e.pipette();
+        }
     });
+    let aide = Aide {
+        nuancier: &e.nuancier,
+        vise: e.bloc_vise.as_deref(),
+    };
+    champ_de_bloc(
+        ui,
+        egui::Id::new(ID_BLOC_EN_MAIN),
+        &mut e.bloc_tirage,
+        aide,
+        260.0,
+    );
 }
 
 /// La palette d'opérations et le formulaire de celle qui est choisie.
@@ -385,7 +423,11 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
         ui.horizontal(|ui| {
             ui.label(p.label);
         });
-        if champ(ui, p, &mut v) {
+        let aide = Aide {
+            nuancier: &e.nuancier,
+            vise: e.bloc_vise.as_deref(),
+        };
+        if champ(ui, p, &mut v, aide) {
             e.atelier.params.poser(p.nom, v);
         } else {
             // Il ne peut pas se produire tant que le test de couverture
@@ -585,17 +627,18 @@ fn volume(ui: &mut Ui, e: &mut Etat) {
 /// la chaîne partait telle quelle vers une opération qui attend un tableau :
 /// deux opérations inutilisables, sans une erreur à l'écran. Un repli muet est
 /// pire qu'un refus visible.
-pub fn champ(ui: &mut Ui, p: &Param, v: &mut Valeur) -> bool {
+pub fn champ(ui: &mut Ui, p: &Param, v: &mut Valeur, aide: Aide) -> bool {
     match (p.saisie, v) {
-        (Saisie::Bloc, Valeur::Texte(s)) | (Saisie::Biome, Valeur::Texte(s)) => {
+        (Saisie::Bloc, Valeur::Texte(s)) => {
+            let id = ui.make_persistent_id(("bloc", p.nom));
+            champ_de_bloc(ui, id, s, aide, ui.available_width());
+            true
+        }
+        (Saisie::Biome, Valeur::Texte(s)) => {
             ui.add(
                 egui::TextEdit::singleline(s)
                     .desired_width(f32::INFINITY)
-                    .hint_text(if p.saisie == Saisie::Bloc {
-                        "minecraft:stone"
-                    } else {
-                        "minecraft:plains"
-                    }),
+                    .hint_text("minecraft:plains"),
             );
             true
         }
@@ -644,15 +687,12 @@ pub fn champ(ui: &mut Ui, p: &Param, v: &mut Valeur) -> bool {
             for (i, (poids, bloc)) in entrees.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(poids).speed(1.0).range(0..=1000));
-                    ui.add(
-                        egui::TextEdit::singleline(bloc)
-                            .desired_width(150.0)
-                            .hint_text("minecraft:stone"),
-                    );
                     if ui.small_button("×").clicked() {
                         retirer = Some(i);
                     }
                 });
+                let id = ui.make_persistent_id(("melange", p.nom, i));
+                champ_de_bloc(ui, id, bloc, aide, ui.available_width());
             }
             if let Some(i) = retirer {
                 entrees.remove(i);
@@ -678,6 +718,97 @@ pub fn champ(ui: &mut Ui, p: &Param, v: &mut Valeur) -> bool {
         // Valeur et saisie ne s'accordent pas : on ne réécrit RIEN. Convertir
         // en silence est ce qui a fait planter « Naturaliser → Personnalisé ».
         _ => false,
+    }
+}
+
+/// **Un champ de bloc : on tape, il propose.**
+///
+/// Sous le texte, les propositions du nuancier — le visé, les récents, ce que
+/// le monde porte, ce que le pack déclare. Un clic en prend une ; Entrée
+/// prend la première quand ce qui est tapé n'est pas déjà un bloc connu — un
+/// identifiant exact tapé à la main n'est pas remplacé par un voisin.
+///
+/// **Ce qui ne va pas se dit TOUT DE SUITE**, sous le champ : un texte qui ne
+/// se lit pas comme un bloc, ou un bloc que ni le pack ni le monde ne
+/// connaissent — très probablement une faute de frappe, et le jeu remplace
+/// par de l'air ce qu'il ne connaît pas. Attendre « Appliquer » pour le dire,
+/// c'est le dire après qu'on a regardé ailleurs.
+pub fn champ_de_bloc(ui: &mut Ui, id: egui::Id, s: &mut String, aide: Aide, largeur: f32) {
+    let r = ui.add(
+        egui::TextEdit::singleline(s)
+            .id(id)
+            .desired_width(largeur)
+            .hint_text("stone, minecraft:oak_stairs[facing=east]…"),
+    );
+    let popup = id.with("propositions");
+    // Ouverte tant que le champ a le focus — pas seulement quand il le
+    // GAGNE : un focus donné avant l'image (la capture, un raccourci) ne
+    // passe jamais par `gained_focus`, et la liste ne s'ouvrait qu'à la
+    // première lettre tapée.
+    if r.has_focus() {
+        ui.memory_mut(|m| m.open_popup(popup));
+    }
+    let lisible = catalogue::cle_de_bloc(s);
+    let connu = lisible.as_ref().is_ok_and(|c| aide.nuancier.connu(c));
+    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if !connu {
+            if let Some(c) = aide.nuancier.chercher(s, aide.vise, 1).into_iter().next() {
+                *s = c.affiche;
+            }
+        }
+        ui.memory_mut(|m| m.close_popup());
+    }
+    let mut pris = None;
+    egui::popup_below_widget(
+        ui,
+        popup,
+        &r,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(largeur.max(260.0));
+            let props = aide.nuancier.chercher(s, aide.vise, 10);
+            if props.is_empty() {
+                ui.label(
+                    RichText::new("aucun bloc connu ne répond")
+                        .small()
+                        .color(GRIS),
+                );
+            }
+            for c in props {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(false, &c.affiche).clicked() {
+                        pris = Some(c.affiche.clone());
+                    }
+                    ui.label(RichText::new(c.origine.nom()).small().color(GRIS));
+                });
+            }
+        },
+    );
+    if let Some(a) = pris {
+        *s = a;
+        ui.memory_mut(|m| m.close_popup());
+    }
+    // Pendant la frappe, c'est la LISTE qui répond : « oak st » est une
+    // recherche, pas un identifiant raté, et le dire en rouge à chaque lettre
+    // serait crier avant la fin de la phrase.
+    if r.has_focus() || s.trim().is_empty() {
+        return;
+    }
+    match catalogue::cle_de_bloc(s) {
+        Err(e) => {
+            ui.label(RichText::new(e).small().color(ROUGE));
+        }
+        Ok(c) if !aide.nuancier.connu(&c) => {
+            ui.label(
+                RichText::new(
+                    "inconnu du pack et du monde — le jeu remplace ce qu'il ne \
+                     connaît pas par de l'air",
+                )
+                .small()
+                .color(ORANGE),
+            );
+        }
+        Ok(_) => {}
     }
 }
 

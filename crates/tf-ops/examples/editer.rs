@@ -278,14 +278,12 @@ fn lire_args() -> Args {
             }
             "--melanger" => {
                 let v = a.next().unwrap_or_else(|| usage());
-                let entrees = v
-                    .split(sep)
-                    .filter(|e| !e.is_empty())
-                    .map(|e| {
-                        let (p, b) = e.split_once(':').unwrap_or_else(|| usage());
-                        (p.trim().parse().unwrap_or_else(|_| usage()), b.to_string())
-                    })
-                    .collect();
+                // Les propriétés d'un bloc ont leurs propres virgules :
+                // `lire_melange` ne coupe pas entre crochets.
+                let entrees = tf_ops::catalogue::lire_melange(&v).unwrap_or_else(|e| {
+                    eprintln!("--melanger : {e}");
+                    std::process::exit(2)
+                });
                 args.op = Some("melanger");
                 args.params.poser("melange", Valeur::Melange(entrees));
             }

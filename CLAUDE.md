@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (973 tests aujourd’hui)
+cargo test            # tous les crates (989 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -412,6 +412,9 @@ crates/
                  récents, un chemin collé ou un dossier glissé ; le travail
                  pas encore écrit SIGNALÉ ; un monde s'ouvre là où l'on joue
                  (`level.dat`) et se change dans la même fenêtre
+               · SÉLECTEUR DE BLOCS ✅ (`nuancier.rs`) : chaque champ de
+                 bloc propose le visé, les récents, ce que le monde porte
+                 sous l'état EXACT, puis le pack ; pipette (Alt + clic)
                · composants et saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
@@ -444,6 +447,8 @@ couvriront le même terrain.
 | Ce que la reprise d'une séance doit DIRE | `Reprise::texte` : la coque l'affiche à la première image, la ligne de commande l'imprime |
 | Un endroit où chercher des installations | `dossiers_ou_chercher` (`tf-assets/src/jeu.rs`) — le critère reste `versions/`, et `assets_par_defaut` (`tf-app/src/accueil.rs`) écarte ce qui n'a aucune version téléchargée |
 | Ce que `level.dat` doit dire de plus | `tf-world/src/niveau.rs` — un champ lu, jamais écrit : le jeu y garde l'inventaire du joueur en solo |
+| Un endroit où l'on tape un BLOC | `interface::champ_de_bloc` — jamais un `TextEdit` nu : c'est lui qui propose (`Nuancier`) et qui dit tout de suite ce qui ne se lit pas. Côté moteur rien à faire : un paramètre `Saisie::Bloc` passe par `cle_de_bloc` dans le normaliseur |
+| Une source de propositions de blocs | une `Origine` dans `nuancier.rs` — son RANG dans l'enum est sa préférence à correspondance égale — et sa place dans la chaîne de `chercher` |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2131,4 +2136,27 @@ propres à ce dépôt.
 - **L'animation d'apparition d'egui rend une capture illisible.** La capture
   ne dessine que deux images ; une fenêtre egui y sort à mi-fondu,
   transparente sur la scène. `fade_in(false)` pour ce qu'on veut pouvoir
-  regarder sans écran.
+  regarder sans écran — et, dans la capture, `animation_time = 0` : une liste
+  de propositions n'a pas de `fade_in` à régler, egui fabrique sa zone.
+- **Un bloc TAPÉ était interné tel quel.** `minecraft:oak_stairs[facing=east]`
+  — la syntaxe du jeu et de WorldEdit, celle que tout le monde tape — devenait
+  un nom de bloc crochets compris, que l'écriture recopiait dans la save : un
+  bloc que le jeu ne connaît pas, donc de l'air. Aucun test ne tapait autre
+  chose que `minecraft:stone`. La règle « une seule clé dans tout le dépôt »
+  valait pour ce que le DÉCODEUR produit ; rien ne l'imposait à ce qu'un
+  humain écrit. `cle_de_bloc`, dans le normaliseur que personne ne peut
+  sauter, et un refus qui nomme l'opération et le paramètre.
+- **Une touche tapée dans un champ pilotait aussi la caméra.** Le gestionnaire
+  de clavier de la coque ignorait ce qu'egui avait consommé : chercher
+  « dirt » faisait filer la caméra à droite, Ctrl+Z dans un champ annulait
+  l'OPÉRATION précédente, et Échap dans un champ QUITTAIT l'application.
+  Invisible tant qu'aucun champ ne servait vraiment ; le sélecteur de blocs
+  l'aurait rendu quotidien. Les appuis s'ignorent quand egui tient le
+  clavier ; les relâchements passent toujours — sinon une touche de vol
+  enfoncée avant le focus resterait tenue — et les modificateurs se suivent
+  dans tous les cas.
+- **`gained_focus` ne voit pas un focus donné avant l'image.** egui compare au
+  focus de l'image PRÉCÉDENTE : un focus posé d'avance (la capture, un
+  raccourci) ne « s'acquiert » jamais, et la liste de propositions ne
+  s'ouvrait qu'à la première lettre. Elle s'ouvre tant que le champ a le
+  focus.
