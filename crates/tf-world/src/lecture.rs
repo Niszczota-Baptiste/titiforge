@@ -49,6 +49,9 @@ pub struct Bilan {
     pub sans_blocs: usize,
     /// Charges qu'on n'a pas su lire. Zéro sur une save saine.
     pub illisibles: usize,
+    /// Chunks DÉCOMPRESSÉS — le coût d'une lecture, que le reste du bilan ne
+    /// voit pas : un chunk décompressé pour rien ne pose aucune section.
+    pub decompresses: usize,
     /// Sections dont on a su lire les biomes.
     pub avec_biomes: usize,
 }
@@ -67,6 +70,25 @@ pub fn sections_de<S: RegionSource + ?Sized>(
     dim: &Dimension,
     folder: Folder,
     sel: &BBox,
+    interner: &mut Interner,
+    poser: impl FnMut(SectionLue),
+) -> Bilan {
+    sections_de_si(src, dim, folder, sel, |_| true, interner, poser)
+}
+
+/// La même lecture, restreinte aux chunks que `garder` retient — **avant**
+/// d'en décompresser un seul.
+///
+/// Pour relire plusieurs endroits d'une même région sans payer ce qu'il y a
+/// entre eux : un remaillage après un `//move` lointain a besoin de la source
+/// et de la destination, et leur boîte commune contient tout le reste. La
+/// boîte dit quelles régions ouvrir ; le filtre, quels chunks inflater.
+pub fn sections_de_si<S: RegionSource + ?Sized>(
+    src: &S,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+    garder: impl Fn(ChunkPos) -> bool,
     interner: &mut Interner,
     mut poser: impl FnMut(SectionLue),
 ) -> Bilan {
@@ -108,6 +130,10 @@ pub fn sections_de<S: RegionSource + ?Sized>(
             if approx.x < a.x || approx.x > b.x || approx.z < a.z || approx.z > b.z {
                 continue;
             }
+            if !garder(approx) {
+                continue;
+            }
+            bilan.decompresses += 1;
             let Ok(inflated) = inflate(&brut.payload, brut.compression) else {
                 bilan.illisibles += 1;
                 continue;
@@ -117,7 +143,7 @@ pub fn sections_de<S: RegionSource + ?Sized>(
                 continue;
             };
             let chunk = coordonnees(&sc, pos, brut.index);
-            if chunk.x < a.x || chunk.x > b.x || chunk.z < a.z || chunk.z > b.z {
+            if chunk.x < a.x || chunk.x > b.x || chunk.z < a.z || chunk.z > b.z || !garder(chunk) {
                 continue;
             }
             bilan.chunks += 1;

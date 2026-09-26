@@ -94,7 +94,7 @@ pub fn lancer(
         depart,
         accueil_vu: false,
         a_ouvrir: None,
-        remailler: None,
+        remailler: Vec::new(),
         pilote,
         taille: (larg, haut),
         fenetre: None,
@@ -155,13 +155,15 @@ struct Coque {
     /// Le monde que l'accueil vient de choisir, ouvert quand la boucle rend
     /// la main — pas au milieu d'une image qui tient la fenêtre.
     a_ouvrir: Option<std::path::PathBuf>,
-    /// Ce qui a changé, en coordonnées MONDE. `None` = rien à remailler.
+    /// Ce qui a changé, en coordonnées MONDE, chunk par chunk. Vide = rien à
+    /// remailler.
     ///
-    /// Les BORNES et non un drapeau : c'est ce qui rend le remaillage
-    /// incrémental. Plusieurs réponses peuvent arriver dans la même image, et
-    /// elles s'UNISSENT — remailler trois fois coûterait trois fois pour le
-    /// même résultat.
-    remailler: Option<tf_world::BBox>,
+    /// Des ZONES et non un drapeau : c'est ce qui rend le remaillage
+    /// incrémental. Et des zones plutôt que leur union : deux éditions
+    /// éloignées arrivées dans la même image, ou les deux bouts d'un
+    /// `//move`, feraient remailler tout ce qui est entre elles. Plusieurs
+    /// réponses s'ACCUMULENT, et on remaille une fois.
+    remailler: Vec<tf_world::BBox>,
     /// Caméra → demande → fil → scène. Vit dans la bibliothèque, pour qu'un
     /// test puisse faire voler une caméra sans serveur graphique.
     pilote: Pilote,
@@ -406,9 +408,8 @@ impl ApplicationHandler for Coque {
                 // a VRAIMENT écrit, et c'est ce qui rend le remaillage
                 // incrémental : sans elles, on relit toute la zone pour trois
                 // blocs.
-                if let Some(b) = ramasser(&mut self.moteur, &mut g.etat) {
-                    self.remailler = Some(tf_app::scene::unir(self.remailler, b));
-                }
+                self.remailler
+                    .extend(ramasser(&mut self.moteur, &mut g.etat));
                 g.etat.occupe = self.moteur.as_ref().is_some_and(|m| m.occupe());
                 g.etat.editable = self.ouvert.editable();
                 // La table d'états de la scène ne fait que grandir entre deux
@@ -438,8 +439,9 @@ impl ApplicationHandler for Coque {
                 if let Some(c) = g.etat.accueil.demande.take() {
                     self.a_ouvrir = Some(c);
                 }
-                if let Some(b) = self.remailler.take() {
-                    if let Err(e) = self.ouvert.remailler(Some(b)) {
+                if !self.remailler.is_empty() {
+                    let zones = std::mem::take(&mut self.remailler);
+                    if let Err(e) = self.ouvert.remailler_zones(&zones) {
                         g.etat.message = format!("remaillage : {e}");
                     } else {
                         regarnir(g, &mut self.ouvert);
@@ -555,7 +557,7 @@ impl Coque {
         );
         moteur.poser_regles(self.regles.clone());
         self.moteur = Some(moteur);
-        self.remailler = None;
+        self.remailler.clear();
         if let Some(f) = self
             .depart
             .seances
@@ -643,17 +645,17 @@ fn vue_courante(g: &Gpu) -> (tf_render::Camera, f32) {
 ///
 /// **Ne bloque jamais** : c'est toute la raison d'être du fil. Une réponse qui
 /// n'est pas encore là ne coûte rien, et l'image suivante la trouvera.
-fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> Option<tf_world::BBox> {
-    let moteur = m.as_mut()?;
-    let mut bouge: Option<tf_world::BBox> = None;
+fn ramasser(m: &mut Option<Moteur>, e: &mut Etat) -> Vec<tf_world::BBox> {
+    let Some(moteur) = m.as_mut() else {
+        return Vec::new();
+    };
+    let mut bouge = Vec::new();
     for r in moteur.recevoir() {
         e.message = r.texte();
-        // **Des bornes, donc des blocs ont changé.** C'est le seul critère :
-        // une opération qui n'a rien écrit ne rend pas de bornes, et
-        // remailler pour rien coûterait la zone entière à chaque clic.
-        if let Some(b) = r.bornes() {
-            bouge = Some(tf_app::scene::unir(bouge, b));
-        }
+        // **Des zones, donc des blocs ont changé.** C'est le seul critère :
+        // une opération qui n'a rien écrit n'en rend pas, et remailler pour
+        // rien coûterait la zone entière à chaque clic.
+        bouge.extend_from_slice(r.zones());
     }
     bouge
 }

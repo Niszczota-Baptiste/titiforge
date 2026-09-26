@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1039 tests aujourd’hui)
+cargo test            # tous les crates (1040 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -397,7 +397,8 @@ crates/
                · OUTILS de Conception ✅ (tirer / poser / casser)
                · FORMES, comptage et graine réglables ✅
                · REMAILLAGE INCRÉMENTAL ✅ (× 7 sur 64 chunks), et aucune
-                 édition ne recharge la zone — un COMPTEUR le tient
+                 édition ne recharge la zone — un COMPTEUR le tient ; par
+                 ZONES (une par chunk écrit), jamais leur union
                · FIL DE CHARGEMENT ✅ (`chargeur.rs`) : une lecture par
                  RÉGION, une réponse par CELLULE, la plus urgente d'abord
                · INTÉGRATION ✅ (`Ouvert::integrer`) : par LOT, tables d'états
@@ -2230,3 +2231,11 @@ propres à ce dépôt.
   refusait le document — tous les composants du monde devenaient
   inaccessibles d'un coup. Ce qui s'écrit doit se relire : le plafond du
   lecteur s'applique à l'écriture.
+- **Remailler l'UNION de ce qui a changé, c'est remailler ce qui est entre.**
+  La réponse du moteur portait une boîte : exacte pour trois blocs posés,
+  mais pour les deux bouts d'un `//move` de deux cents blocs, 196 sections
+  remaillées et 225 chunks décompressés pour en garder onze — et le carré de
+  la distance au-delà. Le rechargement de zone qu'on traquait était entré
+  par la porte des BORNES, pas par celle du rechargement. Ce qui change se
+  décrit en ZONES (une par chunk écrit, tirées des correctifs du journal),
+  et une union ne sert qu'à borner chacune d'elles.

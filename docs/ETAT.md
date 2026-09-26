@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1039**, zéro échec |
+| Tests | **1040**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -42,7 +42,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1039 tests, répartis par ce qu'ils PROUVENT :
+1040 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -79,8 +79,8 @@ cargo test --workspace
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
 | `tf-app` etat | 38 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; et que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main |
-| `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) |
-| `tf-app` moteur | 12 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; et qu'un journal qui ne s'écrit pas se DIT |
+| `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) ; et qu'un `//move` de deux cents blocs en diagonale ne remaille — et ne DÉCOMPRESSE — que ses deux bouts, 11 sections au lieu de 196, annulation comprise, pour la même scène qu'un rechargement complet |
+| `tf-app` moteur | 13 | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
@@ -729,6 +729,46 @@ sauter le début — en gardant les blocs de l'autre. C'est le piège du `StateI
 relatif à SON interner, une fois de plus : la table se désigne par son NUMÉRO
 (`Ouvert::rechargements`), jamais par sa longueur.
 
+### On remaille des ZONES, pas leur union
+
+```bash
+cargo test -p tf-app --test chantier lointain
+```
+
+Une réponse du moteur portait l'UNION de ce que l'opération avait écrit, et
+la coque remaillait cette boîte. Pour trois blocs posés, c'est exact ; pour
+les deux bouts d'un `//move`, c'est tout ce qui est ENTRE eux : un build de
+5 × 3 × 5 déplacé de deux cents blocs en diagonale refaisait **196
+sections**, et décompressait les 225 chunks de la boîte pour en garder onze.
+Le compte grandit comme le carré de la distance — le rechargement de zone
+que ce dépôt s'interdit depuis `ExeWorldEdit`, entré par la porte des bornes.
+Un `//stack`, deux éditions arrivées dans la même image, ou une mise à jour
+de composant sur des instances éparpillées faisaient la même chose.
+
+Les réponses portent maintenant des **zones**, une par chunk de blocs écrit
+dans la dimension regardée (`moteur::zones_de`), tirées des CORRECTIFS : une
+entrée de journal les porte aussi, donc annuler et refaire les ont sans rien
+stocker de plus. La scène les remaille une à une avec leur marge
+(`Ouvert::remailler_zones`) et les relit par région, en ne décompressant que
+les chunks visés (`sections_de_si`). Même déplacement : **11 sections, 11
+chunks** — un compte qui ne dépend plus de la distance, puisque seuls les
+chunks ÉCRITS donnent une zone.
+
+| `//move` de (200, 0, 200), build de 5 × 3 × 5 | avant | après |
+|---|---:|---:|
+| sections remaillées | 196 | 11 |
+| chunks décompressés pour les relire | 225 | 11 |
+
+Deux compteurs et pas un chronomètre (`sections_remaillees`,
+`chunks_relus`) : le second est né de la batterie de mutations — relire la
+boîte ENTIÈRE et n'en garder que les deux bouts donne exactement la même
+scène, et rien d'autre ne le voyait. 16 mutations : 15 tuées, dont quatre au
+second tour (le test des zones plaçait les chunks de points d'intérêt, d'entités
+et du Nether HORS des bornes, qui les écartaient avant les filtres qu'il
+prétendait vérifier), et une ÉQUIVALENTE ici — le filtre des sections
+présentes dans la relecture, gardé parce qu'une colonne peut être relue sur
+une hauteur que le remaillage ne refait pas.
+
 ### Une opération qui échoue en route ne laisse rien
 
 ```bash
@@ -1298,7 +1338,6 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **`tf-formats` n'existe pas** | ni `.schem`, ni `.litematic`, ni `.nbt` |
 | **Les composants n'ont pas encore d'interface** | le moteur est là (`tf-ops/src/composant.rs`, 22 tests) ; la coque ne sait ni en créer, ni en poser, ni les dessiner |
 | **Pas de saisie chiffrée** | le pousser-tirer est là ; taper « 12 » pendant le geste reste à écrire (phase 7) |
-| **Un déplacement lointain remaille tout ce qui est entre** | une opération rend l'UNION de ce qu'elle a écrit : un `//move` de cinq mille blocs, un `//stack`, une mise à jour de composant sur des instances éparpillées font relire et remailler tout le résident entre leurs deux bouts |
 | **Changer de monde EN CLIQUANT n'a été vu par personne** | la séance, la scène (contre une ouverture directe), le moteur et l'accueil sont testés chacun ; la fenêtre, elle, n'a tourné que sous Xvfb, où l'on ne peut pas cliquer. La jonction de la coque (`ouvrir_monde`) attend un essai sur une vraie machine |
 | **Pas de sélecteur de fichiers du système** | l'accueil propose les saves des installations trouvées et les récents ; pour un monde rangé ailleurs, on colle son chemin ou on GLISSE son dossier sur la fenêtre. Un dialogue natif demanderait une dépendance de plus |
 | **Une séance ne voit pas le jeu changer la save PENDANT qu'elle est ouverte** | les données restent justes — une région écrite a quitté la copie, donc la prochaine opération relit la save — mais ce qui est À L'ÉCRAN date d'avant la partie jusqu'à son prochain remaillage. Et une région où la copie porte du travail, que le jeu change entre-temps, fait refuser l'écriture sans autre issue dans l'application que fermer et rouvrir (la séance est alors mise de côté) |

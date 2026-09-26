@@ -318,24 +318,6 @@ fn un_etat_inconnu_force_le_rechargement_complet() {
     );
 }
 
-/// **L'union de deux emprises, et pas la dernière.** Plusieurs opérations
-/// peuvent répondre dans la même image : ne garder que la dernière laisserait
-/// les précédentes à l'écran.
-#[test]
-fn deux_emprises_s_unissent() {
-    use tf_app::scene::unir;
-    let a = BBox::new(BlockPos::new(0, 0, 0), BlockPos::new(5, 5, 5));
-    let b = BBox::new(BlockPos::new(-3, 10, 2), BlockPos::new(1, 12, 9));
-    assert_eq!(unir(None, a), a);
-    assert_eq!(
-        unir(Some(a), b),
-        BBox::new(BlockPos::new(-3, 0, 0), BlockPos::new(5, 12, 9))
-    );
-    // Commutative, sinon l'ordre d'arrivée des réponses changerait ce qu'on
-    // remaille.
-    assert_eq!(unir(Some(a), b), unir(Some(b), a));
-}
-
 /// **Ce que le remaillage incrémental fait GAGNER, mesuré.**
 ///
 /// « On ne devine pas où est le poids » : ce test ne vérifie rien, il
@@ -483,4 +465,100 @@ fn mesurer_le_rechargement() {
     );
     drop(assets);
     drop(o);
+}
+
+/// **Un déplacement lointain ne remaille que ses deux bouts** — pas tout ce
+/// qui est entre eux.
+///
+/// La réponse portait l'UNION de ce que l'opération avait écrit, et la coque
+/// remaillait cette boîte : un build de 5 × 3 × 5 déplacé de deux cents blocs
+/// en diagonale refaisait 196 sections, et le compte grandit comme le carré
+/// de la distance — le rechargement de zone que ce dépôt s'interdit, arrivé
+/// par la porte des bornes. Les ZONES d'une réponse, chunk par chunk, en font
+/// une poignée, et la scène est exactement celle d'un rechargement complet.
+/// L'annulation passe par le même chemin : ses zones viennent des correctifs
+/// de l'entrée.
+#[test]
+fn un_deplacement_lointain_ne_remaille_que_ses_deux_bouts() {
+    let (pack, _codex) = pack();
+    let jetable = monde("lointain");
+    let dir = jetable.chemin().to_path_buf();
+    let mut o = Ouvert::ouvrir(&pack, Some(dir.to_str().unwrap()), [0, 0, 15, 15]).unwrap();
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(dir.clone()),
+    );
+    let build = BBox::new(BlockPos::new(4, -40, 4), BlockPos::new(8, -38, 8));
+    // Le build d'abord, en pierre lumineuse : déplacer du terrain sur du
+    // terrain n'écrirait que les cases dont les veines diffèrent, et les
+    // zones — qui suivent ce qui a VRAIMENT changé — dépendraient du tirage.
+    let mut params = Params::new();
+    params.poser("bloc", Valeur::texte("minecraft:glowstone"));
+    assert!(moteur.envoyer(Commande::Appliquer {
+        op: "poser",
+        params,
+        sel: build,
+        forme: Forme::Boite,
+        compter: false,
+        seed: 0,
+    }));
+    let r = attendre(&mut moteur);
+    assert!(!r.echoue(), "{}", r.texte());
+    o.remailler_zones(r.zones()).expect("remaillage");
+
+    let mut params = Params::new();
+    params.poser("decalage", Valeur::Vecteur([200, 0, 200]));
+    params.poser("remplir", Valeur::texte("minecraft:air"));
+    assert!(moteur.envoyer(Commande::Appliquer {
+        op: "deplacer",
+        params,
+        sel: build,
+        forme: Forme::Boite,
+        compter: false,
+        seed: 0,
+    }));
+    let r = attendre(&mut moteur);
+    assert!(!r.echoue(), "{}", r.texte());
+    // La source dans un chunk, l'arrivée à cheval sur quatre.
+    assert_eq!(r.zones().len(), 5, "{:?}", r.zones());
+
+    let verifier = |o: &mut Ouvert, zones: &[BBox], quoi: &str| {
+        o.remailler_zones(zones).expect("remaillage");
+        // Onze : la source, l'arrivée et leur marge d'une case — chaque
+        // colonne bornée par l'union, qui l'étire au chunk entier. L'union
+        // elle-même en donnait 196, et le carré de la distance au-delà.
+        assert!(
+            o.sections_remaillees <= 11,
+            "{quoi} : {} sections remaillées pour deux bouts",
+            o.sections_remaillees
+        );
+        // Et la RELECTURE ne décompresse que ce qu'elle remaille : la boîte
+        // de la région contient 15 × 15 chunks entre les deux bouts.
+        assert!(
+            (1..=11).contains(&o.chunks_relus),
+            "{quoi} : {} chunks décompressés pour deux bouts",
+            o.chunks_relus
+        );
+        let mut mots = Vec::new();
+        let c = commun::canon(o, &mut mots);
+        let rapide = (o.monde.quads, commun::montre(o, &c));
+        o.remailler(None).expect("rechargement complet");
+        let c = commun::canon(o, &mut mots);
+        assert_eq!(rapide.0, o.monde.quads, "{quoi} : pas les mêmes quads");
+        assert!(
+            rapide.1 == commun::montre(o, &c),
+            "{quoi} : pas la même géométrie"
+        );
+    };
+    verifier(&mut o, r.zones(), "déplacer");
+
+    assert!(moteur.envoyer(Commande::Annuler));
+    let r = attendre(&mut moteur);
+    assert!(matches!(r, Reponse::Defait { .. }), "{r:?}");
+    assert_eq!(r.zones().len(), 5, "{:?}", r.zones());
+    verifier(&mut o, r.zones(), "annuler");
+
+    moteur.arreter();
 }

@@ -121,20 +121,24 @@ pub enum Commande {
 /// compteur d'en-vol dériverait et l'interface resterait grise pour toujours.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reponse {
-    /// L'opération a écrit. `bornes` est ce qu'elle a VRAIMENT écrit — c'est
-    /// de là que partira le remaillage incrémental.
+    /// L'opération a écrit. `bornes` est ce qu'elle a VRAIMENT écrit, d'un
+    /// bloc ; `zones` le même, chunk par chunk — c'est d'elles que part le
+    /// remaillage incrémental (voir [`zones_de`]).
     Fait {
         op: String,
         resume: String,
         bornes: Option<BBox>,
+        zones: Vec<BBox>,
     },
     Defait {
         label: String,
         bornes: Option<BBox>,
+        zones: Vec<BBox>,
     },
     Refait {
         label: String,
         bornes: Option<BBox>,
+        zones: Vec<BBox>,
     },
     /// Elle s'est exécutée et n'a rien changé. Ce n'est pas un échec, et le
     /// taire ferait croire à un bouton qui ne marche pas.
@@ -158,6 +162,18 @@ impl Reponse {
             | Reponse::Defait { bornes, .. }
             | Reponse::Refait { bornes, .. } => *bornes,
             _ => None,
+        }
+    }
+
+    /// Ce qui a bougé, chunk par chunk, dans la dimension regardée. C'est ce
+    /// qu'on REMAILLE — jamais l'union, qui contient tout ce qui est entre
+    /// les deux bouts d'un déplacement.
+    pub fn zones(&self) -> &[BBox] {
+        match self {
+            Reponse::Fait { zones, .. }
+            | Reponse::Defait { zones, .. }
+            | Reponse::Refait { zones, .. } => zones,
+            _ => &[],
         }
     }
 
@@ -541,6 +557,11 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             op: label,
             resume: blocs,
             bornes: cr.rapport.bornes,
+            zones: zones_de(
+                cr.rapport.patches.iter().map(|p| &p.cible),
+                cr.rapport.bornes,
+                &self.dim,
+            ),
         }
     }
 
@@ -605,6 +626,14 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         };
         let label = entree.label.clone();
         let bornes = entree.bounds();
+        let zones = zones_de(
+            entree.a_refaire().filter_map(|c| match c {
+                tf_world::journal::Correction::Chunk(p) => Some(&p.cible),
+                _ => None,
+            }),
+            bornes,
+            &self.dim,
+        );
         // `rejouer` est la jonction : elle prend les correctifs dans le bon
         // SENS et dans le bon ORDRE — à l'envers pour annuler, et c'est le
         // genre de détail qu'un appelant refait mal une fois sur deux.
@@ -614,8 +643,16 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
                 let label = label + &note;
                 match (n, sens) {
                     (0, _) => Reponse::Rien(label),
-                    (_, Sens::Annuler) => Reponse::Defait { label, bornes },
-                    (_, Sens::Refaire) => Reponse::Refait { label, bornes },
+                    (_, Sens::Annuler) => Reponse::Defait {
+                        label,
+                        bornes,
+                        zones,
+                    },
+                    (_, Sens::Refaire) => Reponse::Refait {
+                        label,
+                        bornes,
+                        zones,
+                    },
                 }
             }
             Err(e) => {
@@ -628,6 +665,54 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             }
         }
     }
+}
+
+/// **Les zones à remailler**, une par chunk de BLOCS écrit dans la dimension
+/// `dim` : la colonne du chunk, bornée par ce que l'opération a écrit.
+///
+/// Tirées des CORRECTIFS, et pas d'un compte rendu : une entrée de journal
+/// les porte aussi, donc annuler et refaire les ont sans rien stocker de
+/// plus. Les points d'intérêt et les entités n'en donnent pas — ils ne se
+/// dessinent pas —, ni une autre dimension, qu'on ne regarde pas.
+///
+/// L'union des bornes ne sert qu'à borner chaque colonne : remailler l'union
+/// elle-même, c'était remailler tout ce qui est entre les deux bouts d'un
+/// `//move` — 196 sections pour un build de 5 × 3 × 5 déplacé de deux cents
+/// blocs, et le CARRÉ de la distance pour un déplacement plus long.
+pub fn zones_de<'a>(
+    cibles: impl IntoIterator<Item = &'a tf_world::journal::Cible>,
+    bornes: Option<BBox>,
+    dim: &Dimension,
+) -> Vec<BBox> {
+    use tf_world::coords::BlockPos;
+    let chunks: std::collections::BTreeSet<(i32, i32)> = cibles
+        .into_iter()
+        .filter(|c| c.folder == Folder::Region && c.dim == *dim)
+        .map(|c| {
+            (
+                c.region.x * 32 + (c.chunk % 32) as i32,
+                c.region.z * 32 + (c.chunk / 32) as i32,
+            )
+        })
+        .collect();
+    // Sans bornes, la colonne entière — toutes les hauteurs qu'une section
+    // peut porter.
+    let (y0, y1) = bornes.map_or((-2048, 2047), |b| (b.min.y, b.max.y));
+    chunks
+        .into_iter()
+        .filter_map(|(cx, cz)| {
+            let (mut x0, mut x1) = (cx * 16, cx * 16 + 15);
+            let (mut z0, mut z1) = (cz * 16, cz * 16 + 15);
+            if let Some(b) = bornes {
+                x0 = x0.max(b.min.x);
+                x1 = x1.min(b.max.x);
+                z0 = z0.max(b.min.z);
+                z1 = z1.min(b.max.z);
+            }
+            (x0 <= x1 && z0 <= z1)
+                .then(|| BBox::new(BlockPos::new(x0, y0, z0), BlockPos::new(x1, y1, z1)))
+        })
+        .collect()
 }
 
 /// L'heure, en secondes depuis l'époque. Zéro si l'horloge est absurde —

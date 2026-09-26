@@ -421,3 +421,48 @@ fn un_carnet_qui_echoue_se_dit() {
         r.texte()
     );
 }
+
+/// **Les zones à remailler** ne gardent que les chunks de BLOCS de la
+/// dimension regardée — ni points d'intérêt, ni entités, ni le Nether —, un
+/// chunk une fois, chacun borné par ce que l'opération a écrit ; sans bornes,
+/// la colonne entière.
+#[test]
+fn les_zones_ne_gardent_que_les_blocs_de_la_dimension_regardee() {
+    use tf_app::moteur::zones_de;
+    use tf_world::journal::Cible;
+    let c = |dim: Dimension, folder: Folder, x: i32, z: i32, chunk: u16| Cible {
+        dim,
+        folder,
+        region: RegionPos { x, z },
+        chunk,
+    };
+    let cibles = vec![
+        // Le chunk (3, 1) : index z × 32 + x.
+        c(SURFACE, Folder::Region, 0, 0, 32 + 3),
+        // Dans les bornes, mais pas des blocs, ou pas d'ici : aucune zone.
+        c(SURFACE, Folder::Poi, 0, 0, 1),
+        c(SURFACE, Folder::Entities, 0, 0, 2),
+        c(Dimension::Nether, Folder::Region, 0, 0, 0),
+        // Des blocs d'ici, mais hors des bornes : aucune zone.
+        c(SURFACE, Folder::Region, 0, 0, 10),
+        // Le chunk (−1, 0), dans la région −1.
+        c(SURFACE, Folder::Region, -1, 0, 31),
+        // Deux passes sur le même chunk : une zone.
+        c(SURFACE, Folder::Region, 0, 0, 32 + 3),
+    ];
+    let bornes = BBox::new(BlockPos::new(-10, 5, 0), BlockPos::new(60, 9, 20));
+    assert_eq!(
+        zones_de(&cibles, Some(bornes), &SURFACE),
+        vec![
+            BBox::new(BlockPos::new(-10, 5, 0), BlockPos::new(-1, 9, 15)),
+            BBox::new(BlockPos::new(48, 5, 16), BlockPos::new(60, 9, 20)),
+        ]
+    );
+    assert_eq!(
+        zones_de(&cibles[..1], None, &SURFACE),
+        vec![BBox::new(
+            BlockPos::new(48, -2048, 16),
+            BlockPos::new(63, 2047, 31)
+        )]
+    );
+}

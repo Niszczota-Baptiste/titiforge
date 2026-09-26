@@ -596,6 +596,12 @@ pub struct Ouvert {
     /// poignée que l'édition a touchée, ou la grille entière quand on
     /// recharge.
     pub sections_remaillees: usize,
+    /// **Combien de chunks le dernier remaillage a DÉCOMPRESSÉS** pour relire
+    /// ce qu'il remaille. L'autre moitié du coût : relire la boîte qui
+    /// contient deux bouts d'un déplacement décompressait tout ce qui est
+    /// entre eux, pour n'en garder que les deux bouts — le même résultat, et
+    /// rien d'autre que ce compteur pour le voir.
+    pub chunks_relus: usize,
     /// **La fenêtre de résidence** : ce que la scène s'autorise à tenir.
     ///
     /// Sans elle, un vol continu ne rend jamais rien — mesuré, une région
@@ -674,6 +680,7 @@ impl Ouvert {
                 couche: None,
                 rechargements: 0,
                 sections_remaillees: 0,
+                chunks_relus: 0,
                 // **La fixture n'inscrit rien**, et c'est voulu : son contenu
                 // ne vient pas de `zone` mais d'un bâtiment engendré en
                 // mémoire. Inscrire la zone ferait tenir la comptabilité sur
@@ -742,6 +749,7 @@ impl Ouvert {
             couche,
             rechargements: 0,
             sections_remaillees: 0,
+            chunks_relus: 0,
             residence: tf_world::Residency::new(BUDGET_RESIDENCE),
             a_degager: Vec::new(),
             protegees: std::collections::HashSet::new(),
@@ -1040,19 +1048,49 @@ impl Ouvert {
     /// table voisine. Ça arrive une fois par type de bloc et par séance, et
     /// c'est le seul moment où l'on paie le prix fort.
     pub fn remailler(&mut self, bornes: Option<tf_world::coords::BBox>) -> Result<(), String> {
+        match bornes {
+            None => {
+                if self.staging.is_none() {
+                    return Err("la fixture n'a pas de save derrière elle".into());
+                }
+                self.recharger()
+            }
+            Some(b) => self.remailler_zones(&[b]),
+        }
+    }
+
+    /// **Relit et remaille des ZONES** — pas la boîte qui les contient.
+    ///
+    /// Un `//move` de deux cents blocs en diagonale écrit à ses deux bouts ;
+    /// leur boîte commune contient tout ce qui est entre. Remaillée d'un
+    /// bloc, elle coûtait 196 sections pour un build de 5 × 3 × 5 — et le
+    /// compte grandit comme le CARRÉ de la distance, c'est-à-dire le
+    /// rechargement de zone que ce dépôt s'interdit, arrivé par la porte des
+    /// bornes. Même chose pour une mise à jour de composant sur des instances
+    /// éparpillées.
+    ///
+    /// Chaque zone reçoit sa marge d'une case ; la lecture se fait région par
+    /// région, et seuls les chunks visés y sont décompressés.
+    pub fn remailler_zones(&mut self, zones: &[tf_world::coords::BBox]) -> Result<(), String> {
         if self.staging.is_none() {
             return Err("la fixture n'a pas de save derrière elle".into());
         }
-        let Some(b) = bornes else {
-            return self.recharger();
-        };
+        if zones.is_empty() {
+            return Ok(());
+        }
         // **Ce qui est parti au mailleur revient D'ABORD.** L'édition se
         // maille ici, sur ce fil ; un travail plus ancien appliqué après elle
         // remettrait l'ancien maillage par-dessus le neuf.
         self.attendre_maillage()?;
         let st = self.staging.as_ref().expect("vérifié juste au-dessus");
-        let visees =
-            Grille::sections_touchees([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
+        let mut visees: Vec<tf_mesh::Adresse> = zones
+            .iter()
+            .flat_map(|b| {
+                Grille::sections_touchees([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z])
+            })
+            .collect();
+        visees.sort_unstable();
+        visees.dedup();
         if visees.is_empty() {
             return Ok(());
         }
@@ -1073,24 +1111,19 @@ impl Ouvert {
         if presentes.is_empty() {
             return Ok(());
         }
-        let x0 = presentes.iter().map(|a| a.0).min().expect("non vide") * 16;
-        let x1 = presentes.iter().map(|a| a.0).max().expect("non vide") * 16 + 15;
-        let z0 = presentes.iter().map(|a| a.1).min().expect("non vide") * 16;
-        let z1 = presentes.iter().map(|a| a.1).max().expect("non vide") * 16 + 15;
-        let y0 = presentes
-            .iter()
-            .map(|a| a.2 as i32)
-            .min()
-            .expect("non vide")
-            * 16;
-        let y1 = presentes
-            .iter()
-            .map(|a| a.2 as i32)
-            .max()
-            .expect("non vide")
-            * 16
-            + 15;
-        let lu = tf_world::BBox::new(BlockPos::new(x0, y0, z0), BlockPos::new(x1, y1, z1));
+        // Par RÉGION : une boîte par fichier, et seuls les chunks visés y sont
+        // décompressés. Une boîte unique ouvrirait tous les fichiers entre les
+        // deux bouts d'un déplacement.
+        let mut par_region: std::collections::BTreeMap<(i32, i32), Vec<tf_mesh::Adresse>> =
+            std::collections::BTreeMap::new();
+        for a in &presentes {
+            par_region
+                .entry((a.0.div_euclid(32), a.1.div_euclid(32)))
+                .or_default()
+                .push(*a);
+        }
+        let colonnes: std::collections::HashSet<(i32, i32)> =
+            presentes.iter().map(|a| (a.0, a.1)).collect();
         let t0 = std::time::Instant::now();
         let connus = self.monde.interner.len();
         let mut interner = std::mem::take(&mut self.monde.interner);
@@ -1098,26 +1131,38 @@ impl Ouvert {
         for a in &presentes {
             grille.retirer(*a);
         }
-        tf_world::sections_de(
-            st.as_ref(),
-            &tf_world::Dimension::Overworld,
-            tf_world::Folder::Region,
-            &lu,
-            &mut interner,
-            |s| {
-                let y = s.section.y;
-                // La boîte lue peut déborder des présentes — deux cellules
-                // résidentes en diagonale l'étirent sur des colonnes que la
-                // scène ne porte pas.
-                if !presentes.contains(&(s.chunk.x, s.chunk.z, y)) {
-                    return;
-                }
-                if let Some(bi) = s.biomes {
-                    grille.poser_biomes(s.chunk.x, s.chunk.z, y, bi);
-                }
-                grille.poser(s.chunk.x, s.chunk.z, s.section);
-            },
-        );
+        self.chunks_relus = 0;
+        for groupe in par_region.values() {
+            let x0 = groupe.iter().map(|a| a.0).min().expect("non vide") * 16;
+            let x1 = groupe.iter().map(|a| a.0).max().expect("non vide") * 16 + 15;
+            let z0 = groupe.iter().map(|a| a.1).min().expect("non vide") * 16;
+            let z1 = groupe.iter().map(|a| a.1).max().expect("non vide") * 16 + 15;
+            let y0 = groupe.iter().map(|a| a.2 as i32).min().expect("non vide") * 16;
+            let y1 = groupe.iter().map(|a| a.2 as i32).max().expect("non vide") * 16 + 15;
+            let lu = tf_world::BBox::new(BlockPos::new(x0, y0, z0), BlockPos::new(x1, y1, z1));
+            let bilan = tf_world::sections_de_si(
+                st.as_ref(),
+                &tf_world::Dimension::Overworld,
+                tf_world::Folder::Region,
+                &lu,
+                |c| colonnes.contains(&(c.x, c.z)),
+                &mut interner,
+                |s| {
+                    let y = s.section.y;
+                    // La boîte lue peut déborder des présentes — deux
+                    // sections en diagonale l'étirent sur des colonnes que la
+                    // scène ne porte pas.
+                    if !presentes.contains(&(s.chunk.x, s.chunk.z, y)) {
+                        return;
+                    }
+                    if let Some(bi) = s.biomes {
+                        grille.poser_biomes(s.chunk.x, s.chunk.z, y, bi);
+                    }
+                    grille.poser(s.chunk.x, s.chunk.z, s.section);
+                },
+            );
+            self.chunks_relus += bilan.decompresses;
+        }
         self.monde.interner = interner;
         phase("relecture", t0);
         // Le poids des cellules éditées change — leurs sections comme leur
@@ -1800,30 +1845,6 @@ pub fn phase_texte(quoi: &str) {
     if std::env::var_os("TF_PHASES").is_some() {
         eprintln!("  {quoi}");
     }
-}
-
-/// **L'union de deux emprises.** Plusieurs opérations peuvent répondre dans la
-/// même image, et plusieurs images peuvent passer avant un remaillage : on
-/// prend l'union, jamais la dernière. Ne garder que la dernière laisserait les
-/// précédentes à l'écran, et remailler trois fois coûterait trois fois pour le
-/// même résultat.
-///
-/// Écrite ici parce qu'elle servait déjà à DEUX endroits, ce qui est
-/// exactement une de trop.
-pub fn unir(a: Option<tf_world::BBox>, b: tf_world::BBox) -> tf_world::BBox {
-    let Some(a) = a else { return b };
-    tf_world::BBox::new(
-        BlockPos::new(
-            a.min.x.min(b.min.x),
-            a.min.y.min(b.min.y),
-            a.min.z.min(b.min.z),
-        ),
-        BlockPos::new(
-            a.max.x.max(b.max.x),
-            a.max.y.max(b.max.y),
-            a.max.z.max(b.max.z),
-        ),
-    )
 }
 
 /// Le quadrillage à dessiner, depuis l'état et le point regardé.

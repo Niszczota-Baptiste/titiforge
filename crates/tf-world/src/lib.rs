@@ -31,7 +31,7 @@ pub use inference::{accrocher, Accroche, Ancre, Raison, Reference, TOLERANCE};
 pub use journal::{
     Chemin, ChunkPatch, Cible, Correction, Entree, Genre, Journal, JournalError, Record,
 };
-pub use lecture::{sections_de, Bilan, SectionLue};
+pub use lecture::{sections_de, sections_de_si, Bilan, SectionLue};
 pub use residency::{Editing, Evicted, Residency, State, Weighed};
 pub use selection::{Direction, Selection, DIRECTIONS};
 pub use session::{Fermeture, Reprise, Seance};
