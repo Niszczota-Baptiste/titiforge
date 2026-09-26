@@ -16,6 +16,7 @@
 pub mod biome;
 pub mod catalogue;
 pub mod colonnes;
+pub mod composant;
 pub mod creuser;
 pub mod edition;
 pub mod executer;

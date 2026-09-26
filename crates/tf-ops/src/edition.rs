@@ -995,6 +995,39 @@ pub fn rejouer<S: RegionSource, O: RegionStore>(
         Sens::Annuler => entree.a_annuler().collect(),
         Sens::Refaire => entree.a_refaire().collect(),
     };
+    rejouer_corrections(staging, &corrections, sens)
+}
+
+/// **Défait ce qu'un rapport a écrit** — pour une action qui ÉCHOUE en route.
+///
+/// Une action écrit au fil de l'eau : la région après la région, l'instance
+/// après l'instance. Qu'elle échoue à la troisième, et les deux premières
+/// restent dans la copie de travail sans entrée de journal pour les défaire —
+/// invisibles à l'annulation, et de quoi faire DIVERGER celle des actions
+/// précédentes sur les mêmes chunks. Le rapport partiel décrit exactement ce
+/// qui a été écrit : on le rejoue à l'envers, par le même chemin qu'un
+/// Ctrl+Z, donc avec les mêmes vérifications d'empreintes.
+pub fn defaire_rapport<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    rapport: &RapportRegion,
+) -> Result<usize, Erreur> {
+    let corrections: Vec<Correction> = rapport
+        .patches
+        .iter()
+        .rev()
+        .cloned()
+        .map(Correction::Chunk)
+        .collect();
+    let refs: Vec<&Correction> = corrections.iter().collect();
+    rejouer_corrections(staging, &refs, Sens::Annuler)
+}
+
+/// Le cœur de `rejouer` : des correctifs DÉJÀ dans l'ordre où les appliquer.
+fn rejouer_corrections<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    corrections: &[&Correction],
+    sens: Sens,
+) -> Result<usize, Erreur> {
     // Un genre inconnu refuse l'entrée ENTIÈRE, avant la moindre lecture :
     // en sauter les correctifs défairait la moitié d'une action.
     if let Some(Correction::Inconnu { genre, .. }) = corrections

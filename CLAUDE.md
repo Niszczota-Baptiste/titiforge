@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1010 tests aujourd’hui)
+cargo test            # tous les crates (1032 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -373,6 +373,10 @@ crates/
                déplacement ; ce qui ne se transforme pas est NOMMÉ
                //move ✅ · //stack ✅ · formes ✅ · portée `Colonne` ✅
                //naturalize ✅ · //setbiome ✅ · //smooth ✅ · //hollow ✅
+               COMPOSANTS ✅ (`composant.rs`) : une définition, N instances,
+               la mise à jour PARTOUT (toutes les dimensions) en une entrée
+               de journal ; n'écrit que ce qui CHANGE entre deux définitions,
+               rogné ; tout ou rien (`defaire_rapport`). Interface à venir
   tf-formats/  .schem · .schematic · .litematic · .nbt
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅
@@ -418,7 +422,7 @@ crates/
                · SÉLECTEUR DE BLOCS ✅ (`nuancier.rs`) : chaque champ de
                  bloc propose le visé, les récents, ce que le monde porte
                  sous l'état EXACT, puis le pack ; pipette (Alt + clic)
-               · composants et saisie chiffrée à écrire.
+               · interface des composants et saisie chiffrée à écrire.
                Elle sait se dessiner dans une TEXTURE (`--capture`) : ce
                n'est pas un mode dégradé, c'est ce qui la rend vérifiable
   tf-bench/    criterion + générateurs de fixtures  ✅ phase 0
@@ -454,6 +458,8 @@ couvriront le même terrain.
 | Ce que `level.dat` doit dire de plus | `tf-world/src/niveau.rs` — un champ lu, jamais écrit : le jeu y garde l'inventaire du joueur en solo |
 | Un endroit où l'on tape un BLOC | `interface::champ_de_bloc` — jamais un `TextEdit` nu : c'est lui qui propose (`Nuancier`) et qui dit tout de suite ce qui ne se lit pas. Côté moteur rien à faire : un paramètre `Saisie::Bloc` passe par `cle_de_bloc` dans le normaliseur |
 | Une source de propositions de blocs | une `Origine` dans `nuancier.rs` — son RANG dans l'enum est sa préférence à correspondance égale — et sa place dans la chaîne de `chercher` |
+| Une ACTION sur les composants | sa fonction dans `tf-ops/src/composant.rs`, qui rend une `Action` sans rien pousser au journal — c'est `composant::faire` qui lit le document, l'appelle et en fait UNE entrée. Si elle écrit en plusieurs fois, une erreur en route passe par `abandonner` ; si elle écrit sous une instance, le terrain se vérifie AVANT la première écriture |
+| Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2193,3 +2199,30 @@ propres à ce dépôt.
   raccourci) ne « s'acquiert » jamais, et la liste de propositions ne
   s'ouvrait qu'à la première lettre. Elle s'ouvre tant que le champ a le
   focus.
+- **Réestamper en entier vidait les coffres des joueurs.** La première mise à
+  jour d'un composant réécrivait TOUTE la matière de la nouvelle définition
+  sous chaque instance — le même monde à l'écran, et pourtant un coffre
+  rempli dans l'une des vingt maisons revenait au contenu de la définition à
+  chaque retouche de n'importe quel bloc. Une mise à jour n'écrit que ce qui
+  CHANGE entre l'ancienne définition et la nouvelle, ancienne et nouvelle
+  tournées par la MÊME règle — comparée non tournée, chaque escalier
+  paraîtrait changé.
+- **Deux copies du même coffre ne sont pas égales en octets.** Une block
+  entity garde dans ses octets les coordonnées MONDE d'où on l'a prise, et
+  l'ordre du ramassage suit le découpage en chunks. Comparer deux extraits
+  pris à deux endroits disait « changé » pour une maison intacte, et la mise
+  à jour réécrivait ses vingt instances. Ce qu'on compare se met d'abord sous
+  forme CANONIQUE : coordonnées locales, entités triées.
+- **Une action écrit au fil de l'eau ; son erreur ne défait rien toute
+  seule.** Vingt instances s'écrivent l'une après l'autre : un échec à la
+  douzième laissait les onze premières dans la copie de travail, sans entrée
+  de journal — hors de portée de tout Ctrl+Z, et de quoi faire diverger celui
+  des actions précédentes. `defaire_rapport` rejoue le rapport partiel à
+  l'envers, par le chemin du Ctrl+Z ; ce qui peut être vérifié d'avance (le
+  terrain sous chaque instance) l'est avant la première écriture.
+- **Deux plafonds pour la même chose, l'un plus large que l'autre.** La
+  copie accepte cinq cents millions de cases, le décodeur du document seize :
+  un composant plus grand s'écrivait très bien, et la lecture SUIVANTE
+  refusait le document — tous les composants du monde devenaient
+  inaccessibles d'un coup. Ce qui s'écrit doit se relire : le plafond du
+  lecteur s'applique à l'écriture.
