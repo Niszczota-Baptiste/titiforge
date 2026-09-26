@@ -265,8 +265,24 @@ fn un_bloc_sans_etat_traverse_sans_rien_changer() {
     let d = pack();
     let t = table(&d);
     // `t:pierre` n'a qu'une variante : rien à dériver, donc la table ne le
-    // connaît pas. C'est à l'appelant de le laisser tel quel.
+    // connaît pas…
     assert!(!t.connait("t:pierre", Transfo::Rot90));
+    // … et pourtant sa transformation est CONNUE : un état sans propriété est
+    // le même dans toutes les orientations. Rendre `None` le faisait compter
+    // parmi les états « laissés tels quels » — la pierre et l'air de tout
+    // build noyaient les vrais trous du compte rendu. Vrai aussi d'un bloc que
+    // le pack ne déclare même pas.
+    for t_ in tf_blocks::TOUTES {
+        for cle in ["t:pierre", "minecraft:air", "mod:inconnu"] {
+            assert_eq!(t.transformer(cle, t_).as_deref(), Some(cle), "{cle} {t_:?}");
+        }
+    }
+    // Un état À propriétés que la table ne connaît pas reste, lui, un vrai
+    // trou — c'est celui-là que le compte rendu doit nommer.
+    assert_eq!(
+        t.transformer("mod:inconnu|facing=north", Transfo::Rot90),
+        None
+    );
 }
 
 // ── les miroirs ─────────────────────────────────────────────────────────────

@@ -1538,7 +1538,7 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
 ///
 /// Un chunk dont la charge est vide compte comme absent : `appliquer_region`
 /// le saute, donc un collage n'y écrirait rien non plus.
-fn chunks_absents<S: RegionSource, O: RegionStore>(
+pub(crate) fn chunks_absents<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
     folder: Folder,

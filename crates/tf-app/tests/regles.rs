@@ -292,5 +292,31 @@ fn un_bloc_que_le_pack_ne_sait_pas_tourner_se_signale() {
         assert_eq!(etat_en(&st, arrivee()), "t:mystere|sens=nord");
         assert!(resume.contains("ne sait pas tourner"), "{resume}");
         assert!(!resume.contains("NON réécrites"), "{resume}");
+
+        // Une sélection de VRAI build — de la pierre, de l'air autour — ne
+        // compte que l'état qui a des propriétés : la pierre et l'air sont les
+        // mêmes dans toutes les orientations.
+        let mut params = Params::new();
+        params.poser("decalage", Valeur::Vecteur([0, 0, 6]));
+        params.poser(
+            "transformation",
+            Valeur::Transformation(Some(Transfo::Rot90)),
+        );
+        m.envoyer(Commande::Appliquer {
+            op: "copier-vers",
+            params,
+            sel: BBox::new(
+                BlockPos::new(A.x - 1, A.y - 1, A.z),
+                BlockPos::new(A.x + 1, A.y + 1, A.z),
+            ),
+            forme: Forme::Boite,
+            compter: false,
+            seed: 0,
+        });
+        let resume = fait(attendre(&mut m, Duration::from_secs(20)));
+        assert!(
+            resume.contains(" 1 état(s) que le pack ne sait pas tourner"),
+            "{resume}"
+        );
     });
 }

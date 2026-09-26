@@ -2173,6 +2173,14 @@ propres à ce dépôt.
   joignait son fil. Tout scénario où un fil peut attendre tourne dans un fil
   TÉMOIN à attente bornée — et une livraison abandonnée vaut « aucune règle »
   (`Livraison::drop`), pour que la faute ne soit jamais un blocage.
+- **La pierre était « un état qu'on ne sait pas tourner ».** La table de
+  rotation ne connaît que les blocs DÉRIVÉS, donc rendait `None` pour tout
+  état sans propriété — pierre, terre, air. Le compte rendu de n'importe quelle
+  rotation d'un vrai build (ligne de commande comme coque) annonçait donc des
+  dizaines d'états « laissés tels quels », et noyait sous eux le seul qui
+  comptait. Un état sans propriété est le même dans toutes les orientations :
+  sa transformation est connue sans rien dériver. Aucun test ne le voyait — ils
+  tournaient tous un seul bloc orienté, jamais un build avec de l'air autour.
 - **Rejouer sautait en silence ce qu'il ne comprenait pas.** `rejouer`
   filtrait les correctifs de chunk et ignorait le reste : une entrée portant
   une correction d'un genre inconnu — écrite par une version plus récente, ou

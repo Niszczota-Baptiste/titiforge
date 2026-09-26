@@ -1175,9 +1175,14 @@ impl Table {
     /// c'est à l'appelant de décider quoi en faire, PAS à nous de tourner de
     /// travers en silence.
     pub fn transformer(&self, cle: &str, t: Transfo) -> Option<String> {
-        let (nom, reste) = match cle.split_once('|') {
-            Some((n, r)) => (n, r),
-            None => (cle, ""),
+        // **Un état SANS propriété est le même dans toutes les orientations**
+        // — c'est dans ses propriétés que le jeu range l'orientation d'un
+        // bloc. Il n'a rien à dériver, et la table ne connaît que les blocs
+        // dérivés : sans cette ligne, la pierre, la terre et l'air de
+        // n'importe quel build revenaient « non transformés », et le compte
+        // rendu d'une rotation noyait les vrais trous sous eux.
+        let Some((nom, reste)) = cle.split_once('|') else {
+            return Some(cle.to_string());
         };
         let bloc = self.blocs.get(nom)?;
         let exact = bloc.exacts[t.indice()].as_ref()?;
