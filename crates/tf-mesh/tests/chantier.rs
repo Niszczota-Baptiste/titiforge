@@ -1104,3 +1104,281 @@ fn mailler_dans_un_extrait_rend_ce_que_rend_la_grille_entiere() {
         }
     }
 }
+
+// ── Les fluides : ce qu'une eau voisine oblige à remailler ─────────────────
+
+const EAU: StateId = 3;
+const EAU_COURANTE: StateId = 4;
+const EAU_CHUTE: StateId = 5;
+const LAVE: StateId = 6;
+
+/// La table des tests ci-dessus, plus de l'eau et de la lave.
+fn table_eau() -> TableFormes {
+    let mut t = table();
+    for (niveau, genre) in [
+        (0, tf_mesh::GenreFluide::Eau),
+        (3, tf_mesh::GenreFluide::Eau),
+        (8, tf_mesh::GenreFluide::Eau),
+        (0, tf_mesh::GenreFluide::Lave),
+    ] {
+        let id = t.pousser(true, false, Vec::new());
+        t.marquer_fluide(id, tf_mesh::Fluide { genre, niveau });
+    }
+    t
+}
+
+#[test]
+fn une_section_d_eau_n_est_pas_de_l_air() {
+    // Sa palette n'a que de l'eau, que les passes de blocs prennent pour de
+    // l'air : la sauter perdrait la surface de la mer.
+    let t = table_eau();
+    let mut g = Grille::new();
+    g.poser(0, 0, pleine(0, EAU));
+    g.poser(0, 0, pleine(1, AIR));
+    g.poser(0, 0, pleine(-1, PIERRE));
+    // Des berges de pierre tout autour : sans elles, les coins du bord
+    // plongeraient vers l'air des colonnes voisines — ce que le jeu fait
+    // aussi — et la surface ne serait plus plate au bord.
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            if (dx, dz) != (0, 0) {
+                g.poser(dx, dz, pleine(0, PIERRE));
+            }
+        }
+    }
+    assert!(!g.sans_contenu((0, 0, 0), &t));
+    assert!(g.porte_du_fluide((0, 0, 0), &t));
+    assert!(!g.porte_du_fluide((0, 0, 1), &t));
+    assert!(g.sans_contenu((0, 0, 1), &t), "l'air reste sauté");
+    let c = g.mailler_ces(&t, &[(0, 0, 0)]);
+    assert_eq!(c.lots.len(), 1);
+    let l = &c.lots[0];
+    assert!(l.quads.is_empty() && l.poses.is_empty());
+    assert_eq!(l.fluides.len(), 1, "ni côté ni fond : de la pierre partout");
+    let surface: Vec<_> = l.fluides.iter().filter(|f| f.face == Face::PlusY).collect();
+    assert_eq!(surface.len(), 1, "la surface, d'un seul tenant");
+    assert_eq!(surface[0].taille, [16, 16]);
+    // Et le lot le compte, au GPU comme en mémoire vive.
+    assert_eq!(
+        l.octets(),
+        l.fluides.len() * tf_mesh::OCTETS_FACE_FLUIDE,
+        "vingt octets par face au GPU"
+    );
+    assert!(l.octets_vive() >= l.fluides.len() * 20);
+}
+
+#[test]
+fn les_voisines_fluides_sont_la_coquille_qui_porte_de_l_eau() {
+    let t = table_eau();
+    let mut g = Grille::new();
+    // Une coquille de sections autour de (0, 0, 0) : de l'eau en DIAGONALE
+    // (arête et coin), juste AU-DESSUS, et de la pierre ailleurs.
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            for dy in -1..=1i8 {
+                let id = match (dx, dy, dz) {
+                    (1, 0, 1) | (-1, -1, -1) | (0, 1, 1) | (0, 1, 0) => EAU,
+                    _ => PIERRE,
+                };
+                g.poser(dx, dz, pleine(dy, id));
+            }
+        }
+    }
+    let v = g.voisines_fluides([0, 0, 0], [15, 15, 15], &t);
+    assert_eq!(v, vec![(-1, -1, -1), (0, 0, 1), (0, 1, 1), (1, 1, 0)]);
+    // La section de la boîte n'y est pas, même avec de l'eau : elle est
+    // remaillée de toute façon.
+    g.poser(0, 0, pleine(0, EAU));
+    assert!(!g
+        .voisines_fluides([0, 0, 0], [15, 15, 15], &t)
+        .contains(&(0, 0, 0)));
+    // Et le contenu les ajoute à ce qu'il touche.
+    let touchees = g.touchees_par_le_contenu([0, 0, 0], [15, 15, 15], &t);
+    for a in [(-1, -1, -1), (0, 1, 1), (1, 1, 0), (0, 0, 0)] {
+        assert!(touchees.contains(&a), "{a:?} dans {touchees:?}");
+    }
+}
+
+/// Une section tirée au hasard, avec de l'eau de toutes sortes — par pavés
+/// de 2 × 2 × 2 : case par case, l'eau produirait des milliers de faces par
+/// section et le test passerait son temps à les comparer, alors que ce qu'il
+/// vérifie est ce qui traverse les FRONTIÈRES. Le détail case par case est
+/// l'affaire de `tests/fluides.rs`, contre la référence du jeu.
+fn section_humide(sy: i8, graine: u32) -> Section {
+    section(sy, |x, y, z| {
+        let mut m = graine ^ (((x >> 1) * 73 + (y >> 1) * 179 + (z >> 1) * 283) as u32);
+        m = m.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        m = m.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        match (m >> 16) % 20 {
+            0..=5 => AIR,
+            6..=8 => PIERRE,
+            9 => DALLE,
+            10..=14 => EAU,
+            15 => EAU_COURANTE,
+            16 => EAU_CHUTE,
+            17 => LAVE,
+            _ if y < 8 => EAU,
+            _ => AIR,
+        }
+    })
+}
+
+#[test]
+fn remailler_la_croix_et_les_voisines_fluides_donne_le_maillage_complet() {
+    // Le test de la croix, avec de l'EAU. La croix seule ne suffit plus : un
+    // coin de surface lit quatre colonnes et ce qu'il y a au-dessus, donc une
+    // section en diagonale change quand un bloc change au coin d'une autre.
+    // Avec les voisines fluides, le remaillage partiel est EXACT — et le
+    // témoin, la croix seule, doit bel et bien se tromper, sinon le test ne
+    // prouverait rien.
+    let t = table_eau();
+    let mut g = Grille::new();
+    let mut n = 97u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..3i32 {
+        for cx in 0..3i32 {
+            for sy in 0..3i8 {
+                g.poser(cx, cz, section_humide(sy, tirer(1 << 20)));
+            }
+        }
+    }
+    let mut courant = g.mailler(&t);
+    let mut temoin = g.mailler(&t);
+    let mut temoin_faux = 0usize;
+    let comparer = |c: &tf_mesh::Chantier, complet: &tf_mesh::Chantier| -> Option<String> {
+        if c.lots.len() != complet.lots.len() {
+            return Some(format!(
+                "{} lots contre {}",
+                c.lots.len(),
+                complet.lots.len()
+            ));
+        }
+        for (a, b) in c.lots.iter().zip(complet.lots.iter()) {
+            if a.adresse != b.adresse
+                || a.quads.quads != b.quads.quads
+                || a.poses.poses != b.poses.poses
+                || a.fluides != b.fluides
+            {
+                return Some(format!("la section {:?}", b.adresse));
+            }
+        }
+        None
+    };
+    // 150 pas : chacun remaille les 27 sections en entier pour comparer, et
+    // des sections d'eau tirée au hasard sont le pire cas de la passe —
+    // des milliers de faces chacune.
+    for pas in 0..150 {
+        // Aux BORDS de section trois fois sur quatre par axe : la dépendance
+        // en diagonale ne se voit que sur une arête ou un coin.
+        let mut axe = |nb: i32| {
+            let s = tirer(nb as u32) as i32;
+            let l = match tirer(8) {
+                0..=2 => 0,
+                3..=5 => 15,
+                _ => tirer(16) as i32,
+            };
+            s * 16 + l
+        };
+        let (x, y, z) = (axe(3), axe(3), axe(3));
+        let (cx, cz, sy) = (x.div_euclid(16), z.div_euclid(16), y.div_euclid(16) as i8);
+        let id = [AIR, PIERRE, DALLE, EAU, EAU_COURANTE, EAU_CHUTE, LAVE][tirer(7) as usize];
+        let ancienne = g.section((cx, cz, sy)).cloned();
+        let (lx, ly, lz) = (x.rem_euclid(16), y.rem_euclid(16), z.rem_euclid(16));
+        g.poser(
+            cx,
+            cz,
+            section(sy, |bx, by, bz| {
+                if (bx, by, bz) == (lx, ly, lz) {
+                    id
+                } else {
+                    ancienne
+                        .as_ref()
+                        .and_then(|s| s.get(bx as usize, by as usize, bz as usize))
+                        .unwrap_or(AIR)
+                }
+            }),
+        );
+        let croix = Grille::sections_touchees([x, y, z], [x, y, z]);
+        let mut vise = croix.clone();
+        vise.extend(g.voisines_fluides([x, y, z], [x, y, z], &t));
+        vise.sort_unstable();
+        vise.dedup();
+        courant.remplacer(&vise, g.mailler_ces(&t, &vise));
+        temoin.remplacer(&croix, g.mailler_ces(&t, &croix));
+        let mut complet = g.mailler(&t);
+        complet.trier();
+        if let Some(e) = comparer(&courant, &complet) {
+            panic!("pas {pas}, bloc ({x}, {y}, {z}) : {e} garde un maillage d'avant");
+        }
+        if comparer(&temoin, &complet).is_some() {
+            temoin_faux += 1;
+            // Le témoin repart juste, pour que chaque pas compte seul.
+            temoin = g.mailler(&t);
+            temoin.trier();
+        }
+    }
+    // Mesuré : la croix seule se trompe 14 fois sur 150.
+    assert!(
+        temoin_faux >= 7,
+        "la prémisse : la croix seule se trompe avec de l'eau ({temoin_faux} fois)"
+    );
+}
+
+#[test]
+fn remailler_ce_que_le_contenu_touche_avec_de_l_eau_donne_le_maillage_complet() {
+    // Le croisement des cellules qui arrivent et partent, avec de l'eau : la
+    // réduction par le contenu garde ses voisines fluides.
+    let t = table_eau();
+    let mut g = Grille::new();
+    let mut n = 2024u32;
+    let mut tirer = |borne: u32| {
+        n = n.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (n >> 8) % borne
+    };
+    for cz in 0..3i32 {
+        for cx in 0..3i32 {
+            for sy in 0..3i8 {
+                g.poser(cx, cz, section_humide(sy, tirer(1 << 20)));
+            }
+        }
+    }
+    let mut courant = g.mailler(&t);
+    for pas in 0..80 {
+        let (cx, cz) = (tirer(3) as i32, tirer(3) as i32);
+        let sy = tirer(3) as i32;
+        let (min, max) = (
+            [cx * 16, sy * 16, cz * 16],
+            [cx * 16 + 15, sy * 16 + 15, cz * 16 + 15],
+        );
+        let avant = g.touchees_par_le_contenu(min, max, &t);
+        match tirer(4) {
+            0 => {
+                g.retirer((cx, cz, sy as i8));
+            }
+            1 => g.poser(cx, cz, pleine(sy as i8, EAU)),
+            _ => g.poser(cx, cz, section_humide(sy as i8, tirer(1 << 20))),
+        }
+        let apres = g.touchees_par_le_contenu(min, max, &t);
+        let mut vise = avant;
+        vise.extend(apres);
+        vise.sort_unstable();
+        vise.dedup();
+        courant.remplacer(&vise, g.mailler_ces(&t, &vise));
+        let mut complet = g.mailler(&t);
+        complet.trier();
+        assert_eq!(courant.lots.len(), complet.lots.len(), "pas {pas}");
+        for (a, b) in courant.lots.iter().zip(complet.lots.iter()) {
+            assert_eq!(a.adresse, b.adresse, "pas {pas}");
+            assert_eq!(a.quads.quads, b.quads.quads, "pas {pas} : {:?}", a.adresse);
+            assert_eq!(a.poses.poses, b.poses.poses, "pas {pas} : {:?}", a.adresse);
+            assert_eq!(
+                a.fluides, b.fluides,
+                "pas {pas} : la surface de {:?} date d'avant",
+                a.adresse
+            );
+        }
+    }
+}

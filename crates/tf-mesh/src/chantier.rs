@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tf_anvil::{Section, StateId};
 
 use crate::forme::{Face, Formes, FACES};
-use crate::maillage::{Instances, Maillage};
+use crate::maillage::{FaceFluide, Instances, Maillage};
 use crate::opacite::Opacite;
 use crate::voisinage::{Voisinage, COTE};
 
@@ -191,17 +191,65 @@ impl Grille {
         }
     }
 
-    /// Vrai si cette section ne peut rien produire : palette d'une entrée, et
-    /// c'est de l'air.
+    /// Vrai si cette section ne peut rien produire : sa palette n'a que de
+    /// l'air.
     ///
     /// C'est l'appelant — pas le mailleur — qui peut le savoir gratuitement.
     /// Une section d'air et une section de plantes sont indiscernables du point
     /// de vue de l'opacité ; leurs PALETTES, elles, ne le sont pas.
+    ///
+    /// **L'eau n'est pas de l'air ici**, alors qu'elle l'est pour les passes de
+    /// blocs : une section d'océan n'a que de l'eau dans sa palette, et la
+    /// sauter perdrait la surface de la mer.
     pub fn sans_contenu<F: Formes + ?Sized>(&self, a: Adresse, f: &F) -> bool {
         match self.sections.get(&a) {
             None => true,
-            Some(s) => s.palette.iter().all(|id| f.est_air(*id)),
+            Some(s) => s
+                .palette
+                .iter()
+                .all(|id| f.est_air(*id) && f.fluide(*id).is_none()),
         }
+    }
+
+    /// Vrai si la PALETTE de cette section porte un fluide.
+    ///
+    /// Sur la palette et pas sur les cases : c'est gratuit, et c'est une borne
+    /// supérieure — une palette peut garder une entrée que plus aucune case
+    /// ne désigne (l'étage palette ne dédoublonne pas). Au pire on passe la
+    /// section à la passe de fluides pour rien ; jamais l'inverse.
+    pub fn porte_du_fluide<F: Formes + ?Sized>(&self, a: Adresse, f: &F) -> bool {
+        self.sections
+            .get(&a)
+            .is_some_and(|s| s.palette.iter().any(|id| f.fluide(*id).is_some()))
+    }
+
+    /// **Maille UNE section**, les trois passes — ou rien si elle n'a pas de
+    /// contenu.
+    ///
+    /// Écrite une fois pour les trois chemins (tout, une liste, en
+    /// parallèle) : trois copies finiraient par ne plus rendre les mêmes
+    /// lots, et c'est le croisement de deux d'entre eux qui prouve le
+    /// remaillage partiel.
+    fn mailler_section<F: Formes + ?Sized>(
+        &self,
+        a: Adresse,
+        f: &F,
+        v: &mut Voisinage,
+    ) -> Option<Lot> {
+        if self.sans_contenu(a, f) {
+            return None;
+        }
+        self.voisinage(a, v);
+        let op = Opacite::relever(v, f);
+        let mut lot = Lot::vide(a);
+        crate::glouton::mailler_avec(v, f, &op, &mut lot.quads);
+        crate::modeles::instancier_avec(v, f, &op, &mut lot.poses);
+        // La passe de fluides ne tourne que là où la palette en porte : une
+        // section de pierre ou de ciel ne paie rien de plus qu'avant.
+        if self.porte_du_fluide(a, f) {
+            crate::fluides::mailler_avec(v, f, &op, &mut lot.fluides);
+        }
+        Some(lot)
     }
 
     /// Remplit un voisinage pour une section, peau comprise et VRAIE.
@@ -366,12 +414,15 @@ impl Grille {
     /// des SORTIES ANTICIPÉES qui ne peuvent pas changer le résultat — une
     /// face visible ne se décide jamais que contre son voisin par face.
     ///
-    /// **Le contrat est celui du mailleur d'AUJOURD'HUI.** L'occlusion
-    /// ambiante lira les voisins d'arête et de coin ; ce jour-là cette croix
-    /// devient fausse, et le test qui la croise avec un remaillage complet
-    /// après des éditions tirées au hasard rougira — c'est pour ça qu'il
-    /// existe, et qu'il faut revenir à `sections_autour` au lieu de le faire
-    /// taire.
+    /// **Le contrat est celui des passes de BLOCS.** La passe de fluides, elle,
+    /// lit les voisins d'arête et de coin — un coin de surface est la moyenne
+    /// de quatre colonnes, et on y regarde aussi au-dessus. Une section
+    /// diagonale qui porte du fluide doit donc être remaillée avec la croix :
+    /// c'est [`Grille::voisines_fluides`], qui ne coûte rien là où il n'y a
+    /// pas d'eau. Le test qui croise la croix avec un remaillage complet
+    /// rougit sans elle dès qu'on y met de l'eau — et rougira de même le jour
+    /// où l'occlusion ambiante lira les diagonales des blocs : il faudra alors
+    /// revenir à `sections_autour`, pas le faire taire.
     ///
     /// Comme `sections_autour` : les adresses VISÉES, qu'elles aient du
     /// contenu ou non, triées, bornes incluses.
@@ -400,6 +451,54 @@ impl Grille {
         }
         out.sort_unstable();
         out.dedup();
+        out
+    }
+
+    /// **Les sections AUTOUR d'une boîte — faces, arêtes et coins — qui
+    /// portent du fluide.**
+    ///
+    /// La passe de fluides lit plus loin que les deux autres : la hauteur d'un
+    /// coin de surface dépend des quatre colonnes qui le touchent et de ce
+    /// qu'il y a au-dessus, le sens du courant des cases sous ses voisines.
+    /// Un bloc qui change peut donc changer la surface d'une section en
+    /// DIAGONALE — mais seulement si elle a du fluide : sans, elle n'a aucune
+    /// face de fluide à refaire, et la croix suffit à ses blocs.
+    ///
+    /// Sur les palettes (`porte_du_fluide`) : gratuit, et une borne
+    /// supérieure. Les sections de la boîte n'y sont pas — elles sont
+    /// remaillées de toute façon. Triées.
+    pub fn voisines_fluides<F: Formes + ?Sized>(
+        &self,
+        min: [i32; 3],
+        max: [i32; 3],
+        f: &F,
+    ) -> Vec<Adresse> {
+        let sec = |v: i32| (v as i64).div_euclid(16) as i32;
+        let (x0, x1) = (sec(min[0]), sec(max[0]));
+        let (y0, y1) = (sec(min[1]), sec(max[1]));
+        let (z0, z1) = (sec(min[2]), sec(max[2]));
+        let mut out = Vec::new();
+        // La COQUILLE de la boîte élargie d'une section, pas son volume : une
+        // édition de toute une région ne parcourt que son pourtour.
+        for cz in z0 - 1..=z1 + 1 {
+            for cx in x0 - 1..=x1 + 1 {
+                let bord = cx < x0 || cx > x1 || cz < z0 || cz > z1;
+                let hauteurs: Vec<i32> = if bord {
+                    (y0 - 1..=y1 + 1).collect()
+                } else {
+                    vec![y0 - 1, y1 + 1]
+                };
+                for cy in hauteurs {
+                    let Ok(y) = i8::try_from(cy) else {
+                        continue;
+                    };
+                    if self.porte_du_fluide((cx, cz, y), f) {
+                        out.push((cx, cz, y));
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
         out
     }
 
@@ -468,9 +567,13 @@ impl Grille {
     ///
     /// Les sections de la boîte sont rendues qu'elles existent ou non, comme
     /// par `sections_touchees` : une section qui vient de partir doit être
-    /// VISÉE pour que son maillage parte avec elle. Même contrat, aussi, face
-    /// à l'occlusion ambiante : elle lira les voisines d'arête et de coin, et
-    /// le test qui croise ce remaillage avec un remaillage complet rougira.
+    /// VISÉE pour que son maillage parte avec elle.
+    ///
+    /// **Et les voisines qui portent du FLUIDE**, faces, arêtes et coins
+    /// (`voisines_fluides`) : leur surface lit plus loin que l'opacité d'une
+    /// couche. Même contrat, aussi, face à l'occlusion ambiante : elle lira
+    /// les voisines d'arête et de coin des BLOCS, et le test qui croise ce
+    /// remaillage avec un remaillage complet rougira.
     pub fn touchees_par_le_contenu<F: Formes + ?Sized>(
         &self,
         min: [i32; 3],
@@ -516,6 +619,7 @@ impl Grille {
                 }
             }
         }
+        out.extend(self.voisines_fluides(min, max, f));
         out.sort_unstable();
         out.dedup();
         out
@@ -531,37 +635,17 @@ impl Grille {
         let mut out = Chantier::default();
         let mut v = Voisinage::new();
         for &a in adresses {
-            if self.sans_contenu(a, f) {
-                out.sautees += 1;
-                continue;
+            match self.mailler_section(a, f, &mut v) {
+                Some(lot) => out.lots.push(lot),
+                None => out.sautees += 1,
             }
-            self.voisinage(a, &mut v);
-            let op = Opacite::relever(&v, f);
-            let mut lot = Lot::vide(a);
-            crate::glouton::mailler_avec(&v, f, &op, &mut lot.quads);
-            crate::modeles::instancier_avec(&v, f, &op, &mut lot.poses);
-            out.lots.push(lot);
         }
         out
     }
 
     /// Maille tout ce que la grille porte, en séquence.
     pub fn mailler<F: Formes + ?Sized>(&self, f: &F) -> Chantier {
-        let mut out = Chantier::default();
-        let mut v = Voisinage::new();
-        for a in self.adresses() {
-            if self.sans_contenu(a, f) {
-                out.sautees += 1;
-                continue;
-            }
-            self.voisinage(a, &mut v);
-            let op = Opacite::relever(&v, f);
-            let mut lot = Lot::vide(a);
-            crate::glouton::mailler_avec(&v, f, &op, &mut lot.quads);
-            crate::modeles::instancier_avec(&v, f, &op, &mut lot.poses);
-            out.lots.push(lot);
-        }
-        out
+        self.mailler_ces(f, &self.adresses())
     }
 }
 
@@ -576,6 +660,8 @@ pub struct Lot {
     pub adresse: Adresse,
     pub quads: Maillage,
     pub poses: Instances,
+    /// Les faces d'eau et de lave (`fluides`), déjà fusionnées.
+    pub fluides: Vec<FaceFluide>,
 }
 
 impl Lot {
@@ -584,6 +670,7 @@ impl Lot {
             adresse,
             quads: Maillage::new(),
             poses: Instances::new(),
+            fluides: Vec::new(),
         }
     }
 
@@ -594,17 +681,19 @@ impl Lot {
     }
 
     pub fn est_vide(&self) -> bool {
-        self.quads.is_empty() && self.poses.is_empty()
+        self.quads.is_empty() && self.poses.is_empty() && self.fluides.is_empty()
     }
 
     /// Ce que ce lot pèsera sur le **GPU** : 16 octets par quad — la forme
-    /// packée, pas la structure — et 12 par pose.
+    /// packée, pas la structure — 12 par pose, et 20 par face de fluide.
     ///
     /// C'est la brique de `Chantier::octets`, et c'est voulu : une somme
     /// écrite deux fois finirait par ne plus dire la même chose que ses
     /// termes, et le budget de résidence en dépend.
     pub fn octets(&self) -> usize {
-        self.quads.len() * 16 + self.poses.octets()
+        self.quads.len() * 16
+            + self.poses.octets()
+            + self.fluides.len() * crate::maillage::OCTETS_FACE_FLUIDE
     }
 
     /// Ce que ce lot coûte en mémoire **vive** — un autre nombre, et un autre
@@ -617,6 +706,7 @@ impl Lot {
     pub fn octets_vive(&self) -> usize {
         self.quads.len() * std::mem::size_of::<crate::maillage::Quad>()
             + self.poses.len() * std::mem::size_of::<crate::maillage::Instance>()
+            + self.fluides.len() * std::mem::size_of::<FaceFluide>()
     }
 }
 
@@ -645,6 +735,7 @@ pub struct Maillages {
     lots: BTreeMap<Adresse, Lot>,
     quads: usize,
     poses: usize,
+    fluides: usize,
     octets: usize,
     octets_vive: usize,
     sautees: usize,
@@ -682,6 +773,7 @@ impl Maillages {
     fn ajouter(&mut self, l: Lot) {
         self.quads += l.quads.len();
         self.poses += l.poses.len();
+        self.fluides += l.fluides.len();
         self.octets += l.octets();
         self.octets_vive += l.octets_vive();
         if let Some(ancien) = self.lots.insert(l.adresse, l) {
@@ -694,6 +786,7 @@ impl Maillages {
     fn soustraire(&mut self, l: &Lot) {
         self.quads -= l.quads.len();
         self.poses -= l.poses.len();
+        self.fluides -= l.fluides.len();
         self.octets -= l.octets();
         self.octets_vive -= l.octets_vive();
     }
@@ -719,6 +812,11 @@ impl Maillages {
 
     pub fn poses(&self) -> usize {
         self.poses
+    }
+
+    /// Les faces de fluide de la scène — tenues, pas resommées.
+    pub fn fluides(&self) -> usize {
+        self.fluides
     }
 
     /// Ce que la scène pèse sur le GPU — tenu, pas resommé.
@@ -776,6 +874,10 @@ impl Chantier {
 
     pub fn poses(&self) -> usize {
         self.lots.iter().map(|l| l.poses.len()).sum()
+    }
+
+    pub fn fluides(&self) -> usize {
+        self.lots.iter().map(|l| l.fluides.len()).sum()
     }
 
     /// Ce que le chantier pèsera sur le **GPU**, lot par lot.
@@ -842,16 +944,10 @@ mod parallele {
                     let mut lots = Vec::with_capacity(paquet.len());
                     let mut sautees = 0usize;
                     for &a in paquet {
-                        if self.sans_contenu(a, f) {
-                            sautees += 1;
-                            continue;
+                        match self.mailler_section(a, f, &mut v) {
+                            Some(lot) => lots.push(lot),
+                            None => sautees += 1,
                         }
-                        self.voisinage(a, &mut v);
-                        let op = Opacite::relever(&v, f);
-                        let mut lot = Lot::vide(a);
-                        crate::glouton::mailler_avec(&v, f, &op, &mut lot.quads);
-                        crate::modeles::instancier_avec(&v, f, &op, &mut lot.poses);
-                        lots.push(lot);
                     }
                     (lots, sautees)
                 })

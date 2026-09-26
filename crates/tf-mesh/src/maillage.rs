@@ -104,6 +104,62 @@ pub struct Instance {
     pub biome: StateId,
 }
 
+/// Quelle texture une face de fluide porte — celle que le jeu choisit
+/// (`LiquidBlockRenderer`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum TextureFluide {
+    /// `*_still` : une surface qui ne court pas, et tout dessous.
+    Immobile = 0,
+    /// `*_flow` : les côtés, et une surface qui court — tournée selon le
+    /// courant (`FaceFluide::angle`).
+    Courant = 1,
+    /// `water_overlay` : le côté de l'eau contre un bloc translucide qui
+    /// remplit sa case — verre, feuilles. Le jeu la montre pour qu'on voie
+    /// l'eau à travers la vitre sans voir la vitre à travers l'eau.
+    Voile = 2,
+}
+
+/// **Une face de FLUIDE** — éventuellement fusionnée, en blocs dans le repère
+/// de la section.
+///
+/// Pas un `Quad` : une surface d'eau n'est pas plate. Ses quatre coins ont
+/// chacun leur hauteur — la moyenne pondérée des colonnes qui les entourent,
+/// la règle même du jeu — et c'est ce qui fait descendre un courant en pente
+/// au lieu de marches. Une étendue immobile, elle, a ses quatre coins égaux :
+/// ce sont ses faces-là qui se fusionnent, et un océan sort en un quad par
+/// section au lieu de 256.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FaceFluide {
+    /// La CASE qui porte la face — pas le plan de la face : la hauteur d'un
+    /// coin se compte depuis le bas de la case, et un côté est RENTRÉ d'un
+    /// millième dans sa case, comme dans le jeu.
+    pub pos: [u8; 3],
+    /// Étendue dans les deux axes du plan, dans l'ordre croissant des axes
+    /// (celui de `Quad::taille`), en blocs, de 1 à 16.
+    pub taille: [u8; 2],
+    pub face: Face,
+    pub genre: crate::forme::GenreFluide,
+    pub texture: TextureFluide,
+    /// Les hauteurs du HAUT de la face, en 255e de bloc depuis le bas de la
+    /// dernière rangée de cases.
+    ///
+    /// Dessus : les quatre coins `[NO, SO, SE, NE]` — `(x0, z0)`, `(x0, z1)`,
+    /// `(x1, z1)`, `(x1, z0)` — l'ordre où le jeu émet ses sommets. Côtés :
+    /// `[bout bas, bout haut]` le long de l'axe horizontal du plan, puis
+    /// rien. Dessous : rien, il est plat.
+    pub hauteurs: [u8; 4],
+    /// Le sens du courant d'une surface `Courant`, en 65 536e de tour :
+    /// `atan2(dz, dx) − π/2`, comme le jeu tourne sa texture.
+    pub angle: u16,
+    /// Le biome de la case pour l'EAU, qui en prend la couleur ; zéro pour la
+    /// lave — la même règle que la clé de fusion gloutonne.
+    pub biome: StateId,
+}
+
+/// Ce qu'une face de fluide pèse au GPU : cinq mots de 32 bits.
+pub const OCTETS_FACE_FLUIDE: usize = 20;
+
 /// Ce que produit la passe de modèles en mode instances.
 #[derive(Debug, Default, Clone)]
 pub struct Instances {

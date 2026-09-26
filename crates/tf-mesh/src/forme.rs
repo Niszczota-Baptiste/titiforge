@@ -78,7 +78,7 @@ impl Cuboide {
 /// « −X +X +Y −Y » pour un mailleur qui produisait « −X +X −Y +Y ». L'ombrage
 /// était inversé depuis le début, invisible sur un build gris, et ça n'est
 /// sorti qu'en posant des textures dessus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum Face {
     MoinsX = 0,
@@ -136,12 +136,71 @@ impl Face {
     }
 }
 
+/// Les deux fluides du jeu. Deux fluides différents ne se fondent jamais :
+/// l'eau montre sa face à la lave comme à l'air.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum GenreFluide {
+    Eau = 1,
+    Lave = 2,
+}
+
+/// **Le fluide qu'une case porte** — ce que la passe de fluides lit.
+///
+/// Orthogonal à tout le reste, et c'est le point : une case d'eau est de
+/// l'AIR pour les passes de blocs (ni opaque, ni cuboïde), et un escalier
+/// inondé est un bloc-modèle ET une source d'eau. Le jeu fait la même
+/// séparation — un état de bloc porte un `FluidState` à part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Fluide {
+    pub genre: GenreFluide,
+    /// La propriété `level` du bloc : 0 pour une source, 1 à 7 pour un
+    /// courant qui s'amincit, 8 et au-delà pour une chute. Un bloc inondé
+    /// (`waterlogged=true`) porte une source : 0.
+    pub niveau: u8,
+}
+
+impl Fluide {
+    /// Une source — ce que porte tout bloc inondé.
+    pub const fn source(genre: GenreFluide) -> Fluide {
+        Fluide { genre, niveau: 0 }
+    }
+
+    /// La QUANTITÉ, comme le jeu la tire du bloc (`LiquidBlock`) : 8 pour une
+    /// source ou une chute, `8 − niveau` pour un courant.
+    pub const fn quantite(self) -> u8 {
+        if self.niveau == 0 || self.niveau >= 8 {
+            8
+        } else {
+            8 - self.niveau
+        }
+    }
+
+    /// La hauteur PROPRE, en blocs — `FluidState::getOwnHeight` :
+    /// `quantité / 9`. Une source monte donc à 8/9 de sa case, pas à la case
+    /// entière : c'est le liseré sous la surface de toute étendue d'eau.
+    pub fn hauteur(self) -> f32 {
+        self.quantite() as f32 / 9.0
+    }
+
+    /// Une chute : `level` de 8 et plus.
+    pub const fn tombe(self) -> bool {
+        self.niveau >= 8
+    }
+}
+
 /// Ce que le mailleur demande à son hôte.
 ///
 /// Trois questions, et elles suffisent. Tout ce qui touche aux textures, aux
 /// teintes ou aux `.jar` vit ailleurs.
 pub trait Formes {
-    /// Rien à mailler : ni géométrie, ni masquage.
+    /// Rien à mailler pour les passes de BLOCS : ni géométrie, ni masquage.
+    ///
+    /// **Une case d'eau en est**, et c'est voulu : elle ne bouche rien, n'a
+    /// pas de cuboïde, et le réticule la traverse comme dans le jeu. Ce
+    /// qu'elle dessine, c'est `fluide` qui le dit — et c'est pourquoi une
+    /// section ne se saute que si elle n'a NI bloc NI fluide
+    /// (`Grille::sans_contenu`).
     fn est_air(&self, id: StateId) -> bool;
 
     /// Ce bloc BOUCHE sa case : il masque les faces de ses voisins et se fond
@@ -165,6 +224,37 @@ pub trait Formes {
         let _ = id;
         false
     }
+
+    /// Le FLUIDE que porte cette case : l'eau d'une source, d'un courant ou
+    /// d'un bloc inondé, la lave. `None` par défaut — un hôte qui ne connaît
+    /// pas les fluides maille comme avant.
+    fn fluide(&self, id: StateId) -> Option<Fluide> {
+        let _ = id;
+        None
+    }
+
+    /// Cette case ARRÊTE-t-elle un fluide ? C'est le `Material::isSolid` du
+    /// jeu, qui décide de la hauteur d'un coin de surface : une case d'air
+    /// au bord d'une étendue d'eau la tire vers le bas, une paroi non.
+    ///
+    /// **Un pack ne dit pas ce qu'est la matière d'un bloc** — elle vit dans
+    /// le code du jeu. La règle par défaut est donc une APPROXIMATION, et
+    /// elle se nomme : ce qui bouche sa case, ou porte un cuboïde
+    /// d'épaisseur non nulle. Une fleur (deux plans en croix) laisse passer,
+    /// un escalier arrête. Une torche ou un tapis, que le jeu laisse passer,
+    /// arrêtent ici — un coin de surface un peu plus haut contre eux, rien
+    /// d'autre.
+    fn solide(&self, id: StateId) -> bool {
+        self.opaque(id) || self.cuboides(id).iter().any(Cuboide::epais)
+    }
+}
+
+impl Cuboide {
+    /// Vrai si ce cuboïde a un VOLUME : une épaisseur non nulle sur les
+    /// trois axes. Les plans d'une fleur en croix n'en ont pas.
+    pub fn epais(&self) -> bool {
+        (0..3).all(|k| self.max[k] > self.min[k])
+    }
 }
 
 /// Une table plate indexée par `StateId`. Ce que fabriquera `tf-assets`, et ce
@@ -175,6 +265,10 @@ pub struct TableFormes {
     opaque: Vec<bool>,
     modeles: Vec<Vec<Cuboide>>,
     teinte: Vec<bool>,
+    fluides: Vec<Option<Fluide>>,
+    /// `Formes::solide`, calculé une fois par état : la passe de fluides le
+    /// demande pour chaque voisin d'un coin de surface.
+    solides: Vec<bool>,
 }
 
 impl TableFormes {
@@ -192,9 +286,24 @@ impl TableFormes {
         );
         self.air.push(air);
         self.opaque.push(opaque);
+        self.solides
+            .push(opaque || modele.iter().any(Cuboide::epais));
         self.modeles.push(modele);
         self.teinte.push(false);
+        self.fluides.push(None);
         (self.air.len() - 1) as StateId
+    }
+
+    /// Déclare le fluide d'un état — l'eau d'une source, d'un courant, d'un
+    /// bloc inondé, ou la lave.
+    ///
+    /// Séparé de `pousser` pour la même raison que la teinte : le fluide se
+    /// lit dans l'ÉTAT (`level`, `waterlogged`), pas dans la forme, et un
+    /// escalier inondé garde ses cuboïdes.
+    pub fn marquer_fluide(&mut self, id: StateId, f: Fluide) {
+        if let Some(c) = self.fluides.get_mut(id as usize) {
+            *c = Some(f);
+        }
     }
 
     /// Marque un état comme teinté par son biome.
@@ -239,5 +348,16 @@ impl Formes for TableFormes {
     #[inline]
     fn teinte_biome(&self, id: StateId) -> bool {
         self.teinte.get(id as usize).copied().unwrap_or(false)
+    }
+
+    #[inline]
+    fn fluide(&self, id: StateId) -> Option<Fluide> {
+        self.fluides.get(id as usize).copied().flatten()
+    }
+
+    #[inline]
+    fn solide(&self, id: StateId) -> bool {
+        // Hors table : ni opaque ni modèle, donc de l'air — qui laisse passer.
+        self.solides.get(id as usize).copied().unwrap_or(false)
     }
 }

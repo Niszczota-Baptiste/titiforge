@@ -1,20 +1,24 @@
 //! Le maillage d'une section.
 //!
-//! Deux passes, et il en faut deux :
+//! Trois passes, et il en faut trois :
 //!
 //! - **gloutonne** (`glouton`) pour les blocs qui bouchent leur case. Elle
 //!   fusionne les rectangles de faces identiques : une muraille de 64 × 40
 //!   sort en un quad au lieu de 2 560.
 //! - **modèles** (`modeles`) pour tout le reste. Sur la cible Minefield, deux
 //!   tiers du catalogue et près de la moitié de la géométrie d'un build.
+//! - **fluides** (`fluides`) pour l'eau et la lave, qui n'ont pas de modèle :
+//!   leur surface n'est pas plate, et c'est le code du jeu qui la décide.
 //!
-//! Les deux lisent le même `Voisinage` — une section **avec une peau d'une
-//! case** — et écrivent dans le même `Maillage`. Aucune ne connaît de fichier,
-//! de pack ni de GPU : ce qu'elles savent d'un bloc passe par `Formes`.
+//! Toutes lisent le même `Voisinage` — une section **avec une peau d'une
+//! case**. Les deux premières écrivent dans le même `Maillage`, la troisième
+//! dans sa liste de `FaceFluide`. Aucune ne connaît de fichier, de pack ni de
+//! GPU : ce qu'elles savent d'un bloc passe par `Formes`.
 
 #![forbid(unsafe_code)]
 
 pub mod chantier;
+pub mod fluides;
 pub mod forme;
 pub mod glouton;
 pub mod maillage;
@@ -23,8 +27,10 @@ pub mod opacite;
 pub mod voisinage;
 
 pub use chantier::{Adresse, Chantier, Grille, Lot, Maillages, ABSENT};
-pub use forme::{Cuboide, Face, Formes, TableFormes, FACES};
-pub use maillage::{Instance, Instances, Maillage, Quad};
+pub use forme::{Cuboide, Face, Fluide, Formes, GenreFluide, TableFormes, FACES};
+pub use maillage::{
+    FaceFluide, Instance, Instances, Maillage, Quad, TextureFluide, OCTETS_FACE_FLUIDE,
+};
 pub use opacite::Opacite;
 pub use voisinage::{Voisinage, COTE, COTE_PAD, PAD, VOL_PAD};
 
