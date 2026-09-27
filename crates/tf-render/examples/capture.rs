@@ -216,9 +216,13 @@ fn main() {
                 // Le biome quand on le connaît, le réglage sinon. Ne jamais
                 // inventer : une couleur fausse se lit « ce bloc est bizarre »
                 // et ne désigne pas la cause.
-                (a.couche, teinte_de(a.genre, biome).unwrap_or(a.teinte))
+                (
+                    a.couche,
+                    teinte_de(a.genre, biome).unwrap_or(a.teinte),
+                    tf_render::Sens::depuis_uv(a.uv, a.echange),
+                )
             }
-            None => (0, [1.0; 3]),
+            None => (0, [1.0; 3], tf_render::Sens::DROIT),
         }
     });
 
@@ -243,6 +247,7 @@ fn main() {
                         f[k].couche,
                         teinte_de(f[k].genre, biome).unwrap_or(f[k].teinte),
                         f[k].uv,
+                        f[k].echange,
                     )
                 })
             })

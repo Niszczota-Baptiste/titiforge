@@ -114,7 +114,10 @@ fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) inst: u32) -> Sort
     let f = faces[p.debut_modele + (inst - p.debut_face)];
 
     out.couche = f.couche;
-    out.ombre = ombre_de(f.face);
+    // La direction dans les trois bits du bas ; le bit 3 échange les axes
+    // des uv (`HabillageFaces`).
+    let dir = f.face & 7u;
+    out.ombre = ombre_de(dir);
     out.teinte = decompresse(f.teinte);
 
     // Masquage : la face porte `cullface`, elle touche le bord du bloc (les
@@ -122,14 +125,14 @@ fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) inst: u32) -> Sort
     // ce côté est opaque. On rend alors un quad DÉGÉNÉRÉ — rien à dessiner,
     // et rien à brancher : un `discard` coûterait le fragment.
     let voisins = (p.local >> 24u) & 63u;
-    if (f.cullable != 0u && (voisins & (1u << f.face)) != 0u) {
+    if (f.cullable != 0u && (voisins & (1u << dir)) != 0u) {
         out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
         out.uv = vec2<f32>(0.0);
         return out;
     }
 
-    let axe = f.face >> 1u;
-    let positif = (f.face & 1u) == 1u;
+    let axe = dir >> 1u;
+    let positif = (dir & 1u) == 1u;
     // Les deux axes du plan, dans l'ordre CROISSANT — le même que la passe
     // gloutonne. Les échanger retournerait deux faces sur six.
     var au = 0u;
@@ -139,8 +142,18 @@ fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) inst: u32) -> Sort
         case 1u:     { au = 0u; av = 2u; }   // ±Y : plan (X, Z)
         default:     { au = 0u; av = 1u; }   // ±Z : plan (X, Y)
     }
-    let u = f32(i & 1u);
-    let v = f32((i >> 1u) & 1u);
+    // Six sommets, aucun index : les coins 0, 1, 2 puis 2, 1, 3 — le même
+    // découpage que la passe gloutonne (`quad.wgsl`), et le même défaut s'il
+    // manquait : un quart de chaque face jamais dessiné.
+    var c = i;
+    switch i {
+        case 3u: { c = 2u; }
+        case 4u: { c = 1u; }
+        case 5u: { c = 3u; }
+        default: {}
+    }
+    let u = f32(c & 1u);
+    let v = f32((c >> 1u) & 1u);
 
     // `var` et non `let` : WGSL n'indexe un tableau par une VARIABLE que s'il
     // est en mémoire de fonction. Un `let` est une constante, et l'indexer par
@@ -162,10 +175,14 @@ fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) inst: u32) -> Sort
         + vec3<f32>(coin[0], coin[1], coin[2]);
     out.clip = cam.vue_projection * vec4<f32>(seiziemes / 16.0, 1.0);
 
-    // Les uv du modèle, en seizièmes, ramenées en 0..1. Une dalle montre ainsi
-    // la MOITIÉ BASSE de sa texture, et non la texture entière écrasée sur huit
-    // seizièmes.
-    out.uv = vec2<f32>(mix(f.uv.x, f.uv.z, u), mix(f.uv.y, f.uv.w, v)) / 16.0;
+    // Les uv du modèle, en seizièmes, ramenées en 0..1 : celles du coin
+    // (0, 0) du plan et du coin (1, 1), et `u` le long du second axe quand
+    // les axes sont échangés — le SENS de la texture, variante tournée
+    // comprise. Une dalle montre ainsi la MOITIÉ BASSE de sa texture, et non
+    // la texture entière écrasée sur huit seizièmes.
+    var st = vec2<f32>(u, v);
+    if (((f.face >> 3u) & 1u) != 0u) { st = st.yx; }
+    out.uv = vec2<f32>(mix(f.uv.x, f.uv.z, st.x), mix(f.uv.y, f.uv.w, st.y)) / 16.0;
     return out;
 }
 

@@ -377,14 +377,8 @@ pub fn cuboides(m: &ModeleResolu) -> Vec<Cuboide> {
 /// C'est la règle que Minecraft applique : la face prend la portion de texture
 /// qui correspond à sa position dans le bloc. Une dalle montre donc la moitié
 /// basse de sa texture, et non la texture entière écrasée sur 8 seizièmes.
+/// La formule, face par face, est dans [`crate::uv::uv_par_defaut`].
 pub fn uv_de(e: &Element, f: Face, fd: &FaceDef) -> [f32; 4] {
-    if let Some(uv) = fd.uv {
-        return uv;
-    }
-    let (from, to) = (e.from, e.to);
-    match f {
-        Face::MoinsY | Face::PlusY => [from[0], from[2], to[0], to[2]],
-        Face::MoinsZ | Face::PlusZ => [16.0 - to[0], 16.0 - to[1], 16.0 - from[0], 16.0 - from[1]],
-        Face::MoinsX | Face::PlusX => [from[2], 16.0 - to[1], to[2], 16.0 - from[1]],
-    }
+    fd.uv
+        .unwrap_or_else(|| crate::uv::uv_par_defaut(f, e.from, e.to))
 }

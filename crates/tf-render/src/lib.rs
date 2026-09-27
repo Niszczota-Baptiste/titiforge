@@ -18,7 +18,9 @@ pub mod scene;
 pub mod viser;
 
 pub use appareil::{Appareil, AppareilError};
-pub use arene::{depaqueter, empaqueter, Arene, Emplacements, InstanceQuad, Tranche};
+pub use arene::{
+    depaqueter, empaqueter, ApparenceQuad, Arene, Emplacements, InstanceQuad, Sens, Tranche,
+};
 pub use camera::Camera;
 pub use controles::{Mode, Vue};
 pub use fluides::{empaqueter_fluide, AreneFluides, InstanceFluide};

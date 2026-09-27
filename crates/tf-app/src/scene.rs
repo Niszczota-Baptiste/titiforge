@@ -463,16 +463,17 @@ fn apparence<'a>(
     habillage: &'a [tf_assets::apparence::Habillage],
     interner: &'a Interner,
     climat: &'a tf_assets::climat::Climat,
-) -> impl Fn(StateId, tf_mesh::forme::Face, StateId) -> (u32, [f32; 3]) + 'a {
+) -> impl Fn(StateId, tf_mesh::forme::Face, StateId) -> (u32, [f32; 3], tf_render::Sens) + 'a {
     move |id, face, biome| match habillage.get(id as usize) {
         Some(h) => {
             let a = h.cube[face.indice()];
             (
                 a.couche,
                 teinte_de(interner, climat, a.genre, biome).unwrap_or(a.teinte),
+                tf_render::Sens::depuis_uv(a.uv, a.echange),
             )
         }
-        None => (0, [1.0; 3]),
+        None => (0, [1.0; 3], tf_render::Sens::DROIT),
     }
 }
 
@@ -576,6 +577,7 @@ fn modele_de<'a>(
                         f[k].couche,
                         teinte_de(f[k].genre, biome).unwrap_or(f[k].teinte),
                         f[k].uv,
+                        f[k].echange,
                     )
                 })
             })

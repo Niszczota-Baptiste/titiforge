@@ -289,3 +289,58 @@ fn l_eau_et_la_lave_du_codex_sont_des_fluides_qu_aucun_cube_ne_double() {
         }
     );
 }
+
+/// **Ce que le rendu ne sait pas encore poser**, compté sur le vrai pack.
+///
+/// Une face gloutonne répète la tuile ENTIÈRE par bloc : un cube plein qui
+/// ne déclare qu'une PORTION de tuile sur une face la montre entière. Et un
+/// élément tourné d'un angle qui n'est pas droit (`rotation` d'élément, les
+/// croix de plantes à 45°) est dessiné droit. Le chiffre dit si l'un ou
+/// l'autre mérite du travail — pas une impression.
+#[test]
+fn ce_que_le_rendu_ne_pose_pas_encore_se_compte() {
+    let Some(cat) = pack() else {
+        eprintln!("TF_PACK non défini : test sauté");
+        return;
+    };
+    let mut cubes = std::collections::BTreeSet::new();
+    let mut portions = std::collections::BTreeSet::new();
+    let mut penches = std::collections::BTreeSet::new();
+    for (nom, bs) in cat.blocs() {
+        for v in bs.modeles() {
+            let Some(m) = cat.modele(&v.modele) else {
+                continue;
+            };
+            if m.elements
+                .iter()
+                .any(|e| e.rotation.is_some_and(|r| r.angle % 90.0 != 0.0))
+            {
+                penches.insert(nom.clone());
+            }
+            let plein = m.elements.iter().find(|e| {
+                (0..3).all(|k| e.from[k].min(e.to[k]) <= 0.0 && e.from[k].max(e.to[k]) >= 16.0)
+            });
+            let Some(e) = plein else {
+                continue;
+            };
+            cubes.insert(nom.clone());
+            for (f, fd) in &e.faces {
+                let uv = tf_assets::modele::uv_de(e, *f, fd);
+                if (uv[2] - uv[0]).abs() != 16.0 || (uv[3] - uv[1]).abs() != 16.0 {
+                    portions.insert(nom.clone());
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{} blocs à cube plein, dont {} déclarent une PORTION de tuile sur une face ; \
+         {} blocs ont un élément penché hors angle droit",
+        cubes.len(),
+        portions.len(),
+        penches.len()
+    );
+    eprintln!(
+        "portions : {:?}",
+        portions.iter().take(12).collect::<Vec<_>>()
+    );
+}

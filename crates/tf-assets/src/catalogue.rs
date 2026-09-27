@@ -412,14 +412,16 @@ fn forme_seule(
                 // premier élément » prendrait la couche d'herbe transparente de
                 // `grass_block` au lieu du cube lui-même.
                 if let (Some(atlas), Some(e)) = (atlas, m.elements.get(i)) {
-                    cube = crate::apparence::habiller(e, a, atlas, couleur, genre);
+                    cube = crate::apparence::habiller(e, a, v.uvlock, atlas, couleur, genre);
                 }
             }
             plein = true;
         }
         if let Some(atlas) = atlas {
             for e in &m.elements {
-                hab.push(crate::apparence::habiller(e, a, atlas, couleur, genre));
+                hab.push(crate::apparence::habiller(
+                    e, a, v.uvlock, atlas, couleur, genre,
+                ));
             }
         }
         cub.extend(c);

@@ -62,7 +62,7 @@ fn pixel(image: &[u8], (x, y): (u32, u32)) -> [u8; 3] {
 /// donnée en linéaire, la cible est en sRGB — elle se MESURE.
 fn fond(app: &Appareil, cam: &Camera) -> [u8; 3] {
     let vide = Chantier::default();
-    let a = Arene::depuis(&vide, &|_, _, _| (0, [1.0; 3]));
+    let a = Arene::depuis(&vide, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let s = Scene::nouvelle(app, &a, &atlas(app, &[[255; 4]]));
     let (img, _) = s.rendre(&Cible::nouvelle(app, COTE, COTE), cam);
     pixel(&img, (0, 0))
@@ -76,7 +76,7 @@ fn scene_de(app: &Appareil, faces: Vec<FaceFluide>, atlas: &AtlasGpu) -> Scene {
         lots: vec![lot],
         sautees: 0,
     };
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let fluides = AreneFluides::depuis(&chantier, arene.emplacements(), &|g, _, _| {
         // La lave sur la couche 0, l'eau sur la couche 1.
         (u32::from(g == GenreFluide::Eau), [1.0; 3])
@@ -327,7 +327,7 @@ fn bassin(app: &Appareil, fluide: StateId, sol: [u8; 4]) -> (Vec<u8>, tf_render:
         }),
     );
     let c = g.mailler(&t);
-    let arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let fluides = AreneFluides::depuis(&c, arene.emplacements(), &|g, _, _| match g {
         GenreFluide::Eau => (1, [0.25, 0.46, 0.89]),
         GenreFluide::Lave => (2, [1.0; 3]),
@@ -434,7 +434,7 @@ fn une_scene_suivie_montre_les_fluides_d_une_scene_neuve() {
     let mut g = Grille::new();
     g.poser(0, 0, section(0, nappe(16)));
     let c = g.mailler(&t);
-    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::default();
     let mut fluides = AreneFluides::depuis(&c, arene.emplacements(), &apparence);
     let mut suivie = Scene::vide(&app, &a, FORMAT);
@@ -443,7 +443,9 @@ fn une_scene_suivie_montre_les_fluides_d_une_scene_neuve() {
         g.poser(0, 0, section(0, nappe(jusqu_a)));
         let neufs = g.mailler(&t);
         let visees = [(0, 0, 0)];
-        arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+        arene.remplacer(&visees, &neufs.lots, &|_, _, _| {
+            (0, [1.0; 3], tf_render::Sens::DROIT)
+        });
         fluides.remplacer(arene.emplacements(), &visees, &neufs.lots, &apparence);
         let envoyes = suivie.synchroniser(&mut arene, &mut modeles, &mut fluides);
         assert!(
@@ -466,7 +468,9 @@ fn une_scene_suivie_montre_les_fluides_d_une_scene_neuve() {
     let avant = suivie.rendre(&Cible::nouvelle(&app, COTE, COTE), &cam).0;
     g.retirer((0, 0, 0));
     let visees = [(0, 0, 0)];
-    arene.remplacer(&visees, &[], &|_, _, _| (0, [1.0; 3]));
+    arene.remplacer(&visees, &[], &|_, _, _| {
+        (0, [1.0; 3], tf_render::Sens::DROIT)
+    });
     fluides.remplacer(arene.emplacements(), &visees, &[], &apparence);
     suivie.synchroniser(&mut arene, &mut modeles, &mut fluides);
     let (x, _) = suivie.rendre(&Cible::nouvelle(&app, COTE, COTE), &cam);
@@ -492,7 +496,9 @@ fn une_scene_suivie_montre_les_fluides_d_une_scene_neuve() {
     // par l'ancienne, et la neuve doit quand même tout recevoir.
     g.poser(0, 0, section(0, nappe(16)));
     let neufs = g.mailler(&t);
-    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| {
+        (0, [1.0; 3], tf_render::Sens::DROIT)
+    });
     fluides.remplacer(arene.emplacements(), &visees, &neufs.lots, &apparence);
     suivie.synchroniser(&mut arene, &mut modeles, &mut fluides);
     let mut refaite = Scene::vide(&app, &a, FORMAT);

@@ -86,7 +86,7 @@ fn rendre_un_cube(app: &Appareil, cote: u32) -> (Vec<u8>, u32, u32) {
         }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     assert_eq!(arene.len(), 6, "un cube isolé montre ses six faces");
 
     let cible = Cible::nouvelle(app, cote, cote);
@@ -217,7 +217,7 @@ fn l_arene_place_chaque_section_a_son_origine() {
         section(2, |x, y, z| if x + y + z == 0 { CUBE } else { AIR }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
 
     let (min, max) = arene.bornes().unwrap();
     assert_eq!(min, [0.0, 0.0, 0.0]);
@@ -252,7 +252,7 @@ fn les_tranches_couvrent_toute_l_arene_sans_trou_ni_recouvrement() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
 
     let mut attendu = 0u32;
     for tr in &arene.tranches() {
@@ -275,7 +275,7 @@ fn la_camera_cadre_le_contenu_sans_le_couper() {
         }
     }
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let cible = Cible::nouvelle(&app, 200, 200);
     let scene = Scene::nouvelle(&app, &arene, &atlas_blanc(&app));
     let (min, max) = arene.bornes().unwrap();
@@ -356,7 +356,7 @@ fn rendre_un_cube_teinte(app: &Appareil, teinte: [f32; 3]) -> Vec<u8> {
         }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, teinte));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, teinte, tf_render::Sens::DROIT));
     let cible = Cible::nouvelle(app, 96, 96);
     let scene = Scene::nouvelle(app, &arene, &atlas_gris_147(app));
     let (min, max) = arene.bornes().unwrap();
@@ -462,7 +462,7 @@ fn les_structures_du_shader_sont_alignees_sur_seize() {
 }
 
 fn blanc(n: usize) -> Vec<HabillageFaces> {
-    vec![std::array::from_fn(|_| (0u32, [1.0f32; 3], [0.0, 0.0, 16.0, 16.0])); n]
+    vec![std::array::from_fn(|_| (0u32, [1.0f32; 3], [0.0, 0.0, 16.0, 16.0], false)); n]
 }
 
 /// Une scène d'UN bloc à la position (8, 8, 8), et la caméra figée sur lui.
@@ -488,7 +488,7 @@ fn rendre_un_bloc(app: &Appareil, id: StateId) -> (Vec<u8>, u32, tf_render::Comp
         ),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let modeles = AreneModeles::sans_biome(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -732,7 +732,7 @@ fn les_deux_arenes_designent_la_meme_section() {
         section(3, |x, y, z| if x + y + z == 0 { 2 } else { AIR }),
     );
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let modeles = AreneModeles::sans_biome(&chantier, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -816,7 +816,7 @@ fn deux_biomes_donnent_deux_teintes_dans_l_arene() {
             DESERT => [0.9, 0.8, 0.1],
             _ => [1.0, 0.0, 1.0],
         };
-        (0, c)
+        (0, c, tf_render::Sens::DROIT)
     });
     let vus = vus.into_inner();
     assert_eq!(
@@ -897,7 +897,7 @@ fn un_bloc_modele_prend_la_couleur_de_son_biome() {
         };
         let c = t.cuboides(id);
         let hab: Vec<HabillageFaces> = (0..c.len())
-            .map(|_| std::array::from_fn(|_| (0u32, teinte, [0.0, 0.0, 16.0, 16.0])))
+            .map(|_| std::array::from_fn(|_| (0u32, teinte, [0.0, 0.0, 16.0, 16.0], false)))
             .collect();
         faces_de(c, &hab)
     });
@@ -966,7 +966,7 @@ fn un_etat_non_teinte_ne_paie_pas_les_biomes() {
         assert_eq!(biome, 0, "un état non teinté doit recevoir le biome ZÉRO");
         let c = t.cuboides(id);
         let hab: Vec<HabillageFaces> = (0..c.len())
-            .map(|_| std::array::from_fn(|_| (0u32, [1.0; 3], [0.0, 0.0, 16.0, 16.0])))
+            .map(|_| std::array::from_fn(|_| (0u32, [1.0; 3], [0.0, 0.0, 16.0, 16.0], false)))
             .collect();
         faces_de(c, &hab)
     });
@@ -1006,7 +1006,7 @@ fn rendre_lignes_et_decor(
     let mut g = Grille::new();
     g.poser(0, 0, section(0, |_, _, _| if decor { CUBE } else { AIR }));
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let atlas = atlas_blanc(app);
     let mut scene = Scene::nouvelle(app, &arene, &atlas);
     scene.poser_lignes(lignes);
@@ -1163,7 +1163,7 @@ fn un_quadrillage_vide_ne_coute_pas_un_appel() {
     let mut g = Grille::new();
     g.poser(0, 0, section(0, |_, _, _| CUBE));
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let atlas = atlas_blanc(&app);
     let mut scene = Scene::nouvelle(&app, &arene, &atlas);
     let cible = Cible::nouvelle(&app, 64, 64);
@@ -1265,7 +1265,7 @@ fn rendre_lignes_vues_de(
     let mut g = Grille::new();
     g.poser(0, 0, section(0, |_, _, _| AIR));
     let chantier = g.mailler(&t);
-    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let atlas = atlas_blanc(app);
     let mut scene = Scene::nouvelle(app, &arene, &atlas);
     scene.poser_lignes(lignes);
@@ -1378,7 +1378,7 @@ fn une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve() {
         }
     }
     let chantier = g.mailler(&t);
-    let mut arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&chantier, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::sans_biome(&chantier, &modele);
 
     // Deux colonnes partent (dont une au milieu), une change, une arrive.
@@ -1400,7 +1400,9 @@ fn une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve() {
     visees.sort_unstable();
     visees.dedup();
     let neufs = g.mailler_ces(&t, &visees);
-    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| {
+        (0, [1.0; 3], tf_render::Sens::DROIT)
+    });
     modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
         modele(s)
     });
@@ -1410,7 +1412,7 @@ fn une_arene_a_trous_dessine_la_meme_image_qu_une_arene_neuve() {
     );
 
     let neuve_c = g.mailler(&t);
-    let neuve = Arene::depuis(&neuve_c, &|_, _, _| (0, [1.0; 3]));
+    let neuve = Arene::depuis(&neuve_c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let neuves_m = AreneModeles::sans_biome(&neuve_c, &modele);
 
     // **Deux points de vue opposés.** `cadrer` regarde depuis +X +Y +Z ; un
@@ -1491,7 +1493,9 @@ fn refaire_colonnes(
     visees.sort_unstable();
     visees.dedup();
     let neufs = g.mailler_ces(t, &visees);
-    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| {
+        (0, [1.0; 3], tf_render::Sens::DROIT)
+    });
     modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -1583,7 +1587,7 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     let mut g = Grille::new();
     g.poser(0, 0, colonne(0, 0, 0, AIR));
     let c = g.mailler(&t);
-    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::sans_biome(&c, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -1711,7 +1715,7 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     let mut petite = Grille::new();
     petite.poser(1, 0, colonne(1, 0, 5, 3));
     let c = petite.mailler(&t);
-    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::sans_biome(&c, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -1738,7 +1742,7 @@ fn une_scene_ne_montre_jamais_ce_qu_elle_n_a_pas_recu() {
         g.poser(cx, 0, colonne(cx, 0, 3, 3));
     }
     let c = g.mailler(&t);
-    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::sans_biome(&c, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -1766,7 +1770,7 @@ fn synchroniser_n_envoie_que_ce_qui_a_change() {
         }
     }
     let c = g.mailler(&t);
-    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3]));
+    let mut arene = Arene::depuis(&c, &|_, _, _| (0, [1.0; 3], tf_render::Sens::DROIT));
     let mut modeles = AreneModeles::sans_biome(&c, &|s| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
@@ -1809,7 +1813,9 @@ fn synchroniser_n_envoie_que_ce_qui_a_change() {
     let visees = Grille::sections_touchees([56, 8, 56], [56, 8, 56]);
     assert_eq!(visees, vec![(3, 3, 0)], "la prémisse : une seule section");
     let neufs = g.mailler_ces(&t, &visees);
-    arene.remplacer(&visees, &neufs.lots, &|_, _, _| (0, [1.0; 3]));
+    arene.remplacer(&visees, &neufs.lots, &|_, _, _| {
+        (0, [1.0; 3], tf_render::Sens::DROIT)
+    });
     modeles.remplacer(arene.emplacements(), &visees, &neufs.lots, &|s, _| {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))

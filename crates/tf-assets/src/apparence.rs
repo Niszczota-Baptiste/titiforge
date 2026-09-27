@@ -33,15 +33,15 @@ pub struct Apparence {
     pub couche: u32,
     /// Ce par quoi multiplier le texel. `[1, 1, 1]` pour une face non teintée.
     pub teinte: [f32; 3],
-    /// Les uv de la face, en seizièmes — DÉDUITES du cuboïde quand le modèle
-    /// n'en déclare pas, ce qui est le cas de 26 % des faces du pack.
-    ///
-    /// Elles ne suivent pas encore la rotation de la variante (`uvlock`) : une
-    /// dalle tournée montrera la bonne portion de texture, pas forcément dans
-    /// le bon sens. Une texture de travers se voit et se corrige ; une face
-    /// absente ne se voit pas du tout, et c'est l'ordre dans lequel on les
-    /// traite.
+    /// Les uv, en seizièmes, du coin `(0, 0)` du plan de la face puis de son
+    /// coin `(1, 1)` — ses deux axes CROISSANTS (`crate::uv::Posee`). Elles
+    /// sont DÉDUITES du cuboïde quand le modèle n'en déclare pas, ce qui est
+    /// le cas de 26 % des faces du pack, et elles portent le SENS de la
+    /// texture une fois la variante tournée : fibres d'une bûche couchée le
+    /// long de son axe, planches d'un escalier `uvlock` dans le sens du monde.
     pub uv: [f32; 4],
+    /// `u` court le long du SECOND axe du plan, `v` le long du premier.
+    pub echange: bool,
     /// Par quoi cette face est teintée — rien, l'herbe, le feuillage, l'eau.
     ///
     /// Le GENRE et pas la couleur : la couleur dépend du BIOME, qui varie
@@ -70,6 +70,7 @@ impl Default for Apparence {
             couche: 0,
             teinte: [1.0; 3],
             uv: [0.0, 0.0, 16.0, 16.0],
+            echange: false,
             genre: GenreTeinte::Aucune,
         }
     }
@@ -213,11 +214,16 @@ pub struct Habillage {
 pub fn habiller(
     e: &Element,
     axes: crate::rotation::Axes,
+    uvlock: bool,
     atlas: &Atlas,
     couleur: Option<[u8; 3]>,
     genre: GenreTeinte,
 ) -> [Apparence; 6] {
     let mut faces = [Apparence::default(); 6];
+    // Les bornes du cuboïde DESSINÉ, remises en ordre comme lui : un modèle
+    // n'est pas obligé d'écrire `from` sous `to`.
+    let min: [f32; 3] = std::array::from_fn(|k| e.from[k].min(e.to[k]));
+    let max: [f32; 3] = std::array::from_fn(|k| e.from[k].max(e.to[k]));
     for f in FACES {
         let Some(fd) = e.faces.get(&f) else {
             continue;
@@ -225,7 +231,16 @@ pub fn habiller(
         let Some(couche) = atlas.couche(&fd.texture) else {
             continue;
         };
-        faces[crate::rotation::tourner_face(f, axes).indice()] = Apparence {
+        let posee = crate::uv::poser(
+            f,
+            min,
+            max,
+            crate::modele::uv_de(e, f, fd),
+            fd.rotation,
+            axes,
+            uvlock,
+        );
+        faces[posee.face.indice()] = Apparence {
             couche,
             teinte: match (fd.tintindex, couleur) {
                 (Some(_), Some(c)) => teinte_finale(c),
@@ -239,7 +254,8 @@ pub fn habiller(
                 Some(_) => genre,
                 None => GenreTeinte::Aucune,
             },
-            uv: crate::modele::uv_de(e, f, fd),
+            uv: posee.uv,
+            echange: posee.echange,
         };
     }
     faces

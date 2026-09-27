@@ -661,7 +661,8 @@ au processeur, ≈ 33 ns par segment et par image.
 | Les biomes décodés, la teinte par case | ✅ (phase 2) |
 | **Les fluides** — eau, lave, blocs inondés | ✅ une troisième passe sur les règles du jeu (`LiquidBlockRenderer`), croisée à une référence INDÉPENDANTE sur 252 616 faces ; la lave opaque, l'eau translucide après le reste, deux appels de dessin de plus seulement quand il y en a ; le remaillage lit en DIAGONALE — à la case, pas à la palette, sinon 60 sections au lieu de 11 — et une section noyée ne coûte rien. Restent : le tri de l'eau d'arrière en avant, l'animation, le voile contre le verre (absent du codex), l'eau d'un bloc inondé contre sa propre forme (`docs/ETAT.md`, § 7) |
 | L'occlusion ambiante | à faire — elle lira les DIAGONALES des blocs : le test qui croise la croix avec un remaillage complet rougira ce jour-là, et le remède est `sections_autour`, pas un test qu'on fait taire |
-| `uvlock` | à faire |
+| Le SENS des textures, `uvlock` | ✅ la règle du jeu transcrite (`tf-assets/src/uv.rs`) : ordre des sommets, rotation de face, texture qui suit la variante ou reste alignée sur le monde. Trouvé en chemin : un QUART de chaque face n'était jamais dessiné, depuis la première image |
+| Les éléments penchés (croix de plantes à 45°, décors inclinés) | à faire — 299 blocs du pack, dessinés droits aujourd'hui |
 | Le LOD par octree de région | à faire |
 | L'occlusion HZB, le rendu indirect | à faire |
 

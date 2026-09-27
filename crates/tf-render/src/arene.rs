@@ -116,6 +116,56 @@ pub fn depaqueter(geo: u32) -> ([u32; 3], [u32; 2], u32) {
     )
 }
 
+/// **Le SENS d'une texture sur une face gloutonne** : trois bits.
+///
+/// Une face gloutonne répète la tuile ENTIÈRE à chaque bloc, le long des
+/// deux axes croissants de son plan. Ce qui reste à dire, c'est dans quel
+/// sens : `u` le long du premier axe ou du second, et chacun à l'endroit ou
+/// à l'envers. C'est tout ce qu'une rotation de variante peut faire d'une
+/// tuile entière — une bûche couchée tourne ses fibres, un four regarde à
+/// l'est sans se retourner. Le sens dépend de l'ÉTAT et de la face, comme
+/// la tuile : la fusion gloutonne, qui ne fusionne qu'un même état, ne
+/// mélange donc jamais deux sens dans un quad.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Sens {
+    /// `u` court le long du SECOND axe du plan, `v` le long du premier.
+    pub echange: bool,
+    /// `u` décroît le long de son axe.
+    pub miroir_u: bool,
+    /// `v` décroît le long de son axe.
+    pub miroir_v: bool,
+}
+
+impl Sens {
+    /// `u` le long du premier axe, `v` le long du second, tous deux croissants.
+    pub const DROIT: Sens = Sens {
+        echange: false,
+        miroir_u: false,
+        miroir_v: false,
+    };
+
+    /// Le sens que portent les uv d'une face — celles du coin `(0, 0)` du plan
+    /// puis du coin `(1, 1)`, comme `tf_assets::uv::Posee` les rend. Seul le
+    /// SENS du rectangle compte ici : la face gloutonne répète la tuile entière.
+    pub fn depuis_uv(uv: [f32; 4], echange: bool) -> Sens {
+        Sens {
+            echange,
+            miroir_u: uv[2] < uv[0],
+            miroir_v: uv[3] < uv[1],
+        }
+    }
+
+    /// Les trois bits, dans l'ordre que le shader lit.
+    pub fn bits(self) -> u32 {
+        u32::from(self.echange) | u32::from(self.miroir_u) << 1 | u32::from(self.miroir_v) << 2
+    }
+}
+
+/// Ce que l'arène demande pour une face gloutonne — d'un ÉTAT, d'une face et
+/// du BIOME de la case : sa tuile, sa teinte et son sens.
+pub type ApparenceQuad<'a> = dyn Fn(tf_anvil::StateId, tf_mesh::forme::Face, tf_anvil::StateId) -> (u32, [f32; 3], Sens)
+    + 'a;
+
 /// Un facteur `0..1` par canal, empaqueté en RGBA8.
 ///
 /// Huit bits suffisent : c'est la précision de la texture qu'il multiplie.
@@ -583,14 +633,7 @@ impl Arene {
     /// quad sur une frontière de biome que pour les états teintés. Un
     /// appelant qui n'a pas de biomes passe donc la même fonction qu'avant et
     /// l'ignore.
-    pub fn depuis(
-        chantier: &Chantier,
-        apparence: &dyn Fn(
-            tf_anvil::StateId,
-            tf_mesh::forme::Face,
-            tf_anvil::StateId,
-        ) -> (u32, [f32; 3]),
-    ) -> Arene {
+    pub fn depuis(chantier: &Chantier, apparence: &ApparenceQuad) -> Arene {
         let mut a = Arene {
             emplacements: Emplacements::depuis(chantier),
             ..Arene::default()
@@ -615,16 +658,7 @@ impl Arene {
     /// **C'est aussi elle qui attribue et rend les emplacements**, pour les
     /// trois passes : celles des modèles et des fluides se remplacent ENSUITE
     /// et lisent ceux-ci.
-    pub fn remplacer(
-        &mut self,
-        visees: &[Adresse],
-        neufs: &[Lot],
-        apparence: &dyn Fn(
-            tf_anvil::StateId,
-            tf_mesh::forme::Face,
-            tf_anvil::StateId,
-        ) -> (u32, [f32; 3]),
-    ) {
+    pub fn remplacer(&mut self, visees: &[Adresse], neufs: &[Lot], apparence: &ApparenceQuad) {
         let reviennent: std::collections::HashSet<Adresse> =
             neufs.iter().map(|l| l.adresse).collect();
         for a in visees {
@@ -640,22 +674,15 @@ impl Arene {
     }
 
     /// Pose (ou repose) le lot à sa place.
-    fn poser(
-        &mut self,
-        lot: &Lot,
-        apparence: &dyn Fn(
-            tf_anvil::StateId,
-            tf_mesh::forme::Face,
-            tf_anvil::StateId,
-        ) -> (u32, [f32; 3]),
-    ) {
+    fn poser(&mut self, lot: &Lot, apparence: &ApparenceQuad) {
         let slot = self.emplacements.prendre(lot.adresse);
         let quads = &lot.quads.quads;
         self.places.poser(lot.adresse, quads.len() as u32, |k| {
             let q = &quads[k];
-            let (couche, teinte) = apparence(q.id, q.face, q.biome);
+            let (couche, teinte, sens) = apparence(q.id, q.face, q.biome);
             InstanceQuad {
-                geo: empaqueter(q.min, q.taille, q.face as u32),
+                // Le sens dans les trois bits libres au-dessus de la face.
+                geo: empaqueter(q.min, q.taille, q.face as u32) | sens.bits() << 26,
                 couche,
                 teinte: en_rgba8(teinte),
                 // Le quad est LOCAL à sa section : sans l'origine, tout le

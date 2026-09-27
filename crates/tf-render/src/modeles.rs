@@ -57,9 +57,11 @@ pub struct FaceModele {
     /// composant est du bourrage.
     pub min: [f32; 4],
     pub max: [f32; 4],
-    /// Les uv, en seizièmes.
+    /// Les uv, en seizièmes, du coin `(0, 0)` du plan de la face puis de son
+    /// coin `(1, 1)` (voir [`HabillageFaces`]).
     pub uv: [f32; 4],
-    /// 0 = −X, 1 = +X, 2 = −Y, 3 = +Y, 4 = −Z, 5 = +Z.
+    /// La direction dans les trois bits du bas — 0 = −X, 1 = +X, 2 = −Y,
+    /// 3 = +Y, 4 = −Z, 5 = +Z — et l'échange des axes des uv dans le bit 3.
     pub face: u32,
     pub couche: u32,
     pub teinte: u32,
@@ -760,12 +762,18 @@ impl AreneModeles {
     }
 }
 
-/// L'habillage des six faces d'un cuboïde : couche d'atlas, teinte, uv.
+/// L'habillage des six faces d'un cuboïde : couche d'atlas, teinte, uv, et
+/// l'échange des axes.
+///
+/// Les uv sont celles du coin `(0, 0)` du plan de la face puis de son coin
+/// `(1, 1)` — ses deux axes CROISSANTS — et l'échange dit que `u` court le
+/// long du second : c'est ce que `tf_assets::uv::Posee` rend, le SENS de la
+/// texture compris, une fois la variante tournée.
 ///
 /// Un tuple et non la structure de `tf-assets` : le rendu n'a pas à dépendre
 /// d'un lecteur de packs pour savoir ce qu'est une couche de texture. C'est la
 /// même raison qui garde `Formes` en trait plutôt qu'en table concrète.
-pub type HabillageFaces = [(u32, [f32; 3], [f32; 4]); 6];
+pub type HabillageFaces = [(u32, [f32; 3], [f32; 4], bool); 6];
 
 /// L'origine de chaque lot du chantier, dans l'ORDRE DES LOTS.
 ///
@@ -794,12 +802,14 @@ pub fn faces_de(cuboides: &[Cuboide], habillage: &[HabillageFaces]) -> Vec<FaceM
             if c.faces & f.bit() == 0 {
                 continue;
             }
-            let (couche, teinte, uv) = hab[f.indice()];
+            let (couche, teinte, uv, echange) = hab[f.indice()];
             out.push(FaceModele {
                 min: [c.min[0], c.min[1], c.min[2], 0.0],
                 max: [c.max[0], c.max[1], c.max[2], 0.0],
                 uv,
-                face: f as u32,
+                // L'échange des axes dans le bit 3 : la direction tient dans
+                // les trois premiers.
+                face: f as u32 | u32::from(echange) << 3,
                 couche,
                 teinte: crate::arene::en_rgba8(teinte),
                 // `cull` ne porte que les faces qui DÉCLARENT `cullface`, et

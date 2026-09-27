@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1140 tests aujourd’hui)
+cargo test            # tous les crates (1150 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -388,6 +388,8 @@ crates/
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
                couleurs de biome DÉRIVÉES du jeu ✅ · FLUIDES ✅ (lus dans
                l'ÉTAT : `level`, `waterlogged`, le varech — le pack n'en dit rien)
+               · SENS des textures ✅ (`uv.rs` : la règle du jeu, `uvlock`
+               compris) · éléments penchés à venir
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
                (gloutonne ET modèles) · FLUIDES ✅ (la passe du jeu, croisée à
                une référence indépendante ; le remaillage lit en DIAGONALE)
@@ -484,6 +486,7 @@ couvriront le même terrain.
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
 | Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas. Côté coque, son dossier dans `dossier_par_defaut` (`tf-app/src/etat.rs`, le compilateur l'exige) : là où l'outil qui le lit le CHERCHE. Son extension, l'export et la liste d'import la tirent de `Format::extension` |
+| Une règle de TEXTURE (uv par défaut, sens d'une face, `uvlock`) | `tf-assets/src/uv.rs`, dans l'ordre du jeu — jamais une correction dans un shader. Ses propriétés dans `tf-assets/tests/uv.rs` (ce que la règle doit VOULOIR DIRE : projection, texture qui suit la géométrie, alignement sur le monde), et la jonction au pixel dans `tf-render/tests/orientation.rs`. Le rendu ne reçoit que les uv de deux coins et l'échange des axes |
 | Un bloc plein d'eau SANS propriété qui le dise | `TOUJOURS_INONDES` (`tf-assets/src/fluides.rs`). Un bloc qui porte `waterlogged` — `minefield:*` compris — n'a rien à y faire : l'état le dit |
 | Une chose que la surface d'un fluide LIT (une case de plus, un voisin de plus) | d'abord la référence indépendante (`tf-mesh/tests/fluides.rs`, qui transcrit le jeu), puis la passe (`fluides.rs`) : c'est leur croisement qui tranche. Si elle lit à plus d'UN bloc, `voisines_fluides` (`chantier.rs`) doit s'élargir d'autant — les deux tests de remaillage avec de l'eau rougiront sinon |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
@@ -2344,3 +2347,33 @@ propres à ce dépôt.
   relatif se lit aussi depuis la racine du dépôt, comme la documentation
   l'écrit. Un test qui ne tourne pas ne dit rien ; un test qui dit qu'il ne
   PEUT pas tourner alors qu'on le lui a demandé ment.
+- **Un quart de chaque face n'a jamais été dessiné — depuis la première
+  image.** Les deux shaders lisaient le numéro de sommet comme un coin, sous
+  un commentaire qui parlait d'indices « 0, 1, 2, 2, 1, 3 » qu'aucun tampon ne
+  fournissait : le second triangle recouvrait le premier, et le triangle
+  entre les coins (0, 1), (1, 1) et le centre restait vide. Sur une face unie
+  vue de loin, derrière le trou il y a une autre face de même couleur ; sur
+  la première vraie capture, c'était un motif régulier de dents de scie
+  sombres sur un socle de béton — que j'ai pris pour un DÉCOR. Aucun test ne
+  mesurait la couverture d'une face : ils comptaient des pixels, comparaient
+  deux rendus qui avaient le même trou, ou regardaient la couleur au milieu.
+  Trouvé par un test écrit pour autre chose — le sens des textures —, parce
+  qu'il posait une tuile à QUATRE quadrants et vérifiait seize points par
+  face. **Un motif régulier sur une capture est un indice, pas un décor.**
+- **Une texture unie ne dit rien de son SENS.** Le rendu posait `u` le long
+  du premier axe du plan et `v` le long du second, sur toutes les faces :
+  73 points faux sur 96 sur un cube non tourné — le nord d'un demi-tour, le
+  sud et le dessous retournés, l'est et l'ouest couchés. Tous les tests
+  employaient des tuiles unies, et la pierre, les planches, le béton sont
+  presque symétriques. La règle du jeu attache chaque coin d'uv à un SOMMET
+  (`FaceInfo`, `BlockFaceUV`), et elle se transcrit — elle ne se devine pas
+  face par face dans un shader.
+- **`uvlock`, dans 72 % des variantes tournées du pack, n'était lu nulle
+  part.** Parsé depuis la phase 1, jamais passé au rendu : chaque escalier
+  tourné montrait ses planches de travers. Transcrit de `recomputeUVs`, et
+  vérifié par ce qu'il VEUT DIRE — une face aux uv par défaut reste alignée
+  sur le monde — pas en relisant la transcription. Le jeu y retourne l'angle
+  d'une face tournée même sans rotation de variante ; c'est gardé, et nommé :
+  une propriété « l'identité ne change rien » était MON hypothèse, pas la
+  règle du jeu, et le test qui la posait avait tort.
+

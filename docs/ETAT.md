@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1140**, zéro échec |
+| Tests | **1150**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1140 tests, répartis par ce qu'ils PROUVENT :
+1150 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -73,11 +73,13 @@ cargo test --workspace
 | `tf-ops` forme | 16 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-ops` creuser | 12 | `//hollow` : le critère est TOPOLOGIQUE, et un coffre vidé ne revient pas en fantôme |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
-| `tf-assets` pack/textures/rotation/jeu/codex_reel | 69 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris ; sur le codex RÉEL, que l'eau et la lave n'ont aucun cube qui double leur surface et que leurs textures se trouvent sans repli — et qu'un `TF_PACK` relatif se lit depuis la racine du dépôt, au lieu de faire sauter le test en disant « non défini » |
+| `tf-assets` pack/textures/rotation/jeu/codex_reel | 70 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris ; sur le codex RÉEL, que l'eau et la lave n'ont aucun cube qui double leur surface et que leurs textures se trouvent sans repli — et qu'un `TF_PACK` relatif se lit depuis la racine du dépôt, au lieu de faire sauter le test en disant « non défini » ; et, compté sur le vrai pack, ce que le rendu ne pose pas encore — aucune portion de tuile sur un cube plein, 299 blocs à élément penché |
+| `tf-assets` uv | 7 | le SENS d'une texture, éprouvé par ce qu'il doit vouloir dire : les uv par défaut sont la projection de l'élément sur sa face ; sans `uvlock` la texture suit la géométrie, sommet par sommet, sur 400 éléments tirés au hasard dans toutes les rotations ; avec, elle reste alignée sur le monde ; une bûche couchée garde ses fibres le long de son axe ; et le catalogue donne à chaque face la rotation ET l'`uvlock` de SA variante |
 | `tf-assets` fluides | 4 | quel état porte un fluide — `level`, `waterlogged=true` sur n'importe quel bloc, `minefield:*` compris, et les cinq blocs pleins d'eau EN DUR — quand le pack n'en dit rien ; que l'eau reste de l'AIR pour les passes de blocs, qu'un escalier inondé est un modèle ET de l'eau, qu'une croix de varech n'arrête pas un fluide ; et que chaque face trouve sa couche, le voile se repliant sur le courant |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
 | `tf-mesh` mailler/chantier | 50 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre ; et avec de l'EAU, que remailler la croix ET les voisines qui portent une case de fluide À UN BLOC de l'édition rend le maillage complet — la croix seule, témoin, se trompe 14 fois sur 150 —, que ces voisines se jugent à la CASE et pas à la palette, et qu'une section NOYÉE rend le lot vide des trois passes sans les faire (compté : aucune lecture d'opacité), y compris quand une voisine éditée loin de leur frontière change sa palette |
 | `tf-mesh` fluides | 14 | la passe de FLUIDES contre une référence INDÉPENDANTE qui transcrit le code du jeu case par case, croisées sur soixante mondes (252 616 faces) ; et à la main : 227/255 au milieu d'un lac, 174 pour une source seule, un côté de colonne pleine fusionné, l'angle du courant, le voile contre le verre, un bloc inondé qui fusionne avec l'eau, la lave sans biome, la frontière de biome qui coupe l'eau et pas la lave, un dessus caché sous la pierre seulement à 255 |
+| `tf-render` orientation | 2 | **au pixel**, par les deux passes : une tuile à QUATRE quadrants, et chaque point de chaque face comparé à la règle du jeu — dix variantes, avec et sans `uvlock` ; 1 920 points. C'est ce test qui a trouvé le quart de face jamais dessiné |
 | `tf-render` rendu | 31 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien ; et qu'une arête qui passe DERRIÈRE la caméra reste une ligne, ni aplat ni rien, même derrière une arête que la découpe retire — et qu'un calque tout entier hors du champ ne coûte pas d'appel |
 | `tf-render` fluides | 8 | **au pixel** : vingt octets par face, des champs empaquetés qui ne se marchent pas dessus ; qu'un côté monte du côté de sa PREMIÈRE hauteur, sur ±Z comme sur ±X où ses rangées sont le premier axe du plan ; qu'un dessus monte chacun de ses quatre coins ; que l'eau laisse voir ce qu'elle recouvre et la lave non ; que l'eau n'écrit pas la profondeur ; et qu'une scène SUIVIE montre les fluides d'une scène neuve, à l'arrivée, au départ d'une section, et pour une scène neuve qui rattrape une arène déjà synchronisée |
 | `tf-render` champ | 7 | la découpe des lignes au champ de la caméra : sur 2 000 segments tirés d'une graine, tout ce qui reste est DANS le champ et tout ce qui était visible est RESTÉ ; un segment qui traverse l'œil commence au plan proche, un segment qui file au loin s'arrête au plan lointain, un segment qui sort par le côté s'arrête au bord |
@@ -1071,6 +1073,54 @@ La couleur de l'herbe rendue est **(82, 109, 48)** contre **(84, 109, 51)** dans
 le jeu. L'écart est celui entre multiplier en sRGB (ce que fait Minecraft) et
 multiplier en linéaire (ce que fait un pipeline correct).
 
+### Un quart de chaque face manquait, et les textures étaient de travers
+
+```bash
+cargo test -p tf-render --test orientation
+cargo test -p tf-assets --test uv
+TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel -- --nocapture
+```
+
+Deux défauts du rendu depuis sa première image, trouvés ensemble par un test
+qui posait une tuile à QUATRE quadrants pour vérifier le sens des textures :
+
+1. **Un quart de chaque face n'était jamais dessiné.** Les deux shaders
+   lisaient le numéro de sommet comme un coin (`i & 1`, `(i >> 1) & 1`) sous
+   un commentaire qui parlait d'indices « 0, 1, 2, 2, 1, 3 » — qu'aucun
+   tampon ne fournissait. Le second triangle recouvrait le premier, et le
+   triangle entre les coins (0, 1), (1, 1) et le centre de chaque face
+   restait vide. Derrière, on voyait l'intérieur du bloc ou la face d'en
+   face : sur le socle de béton de Mosslorn, un motif régulier de dents de
+   scie sombres, pris pour un décor Minefield. Les faces sont pleines
+   maintenant, pour le même nombre de fragments — l'ancien découpage
+   dessinait deux fois un quart pour en oublier un autre.
+2. **Le sens des textures était faux sur cinq faces sur six.** Le rendu
+   posait `u` le long du premier axe du plan et `v` le long du second,
+   partout : le nord sortait tourné d'un demi-tour, le sud et le dessous
+   retournés, l'est et l'ouest couchés — **73 points faux sur 96** sur un
+   cube NON tourné. Invisible sur la pierre et les planches ; la frange
+   d'herbe d'un côté de `grass_block` passait en bas du bloc.
+
+La règle du jeu est transcrite dans `tf-assets/src/uv.rs` : l'ordre des
+sommets de chaque face (`FaceInfo`), le coin d'uv de chacun décalé par la
+rotation de la face (`BlockFaceUV`), la variante qui tourne les sommets — la
+texture SUIT la géométrie, une bûche couchée garde ses fibres le long de son
+axe — et `uvlock`, qui recalcule les uv pour qu'elle reste alignée sur le
+monde (`FaceBakery::recomputeUVs`, `BlockMath::getUVLockTransform`). Mesuré
+sur le codex : `uvlock` porte **23 401 des 32 588 variantes tournées** (72 %),
+sur 622 blocs dont 474 `minefield:*` — tous les escaliers, barrières, murets
+et boutons. Le rendu reçoit trois choses par face : les uv de deux coins et
+l'échange des axes — un bit de plus dans le mot `face` d'une face de modèle,
+trois bits libres de `geo` pour une face gloutonne, qui répète la tuile
+entière (aucun cube plein du pack n'en déclare une portion).
+
+Vérifié trois fois, et aucune ne relit la transcription : les uv par défaut
+sont la PROJECTION de l'élément sur sa face ; sans `uvlock`, le sens rendu
+redonne en chaque sommet tourné ce que le jeu y attache avant rotation (400
+éléments tirés au hasard, toutes rotations) ; avec, une face aux uv par
+défaut montre la projection de l'élément TOURNÉ. Au pixel, par les deux
+passes, dix variantes : 1 920 points. **23 mutations, 23 tuées.**
+
 ### Les lignes du calque se découpent AVANT le GPU
 
 ```bash
@@ -1577,6 +1627,8 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 
 | Manque | Ce que ça coûte aujourd'hui |
 |---|---|
+| **Les éléments PENCHÉS sont dessinés droits** | 299 blocs du pack déclarent un élément tourné d'un angle qui n'est pas droit — les croix de plantes à 45°, des décors inclinés : la passe de modèles ne connaît que des boîtes alignées sur les axes |
+| **Une face tournée sous `uvlock` compte son angle à l'envers** | c'est la formule du jeu, transcrite telle quelle : sans rotation de variante, une face tournée de 90° y passe à 270°. Juste pour toute face non tournée — tous les escaliers et barrières du pack — et c'est ce signe même qui les garde alignés sur le monde |
 | **L'eau translucide n'est pas triée** | ses faces se mélangent dans l'ordre de l'arène, pas du plus loin au plus proche : deux surfaces d'eau l'une derrière l'autre peuvent se composer dans le mauvais ordre. Invisible à travers UNE épaisseur d'eau, le cas courant ; un tri par section, à chaque image, est la marche suivante |
 | **Les textures animées sont figées sur leur première image** | l'eau et la lave du jeu ondulent ; ici elles sont immobiles. Vrai de tous les blocs animés, pas seulement des fluides |
 | **Le voile d'eau (`water_overlay`) manque au codex** | aucun modèle ne le cite, donc le site ne l'a pas extrait : contre le verre et les feuilles, l'eau prend la texture de courant. Présent dans tout `.jar`, donc juste avec une installation |

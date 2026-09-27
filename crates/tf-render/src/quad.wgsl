@@ -72,11 +72,32 @@ fn coin(face: u32, taille: vec2<f32>, u: f32, v: f32) -> vec3<f32> {
     }
 }
 
+// **Le coin d'un sommet** : `u` dans le bit 0, `v` dans le bit 1. Six
+// sommets, AUCUN index : l'appel de dessin en demande six par instance, et
+// les coins 0, 1, 2 puis 2, 1, 3 font deux triangles qui couvrent le quad.
+//
+// Lire le numéro de sommet comme un coin — `i & 1`, `(i >> 1) & 1` — donnait
+// 0, 1, 2 puis 3, 0, 1 : un second triangle qui recouvre le premier, et un
+// QUART de chaque face jamais dessiné, le triangle entre ses coins (0, 1),
+// (1, 1) et son centre. Depuis la première image du dépôt : le commentaire
+// parlait d'indices qu'aucun tampon ne fournissait. Invisible sur une face
+// unie vue de loin — derrière le trou, une autre face de même couleur — et
+// trouvé en posant une texture à quadrants pour vérifier son sens.
+fn coin_du_sommet(i: u32) -> u32 {
+    switch i {
+        case 3u: { return 2u; }
+        case 4u: { return 1u; }
+        case 5u: { return 3u; }
+        default: { return i; }
+    }
+}
+
 @vertex
 fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
-    // Deux triangles, quatre coins : 0,1,2, 2,1,3 côté indices.
-    let u = f32(i & 1u);
-    let v = f32((i >> 1u) & 1u);
+    // Deux triangles, quatre coins : 0, 1, 2 puis 2, 1, 3 (`coin_du_sommet`).
+    let c = coin_du_sommet(i);
+    let u = f32(c & 1u);
+    let v = f32((c >> 1u) & 1u);
 
     let face = (inst.geo >> 23u) & 7u;
     // **Un TROU de l'arène** (`InstanceQuad::VIDE`) : aucune face n'a un rang
@@ -113,7 +134,16 @@ fn vs(inst: Instance, @builtin(vertex_index) i: u32) -> Sortie {
     // La texture se RÉPÈTE par bloc : un quad de 4 blocs montre quatre fois
     // sa texture. C'est pour ça que l'atlas est un TABLEAU — sur une planche,
     // la répétition mordrait sur la tuile voisine.
-    out.uv = vec2<f32>(u * taille.x, v * taille.y) / 16.0;
+    //
+    // Puis son SENS (`Sens`, trois bits au-dessus de la face) : `u` le long
+    // du second axe du plan, et chacun à l'envers. Un miroir est un signe :
+    // l'échantillonneur répète, donc `−s` retombe sur `1 − fract(s)`.
+    var st = vec2<f32>(u * taille.x, v * taille.y) / 16.0;
+    let sens = (inst.geo >> 26u) & 7u;
+    if ((sens & 1u) != 0u) { st = st.yx; }
+    if ((sens & 2u) != 0u) { st.x = -st.x; }
+    if ((sens & 4u) != 0u) { st.y = -st.y; }
+    out.uv = st;
     out.couche = inst.couche;
     out.ombre = ombre_de(face);
     out.teinte = inst.teinte.rgb;

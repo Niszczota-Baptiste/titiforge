@@ -75,8 +75,8 @@ fn pleine(y: i8, id: StateId) -> Section {
     section(y, |_, _, _| id)
 }
 
-fn uni(id: StateId, _: tf_mesh::forme::Face, _: StateId) -> (u32, [f32; 3]) {
-    (id, [1.0; 3])
+fn uni(id: StateId, _: tf_mesh::forme::Face, _: StateId) -> (u32, [f32; 3], tf_render::Sens) {
+    (id, [1.0; 3], tf_render::Sens::DROIT)
 }
 
 /// Six faces par cuboïde, distinctes par état : une géométrie qui changerait

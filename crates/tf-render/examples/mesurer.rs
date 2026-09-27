@@ -121,9 +121,13 @@ fn main() {
             &|id, face, _biome| match habillage.get(id as usize) {
                 Some(h) => {
                     let a = h.cube[face.indice()];
-                    (a.couche, a.teinte)
+                    (
+                        a.couche,
+                        a.teinte,
+                        tf_render::Sens::depuis_uv(a.uv, a.echange),
+                    )
                 }
-                None => (0, [1.0; 3]),
+                None => (0, [1.0; 3], tf_render::Sens::DROIT),
             },
         );
         let modeles = AreneModeles::sans_biome(&chantier, &|id| {
@@ -133,7 +137,7 @@ fn main() {
             let hab: Vec<HabillageFaces> = h
                 .cuboides
                 .iter()
-                .map(|f| std::array::from_fn(|k| (f[k].couche, f[k].teinte, f[k].uv)))
+                .map(|f| std::array::from_fn(|k| (f[k].couche, f[k].teinte, f[k].uv, f[k].echange)))
                 .collect();
             faces_de(table.cuboides(id), &hab)
         });
