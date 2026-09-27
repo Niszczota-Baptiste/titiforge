@@ -21,14 +21,14 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1106**, zéro échec |
+| Tests | **1140**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
 | Vraies saves vérifiées | 2 — Minefield 1.18, vanilla 1.20.1 |
 | Blocs réellement réécrits puis annulés au bit près | **606 M** |
 | Coût du suivi des block entities sur le balayage | **nul** (6,04 ms contre 6,07, médiane de 3) |
-| Appels de dessin, quelle que soit la scène | **2** |
+| Appels de dessin, quelle que soit la scène | **2** — **4** quand elle porte de l'eau ou de la lave |
 | Éditer 3 blocs sur 256 chunks bâtis | **80 → 27 ms** (atlas, arène, modèles) |
 | Résident par région bâtie | **186 Mo** — 2 Go n'en tiennent que **11** |
 | Charger une région bâtie | **867 ms**, soit 108 images à 8 ms |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1106 tests, répartis par ce qu'ils PROUVENT :
+1140 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -73,10 +73,13 @@ cargo test --workspace
 | `tf-ops` forme | 16 | le verdict par section d'une forme, croisé aux 4 096 cases |
 | `tf-ops` creuser | 12 | `//hollow` : le critère est TOPOLOGIQUE, et un coffre vidé ne revient pas en fantôme |
 | `tf-assets` climat | 12 | la couleur d'un biome, DÉRIVÉE : table × température |
-| `tf-assets` pack/textures/rotation/jeu/codex_reel | 68 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris |
+| `tf-assets` pack/textures/rotation/jeu/codex_reel | 69 | parents, uv, atlas, `.jar`, détection d'installation ; et qu'étendre l'atlas par une texture plus GRANDE donne, couche par couche, les pixels d'un bâti direct — plafond compris ; sur le codex RÉEL, que l'eau et la lave n'ont aucun cube qui double leur surface et que leurs textures se trouvent sans repli — et qu'un `TF_PACK` relatif se lit depuis la racine du dépôt, au lieu de faire sauter le test en disant « non défini » |
+| `tf-assets` fluides | 4 | quel état porte un fluide — `level`, `waterlogged=true` sur n'importe quel bloc, `minefield:*` compris, et les cinq blocs pleins d'eau EN DUR — quand le pack n'en dit rien ; que l'eau reste de l'AIR pour les passes de blocs, qu'un escalier inondé est un modèle ET de l'eau, qu'une croix de varech n'arrête pas un fluide ; et que chaque face trouve sa couche, le voile se repliant sur le courant |
 | `tf-mesh` biomes | 7 | le biome traverse jusqu'au quad, et ne coupe QUE les teintés |
-| `tf-mesh` mailler/chantier | 42 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre |
+| `tf-mesh` mailler/chantier | 50 | glouton contre naïf, case par case ; que mailler dans un EXTRAIT de la grille rend ce que rend la grille entière, biomes compris ; que des maillages TENUS par section valent la liste retriée, ordre et totaux compris ; qu'une case que la grille ne porte pas vaut de l'AIR même quand l'état n° 0 de la table est un bloc plein ; que remailler ce que le CONTENU d'une boîte touche — avant et après — rend le maillage complet, sur des cellules entières tirées au hasard ; et le remaillage PARTIEL : la marge d'une case, l'ordre qui reste trié, et une section vidée qui perd son maillage ; que la marge en CROIX suffit — remailler la croix après des éditions tirées aux arêtes et aux coins rend exactement le maillage complet ; et que le remaillage partiel en parallèle rend les mêmes lots dans le même ordre ; et avec de l'EAU, que remailler la croix ET les voisines qui portent une case de fluide À UN BLOC de l'édition rend le maillage complet — la croix seule, témoin, se trompe 14 fois sur 150 —, que ces voisines se jugent à la CASE et pas à la palette, et qu'une section NOYÉE rend le lot vide des trois passes sans les faire (compté : aucune lecture d'opacité), y compris quand une voisine éditée loin de leur frontière change sa palette |
+| `tf-mesh` fluides | 14 | la passe de FLUIDES contre une référence INDÉPENDANTE qui transcrit le code du jeu case par case, croisées sur soixante mondes (252 616 faces) ; et à la main : 227/255 au milieu d'un lac, 174 pour une source seule, un côté de colonne pleine fusionné, l'angle du courant, le voile contre le verre, un bloc inondé qui fusionne avec l'eau, la lave sans biome, la frontière de biome qui coupe l'eau et pas la lave, un dessus caché sous la pierre seulement à 255 |
 | `tf-render` rendu | 31 | **au pixel** : ombrage, teinte, dalle, alignement WGSL ; qu'une arène à TROUS dessine au pixel près l'image d'une arène neuve, vue des deux côtés ; qu'une scène SYNCHRONISÉE dessine ce que dessine une scène neuve à travers croissance, départs, marge et rechargement, qu'elle ne montre jamais ce qu'elle n'a pas reçu, et qu'elle n'envoie que ce qui a changé (compté à l'octet) ; que la teinte de biome atteint AUSSI les blocs-modèles ; que le quadrillage est dans la MÊME unité que la géométrie ; qu'une DEMI-teinte ne se délave pas — les primaires saturées sont des points fixes de la conversion sRGB et ne prouvaient rien ; et qu'une arête qui passe DERRIÈRE la caméra reste une ligne, ni aplat ni rien, même derrière une arête que la découpe retire — et qu'un calque tout entier hors du champ ne coûte pas d'appel |
+| `tf-render` fluides | 8 | **au pixel** : vingt octets par face, des champs empaquetés qui ne se marchent pas dessus ; qu'un côté monte du côté de sa PREMIÈRE hauteur, sur ±Z comme sur ±X où ses rangées sont le premier axe du plan ; qu'un dessus monte chacun de ses quatre coins ; que l'eau laisse voir ce qu'elle recouvre et la lave non ; que l'eau n'écrit pas la profondeur ; et qu'une scène SUIVIE montre les fluides d'une scène neuve, à l'arrivée, au départ d'une section, et pour une scène neuve qui rattrape une arène déjà synchronisée |
 | `tf-render` champ | 7 | la découpe des lignes au champ de la caméra : sur 2 000 segments tirés d'une graine, tout ce qui reste est DANS le champ et tout ce qui était visible est RESTÉ ; un segment qui traverse l'œil commence au plan proche, un segment qui file au loin s'arrête au plan lointain, un segment qui sort par le côté s'arrête au bord |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
 | `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
@@ -95,12 +98,12 @@ cargo test --workspace
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |
 | `tf-ops` catalogue | 23 | que la description et l'opération ne peuvent pas diverger : chaque descripteur se construit, construit CE qu'il nomme, et passe par un normaliseur idempotent que personne ne peut sauter ; et qu'un bloc TAPÉ — `stone`, `Minecraft:Stone`, `oak_stairs[half=top,facing=east]` — arrive au moteur sous la clé que le décodeur rend pour le même bloc, pour CHAQUE paramètre de bloc du catalogue et chaque entrée de mélange, qu'un bloc illisible est refusé en nommant l'opération et le paramètre, et qu'un mélange tapé ne se coupe pas entre crochets |
 | `tf-world` demande | 25 | ce que la caméra demande et dans quel ORDRE : un disque et pas un carré, devant avant le dos, l'appartenance décidée sur la GRILLE et l'urgence sur la position réelle — et qu'un regard vertical classe à la distance plutôt qu'en `NaN` ; plus le groupement en LECTURES de région, qui partitionne la demande sans jamais réordonner ce que la caméra a classé |
-| `tf-app` rechargement | 11 | qu'éditer une cellule STREAMÉE ne la retire pas de la scène ni n'y fait naître ce qui n'est pas chargé ; qu'un état jamais vu au bord d'une cellule qui arrive cache bien la face de sa voisine ; qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. Tourne sans pack : le codex est écrit à la volée |
+| `tf-app` rechargement | 12 | qu'éditer une cellule STREAMÉE ne la retire pas de la scène ni n'y fait naître ce qui n'est pas chargé ; qu'un état jamais vu au bord d'une cellule qui arrive cache bien la face de sa voisine ; qu'AUCUNE édition ni AUCUNE arrivée ne recharge la zone : un bloc jamais vu étend l'atlas au lieu de tout rebâtir, les couches déjà montées ne bougent pas, chaque nom désigne SA couche, une texture plus grande AGRANDIT l'atlas sur place — y compris quand elle arrive en volant, où elle rechargeait en boucle ; et qu'un rechargement demandé PENDANT le streaming ne laisse pas de cellule fantôme inscrite à la fenêtre de résidence. ; et que l'arène des FLUIDES remplacée dessine ce qu'une rebâtie dessine — creuser au coin d'une section change la surface de sa DIAGONALE, que la croix ne remaille pas —, chaque face avec la texture de SON fluide, l'eau teinte de l'eau. Tourne sans pack : le codex est écrit à la volée, l'eau et la lave SANS élément, comme le jeu les livre |
 | `tf-render` pages | 5 | le tableau par PAGES : que grandir ne déplace aucune page existante, qu'il se comporte comme un `Vec` sur une suite tirée d'une graine, qu'une case recréée vaut `vide` et pas son ancien contenu, et qu'une plage se découpe aux frontières de page |
 | `tf-render` arene | 7 | les PLACES STABLES : que ce qui est dessiné — la passe de modèles rejouée comme le shader la dichotomise — est ce qu'une arène rebâtie dessinerait, après des milliers d'arrivées, de départs et d'éditions tirés d'une graine ; qu'un remplacement COMPTE ce qu'il écrit et paie ce qu'il change, pas la scène ; qu'un trou se réemploie ; qu'il y a un emplacement par lot et pas un de plus ; et que tasser ne change rien à l'image |
 | `tf-app` chargeur | 9 | le FIL de chargement : qu'une région corrompue se DIT et ne libère pas le fil avant que ses cellules soient rendues ; qu'il ne fait jamais attendre l'hôte (fil témoin, attente bornée), qu'un `.mca` n'est lu qu'UNE fois par lot (source qui COMPTE ses lectures), que chaque cellule revient exactement une fois et par urgence, qu'une demande neuve remplace la périmée, et que la table d'états rendue couvre bien les palettes qu'elle accompagne |
 | `tf-app` chargement | 4 | la JONCTION fil ↔ scène : que charger cellule par cellule donne EXACTEMENT la scène qu'un chargement d'un bloc donne (sur du terrain ET sur du bâti, 276 k quads), qu'une cellule qui revient vide efface ce qu'elle portait, et ce que l'intégration coûte une par une contre par lot |
-| `tf-app` pilote | 7 | la caméra qui PILOTE : qu'une région ILLISIBLE n'est lue qu'une fois sur six cents images immobiles, et que l'échec se dit ; que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
+| `tf-app` pilote | 6 | la caméra qui PILOTE : qu'une région ILLISIBLE n'est lue qu'une fois sur six cents images immobiles, et que l'échec se dit ; que voler fait venir le monde, qu'une caméra immobile ne relit pas le `.mca` à chaque image (une lecture pour 326 images, COMPTÉE), qu'un vol continu charge et lâche sans recharger la zone, qu'un budget plus petit que le champ ne tourne pas à vide, et que le champ épinglé suit la caméra même quand rien n'est à charger |
 | `tf-app` residence | 5 | que la MÉMOIRE est bornée : que ce que la fenêtre compte est ce que la scène porte À L'OCTET PRÈS, qu'un vol continu tient sous son budget sans jamais recharger la zone, que ce qui survit à l'éviction est quad pour quad ce qu'un chargement direct donnerait (la marge du dégagement, que rien d'autre ne voit), que corriger le poids d'une voisine n'en fait pas la plus récente, et qu'une cellule de RÉGION est pesée sur ses 32 × 32 colonnes |
 | `tf-app` atelier | 3 | le maillage HORS DU FIL PRINCIPAL et son ordre : qu'un vieux travail revenu le dernier ne passe pas par-dessus un neuf, qu'un rechargement oublie ce qui était en route, et qu'une édition passe après ce qui était en route — chaque fois en forçant le retour tardif (`retarder_le_prochain_maillage`) et en comparant la scène à un maillage complet de sa grille |
 | `tf-app` menage | 1 | qu'une copie de travail abandonnée par un arrêt brutal finit par partir — et qu'une séance qui édite depuis plus d'un jour NE part pas, parce que l'âge se mesure sur le fichier le plus récent et pas sur le dossier |
@@ -901,7 +904,7 @@ maintenant des états distincts.
 
 ```bash
 cargo test -p tf-formats
-cargo run --release -p tf-formats --example mesurer
+cargo run --release -p tf-formats --example formats
 cargo run --release -p tf-formats --example lire -- <fichier>
 ```
 
@@ -935,7 +938,7 @@ moitié du travail :
   l'autre sont refusées ; une structure est plafonnée ; une bombe gzip
   s'arrête au plafond.
 
-Mesuré (`--example mesurer`), un extrait de 256 × 192 × 256 = 12,6 millions de
+Mesuré (`-p tf-formats --example formats`), un extrait de 256 × 192 × 256 = 12,6 millions de
 cases, 768 coffres, médiane de trois :
 
 | format | écrire | lire | taille |
@@ -1101,6 +1104,83 @@ branchements apprend la séquence et le chiffre tombe à 11 ns, qui ne vaut
 rien). Les 228 segments d'une capture ordinaire : quelques microsecondes.
 Voir § 7 pour ce que ça devient avec des centaines d'instances de
 composants.
+
+### L'eau et la lave : une passe à elles
+
+```bash
+cargo test -p tf-mesh --test fluides --test chantier
+cargo test -p tf-render --test fluides
+cargo bench -p tf-mesh -- fluides        # la passe, profil par profil
+cargo bench -p tf-mesh -- ocean          # seize chunks d'océan, de bout en bout
+```
+
+Le pack ne dit rien des fluides : `block/water` est un modèle sans élément, et
+le jeu dessine l'eau avec son propre code (`LiquidBlockRenderer`). Ce qu'on en
+sait vient de l'ÉTAT — `level`, `waterlogged=true`, et cinq blocs pleins d'eau
+en dur (varech, herbes marines, colonne de bulles). L'eau reste de l'AIR pour
+les deux passes de blocs ; une troisième la dessine, sur les règles du jeu
+transcrites à la lettre : la hauteur d'un coin est la moyenne pondérée des
+quatre colonnes qui le touchent, un côté monte jusqu'aux deux coins de son
+bord, le sens du courant tourne la texture du dessus, et une face ne se
+dessine ni contre le même fluide ni contre un bloc opaque.
+
+**Vérifiée contre une référence INDÉPENDANTE** : `tests/fluides.rs` transcrit
+le code du jeu case par case, sans rien partager avec la passe, et les deux
+se croisent sur soixante mondes tirés d'une graine — **252 616 faces**. C'est
+ce croisement qui a trouvé le seul défaut de la première écriture : les faces
+±X au bord d'une section, parce que la rangée était MASQUÉE avant d'être
+décalée. Mutations : 21 sur 21 tuées dans la passe, 10 sur 10 au rendu, 13 sur
+13 dans le remaillage et la coque, 7 sur 7 pour la noyade.
+
+**Au GPU, une face fait vingt octets** : la géométrie empaquetée des quads,
+quatre hauteurs de coin sur un mot, la couche d'atlas et l'angle du courant.
+Une seule arène, deux pipelines : la LAVE, opaque, avec la profondeur ;
+l'EAU, après tout ce qui est opaque, mélangée à ce qu'elle recouvre et sans
+écrire la profondeur. Deux appels de dessin de plus, seulement quand la scène
+porte un fluide. L'arène partage les emplacements de celle des quads — une
+face d'eau et le mur qu'elle touche se placent par la même table.
+
+| par section de 16³ (`cargo bench -p tf-mesh -- fluides`) | passe | faces |
+|---|---:|---:|
+| sans fluide — jamais appelée : la palette le dit | 8,3 µs | 0 |
+| fond de mer | 14,8 µs | 0 |
+| lac (une surface) | 33,5 µs | 1 |
+| rivière en pente (rien ne fusionne) | 41,5 µs | 256 |
+| salle inondée, décor inondé | 30,4 µs | 1 |
+
+Sur une vraie save (Mosslorn, 8 × 8 chunks d'un build Minefield, `capture`) :
+**5 493 faces de fluide, 0,11 Mo**, pour 425 332 quads.
+
+**Une section NOYÉE ne coûte rien** : rien qu'un fluide, sans modèle, et le
+même fluide sur ses six faces. Elle rend le lot vide que les trois passes
+auraient rendu, sans les faire — sur les palettes, en O(1). Seize chunks
+d'océan (`-- ocean`) : **80,6 → 74,5 ms** sur un fil. Modeste ici, parce que
+seule la couche du milieu de chaque colonne est noyée — la surface porte de
+l'air, le fond touche la pierre. Elle rend un lot VIDE et pas `None` : la
+noyade dépend des palettes des VOISINES, qu'une édition loin de leur
+frontière change sans les faire remailler, et un rechargement complet la
+verrait autrement.
+
+**Le remaillage lit maintenant en diagonale.** Un coin de surface est la
+moyenne de quatre colonnes : creuser la case au coin d'une section change la
+surface de sa voisine en DIAGONALE, que la croix ne remaille pas.
+`voisines_fluides` ajoute les sections qui portent une case de fluide À UN
+BLOC de l'édition — à la CASE, pas à la palette : sur `Terrain`, dont chaque
+section porte une poche d'eau, la règle par palette remaillait les vingt-six
+voisines de toute édition, **60 sections au lieu de 11** pour les deux bouts
+d'un déplacement. Le rechargement de zone qu'on traque, revenu par la porte
+des fluides.
+
+**Ce que ça change au vol** (`--example vol -- --gpu synchro`, médiane de
+trois) : sur `Build`, rien — 2,38 ms, 6 à 8 images sur 400 au-delà de 8 ms ;
+le bâti ne porte pas d'eau et la passe ne tourne pas. Sur `Terrain`, 1,18 ms
+et **59,8 Mo résidents au lieu de 23** : le codex des tests déclare
+maintenant l'eau et la lave comme le jeu les livre — sans élément —, et
+`Terrain` en sème 0,6 % de cases ISOLÉES dans la roche, qui découvrent
+chacune les six faces de pierre autour d'elles. Un artefact de la fixture —
+un vrai sous-sol groupe son eau en nappes —, qui rend `Terrain` plus
+pessimiste pour le rendu. Il ne mesure pas le rendu : c'est `Build` qui le
+mesure.
 
 ---
 
@@ -1497,11 +1577,17 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 
 | Manque | Ce que ça coûte aujourd'hui |
 |---|---|
-| **Les fluides ne sont pas dessinés** | 4,5 % des blocs posés de Mosslorn, dont 6,2 M d'eau. Les fluides n'ont pas de modèle de bloc dans le format : il leur faut leur propre passe |
+| **L'eau translucide n'est pas triée** | ses faces se mélangent dans l'ordre de l'arène, pas du plus loin au plus proche : deux surfaces d'eau l'une derrière l'autre peuvent se composer dans le mauvais ordre. Invisible à travers UNE épaisseur d'eau, le cas courant ; un tri par section, à chaque image, est la marche suivante |
+| **Les textures animées sont figées sur leur première image** | l'eau et la lave du jeu ondulent ; ici elles sont immobiles. Vrai de tous les blocs animés, pas seulement des fluides |
+| **Le voile d'eau (`water_overlay`) manque au codex** | aucun modèle ne le cite, donc le site ne l'a pas extrait : contre le verre et les feuilles, l'eau prend la texture de courant. Présent dans tout `.jar`, donc juste avec une installation |
+| **La couleur d'eau d'un codex est celle du réglage** | un codex n'a pas `data/` : l'eau prend #3F76E4, la couleur par défaut du jeu, dans tous les biomes. Avec une installation, chaque biome donne la sienne |
+| **Un bloc inondé dessine son eau contre sa propre forme** | le jeu masque la face d'eau qu'un escalier inondé couvre de sa propre géométrie ; ici elle reste, sous le modèle |
+| **La solidité d'un voisin est approchée** | le jeu demande au MATÉRIAU d'un bloc s'il arrête l'eau ; on répond « opaque, ou un cuboïde qui a du volume ». Une torche ou un tapis comptent donc comme solides dans la moyenne d'un coin |
+| **Le sens des textures d'eau n'a pas été vérifié au pixel contre le jeu** | la géométrie l'est (référence indépendante, 252 616 faces), les coordonnées de texture non : sur les côtés sud et ouest, le jeu retourne la texture de courant, pas nous — invisible sur une texture sans motif orienté |
 | **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **La découpe des lignes se refait à chaque image, au processeur** | ≈ 33 ns par segment : 0,33 ms pour 10 000 segments — les contours de 833 instances de composants — et 3,5 ms pour 100 000, plus leur envoi au GPU. La faire dans le shader de sommets (un segment par instance, découpé là où il se dessine) la rendrait gratuite, au prix d'un second exemplaire de l'algorithme, en WGSL |
-| **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui ; ils ne suffiront plus avec un remaillage partiel |
+| **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui, 4 avec des fluides ; ils ne suffiront plus avec un remaillage partiel |
 | **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
 | **L'éclairage et les points d'intérêt après une édition n'ont jamais été vus EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) et de relire leurs points d'intérêt (`Valid` à 0 dans `poi/`) : ce sont ses propres mécanismes de chargement, mais personne ne les a encore regardés dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
 | **Le suivi des entités n'a jamais été vu EN JEU** | tout est vérifié contre le FORMAT et contre les formules du jeu (placement d'un tableau, dessin d'un cadre), relu par un décodeur indépendant — mais personne n'a encore ouvert une partie après un `--copier-vers --tourner 90`. La règle la plus fragile est celle de l'objet d'un cadre AU SOL ou au PLAFOND, dérivée du code de rendu |

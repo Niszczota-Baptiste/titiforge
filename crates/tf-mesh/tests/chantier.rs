@@ -1199,6 +1199,202 @@ fn les_voisines_fluides_sont_la_coquille_qui_porte_de_l_eau() {
     }
 }
 
+/// **À la CASE, pas à la palette.** Une voisine dont l'eau est loin de la
+/// boîte n'a aucune surface qui change : la remailler, c'est payer pour rien —
+/// et sur un sous-sol 1.18, où presque toute section porte une poche d'eau
+/// quelque part, c'était remailler les vingt-six voisines de chaque édition.
+#[test]
+fn les_voisines_fluides_se_jugent_a_la_case_pas_a_la_palette() {
+    let t = table_eau();
+    let mut g = Grille::new();
+    // La boîte : la section (0, 0, 0) entière. Autour, six voisines dont la
+    // palette porte TOUTES de l'eau — mais pas toutes à un bloc d'elle.
+    // (1, 0, 1), arête : l'eau au coin OPPOSÉ, à seize blocs.
+    g.poser(
+        1,
+        1,
+        section(0, |x, _, z| if (x, z) == (15, 15) { EAU } else { PIERRE }),
+    );
+    // (−1, 0, 0), face : l'eau contre la boîte.
+    g.poser(
+        -1,
+        0,
+        section(0, |x, _, _| if x == 15 { EAU } else { PIERRE }),
+    );
+    // (0, 0, −1), face : l'eau à DEUX blocs — une case de trop.
+    g.poser(0, -1, section(0, |_, _, z| if z == 14 { EAU } else { AIR }));
+    // (1, 1, 1), coin : une seule case d'eau, pile au coin.
+    g.poser(
+        1,
+        1,
+        section(
+            1,
+            |x, y, z| if (x, y, z) == (0, 0, 0) { EAU } else { PIERRE },
+        ),
+    );
+    // (0, 1, 0), au-dessus : l'eau sur la couche du bas.
+    g.poser(0, 0, section(1, |_, y, _| if y == 0 { EAU } else { AIR }));
+    // (0, −1, 0), au-dessous : l'eau loin du plafond.
+    g.poser(0, 0, section(-1, |_, y, _| if y == 5 { EAU } else { AIR }));
+    for (dx, dz) in [(1, 1), (-1, 0), (0, -1)] {
+        assert!(g.porte_du_fluide((dx, dz, 0), &t), "la palette dit « eau »");
+    }
+    let v = g.voisines_fluides([0, 0, 0], [15, 15, 15], &t);
+    assert_eq!(v, vec![(-1, 0, 0), (0, 0, 1), (1, 1, 1)]);
+    // Une boîte qui ne touche PAS le bord de sa section : la bande n'atteint
+    // aucune voisine, et rien n'est remaillé.
+    assert!(g.voisines_fluides([4, 4, 4], [11, 11, 11], &t).is_empty());
+}
+
+/// Une table qui COMPTE ce qu'on lui demande d'opacité.
+struct Compteur<'a> {
+    t: &'a TableFormes,
+    lectures: std::cell::Cell<usize>,
+}
+
+impl tf_mesh::Formes for Compteur<'_> {
+    fn est_air(&self, id: StateId) -> bool {
+        self.t.est_air(id)
+    }
+    fn opaque(&self, id: StateId) -> bool {
+        self.lectures.set(self.lectures.get() + 1);
+        self.t.opaque(id)
+    }
+    fn cuboides(&self, id: StateId) -> &[Cuboide] {
+        self.t.cuboides(id)
+    }
+    fn fluide(&self, id: StateId) -> Option<tf_mesh::Fluide> {
+        self.t.fluide(id)
+    }
+    fn solide(&self, id: StateId) -> bool {
+        self.t.solide(id)
+    }
+}
+
+/// **Une section NOYÉE se saute — et elle n'avait rien à dire.** Le raccourci
+/// se vérifie contre ce qu'il épargne : on maille quand même le centre, à la
+/// main, et tout doit sortir vide. Puis une seule voisine d'une autre sorte,
+/// et la section doit reparler.
+#[test]
+fn une_section_noyee_se_saute_et_n_avait_rien_a_dire() {
+    let mut t = table_eau();
+    let inonde = t.pousser(false, false, tf_mesh::Formes::cuboides(&t, DALLE).to_vec());
+    t.marquer_fluide(
+        inonde,
+        tf_mesh::Fluide {
+            genre: tf_mesh::GenreFluide::Eau,
+            niveau: 0,
+        },
+    );
+    // Un cube de 3 × 3 × 3 sections : `voisine` sur les six faces du centre,
+    // de l'eau sur les arêtes et les coins.
+    let cube = |centre: StateId, voisine: StateId| {
+        let mut g = Grille::new();
+        for dy in -1..=1i8 {
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let par_face = (dx != 0) as u8 + (dy != 0) as u8 + (dz != 0) as u8 == 1;
+                    let id = match ((dx, dy, dz), par_face) {
+                        ((0, 0, 0), _) => centre,
+                        (_, true) => voisine,
+                        _ => EAU,
+                    };
+                    g.poser(dx, dz, pleine(dy, id));
+                }
+            }
+        }
+        g
+    };
+    // Le fond de la mer — et de l'eau qui COULE autour : le même fluide.
+    let g = cube(EAU, EAU_COURANTE);
+    assert!(g.noyee((0, 0, 0), &t));
+    // Son lot est VIDE — celui que les passes auraient rendu — mais il
+    // existe : sa présence ne dépend que de sa propre palette.
+    let ch = g.mailler(&t);
+    let lot = ch
+        .lots
+        .iter()
+        .find(|l| l.adresse == (0, 0, 0))
+        .expect("la section noyée garde son lot");
+    assert!(lot.quads.is_empty() && lot.poses.is_empty() && lot.fluides.is_empty());
+    let mut v = Voisinage::new();
+    g.voisinage((0, 0, 0), &mut v);
+    let mut faces = Vec::new();
+    tf_mesh::fluides::mailler(&v, &t, &mut faces);
+    assert!(
+        faces.is_empty(),
+        "{} faces de fluide épargnées à tort",
+        faces.len()
+    );
+    let (quads, poses) = tf_mesh::mailler_pour_gpu(&v, &t);
+    assert!(quads.quads.is_empty() && poses.poses.is_empty());
+    // Et le raccourci est PRIS : rien ne le montre dans le résultat, qui est
+    // le même avec ou sans. Ce qui le montre est ce qu'il n'a pas LU — les
+    // passes relèvent l'opacité des 5 832 cases du voisinage, la noyade ne
+    // lit que des palettes.
+    let compte = Compteur {
+        t: &t,
+        lectures: std::cell::Cell::new(0),
+    };
+    g.mailler_ces(&compte, &[(0, 0, 0)]);
+    assert!(
+        compte.lectures.get() < 64,
+        "{} lectures d'opacité pour une section noyée",
+        compte.lectures.get()
+    );
+
+    for (centre, voisine, quoi) in [
+        (EAU, AIR, "de l'air sur une face"),
+        (EAU, LAVE, "de la lave sur une face"),
+        (
+            EAU,
+            PIERRE,
+            "de la pierre : sous elle, les coins du dessus lisent à côté",
+        ),
+        (inonde, EAU, "un modèle inondé dedans"),
+        (EAU, inonde, "un modèle inondé à côté"),
+        (LAVE, EAU, "de la lave dans l'eau"),
+    ] {
+        assert!(!cube(centre, voisine).noyee((0, 0, 0), &t), "{quoi}");
+    }
+    // Une voisine ABSENTE vaut de l'air.
+    let mut g = cube(EAU, EAU);
+    assert!(g.noyee((0, 0, 0), &t));
+    g.retirer((0, 0, 1));
+    assert!(!g.noyee((0, 0, 0), &t), "le ciel non chargé au-dessus");
+
+    // **Une voisine éditée LOIN de leur frontière** : sa palette change, donc
+    // la noyade du centre — mais la croix de l'édition ne le contient pas, et
+    // il garde le lot d'avant. Ce lot doit être celui d'un maillage complet :
+    // c'est ce qui interdit de rendre `None` pour une section noyée.
+    let mut g = cube(EAU, EAU);
+    let avant = g.mailler(&t);
+    g.poser(
+        0,
+        0,
+        section(1, |x, y, z| if (x, y, z) == (8, 8, 8) { AIR } else { EAU }),
+    );
+    let visees = Grille::sections_touchees([8, 24, 8], [8, 24, 8]);
+    assert!(
+        !visees.contains(&(0, 0, 0)),
+        "la prémisse : le centre n'est pas remaillé"
+    );
+    assert!(!g.noyee((0, 0, 0), &t), "et il n'est plus noyé");
+    let refait = g.mailler_ces(&t, &visees);
+    let resume = |l: &tf_mesh::Lot| (l.adresse, l.quads.len(), l.poses.len(), l.fluides.len());
+    let mut partiel: Vec<_> = avant
+        .lots
+        .iter()
+        .filter(|l| !visees.contains(&l.adresse))
+        .chain(refait.lots.iter())
+        .map(resume)
+        .collect();
+    partiel.sort();
+    let mut complet: Vec<_> = g.mailler(&t).lots.iter().map(resume).collect();
+    complet.sort();
+    assert_eq!(partiel, complet);
+}
+
 /// Une section tirée au hasard, avec de l'eau de toutes sortes — par pavés
 /// de 2 × 2 × 2 : case par case, l'eau produirait des milliers de faces par
 /// section et le test passerait son temps à les comparer, alors que ce qu'il

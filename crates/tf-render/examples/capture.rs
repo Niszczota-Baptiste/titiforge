@@ -250,12 +250,37 @@ fn main() {
         tf_render::faces_de(table.cuboides(id), &hab)
     });
 
+    // ── l'eau et la lave : leur passe à elles, aux emplacements des quads
+    //
+    // La même composition qu'au-dessus : la couleur d'eau vient du biome de
+    // la case, le réglage sinon ; la lave n'a pas de teinte.
+    let fluides = tf_render::AreneFluides::depuis(
+        &chantier,
+        arene.emplacements(),
+        &|genre, texture, biome| {
+            let couche = tf_assets::fluides::couche(&atlas, genre, texture);
+            let teinte = match genre {
+                tf_mesh::GenreFluide::Eau => teinte_de(tf_assets::GenreTeinte::Eau, biome)
+                    .unwrap_or_else(|| tf_assets::apparence::teinte_finale(teintes.eau)),
+                tf_mesh::GenreFluide::Lave => [1.0; 3],
+            };
+            (couche, teinte)
+        },
+    );
+
     // ── dessiner
     let app = Appareil::ouvrir().expect("un adaptateur graphique");
     println!("adaptateur : {}", app.decrire());
     let atlas_gpu = AtlasGpu::avec_mips(&app, atlas.cote, atlas.len() as u32, &atlas.pyramide());
     let cible = Cible::nouvelle(&app, cote, (cote * 5) / 8);
-    let mut scene = Scene::avec_modeles(&app, &arene, &modeles, &atlas_gpu);
+    let mut scene = Scene::pour(
+        &app,
+        &arene,
+        &modeles,
+        &fluides,
+        &atlas_gpu,
+        tf_render::scene::FORMAT,
+    );
 
     // ── le quadrillage : les chunks, et surtout les `.mca`
     //
@@ -372,6 +397,11 @@ fn main() {
         "arène            : {} instances, {:.2} Mo",
         arene.len(),
         arene.octets() as f64 / 1e6
+    );
+    println!(
+        "fluides          : {} faces, {:.2} Mo",
+        fluides.len(),
+        fluides.octets() as f64 / 1e6
     );
     println!("APPELS DE DESSIN : {}", compte.appels_de_dessin);
     println!(

@@ -211,6 +211,49 @@ impl Grille {
         }
     }
 
+    /// **Vrai si la section est NOYÉE** : rien qu'un fluide, sans modèle, et le
+    /// même fluide sur ses six faces. Elle ne peut rien produire — aucune case
+    /// opaque ni modèle pour les passes de blocs, aucune face de fluide contre
+    /// son propre fluide — et c'est le fond de chaque océan : mesuré, un océan
+    /// de seize chunks de côté passait l'essentiel de son maillage à relever,
+    /// case par case, trois sections d'eau par colonne pour n'en rien tirer.
+    ///
+    /// Sur les PALETTES, donc en O(1) par section, et c'est une borne sûre :
+    /// une entrée que plus aucune case ne désigne ne peut que faire refuser le
+    /// raccourci, jamais le faire prendre à tort. Une voisine ABSENTE vaut de
+    /// l'air : la face qui la regarde se dessine, la section n'est pas noyée.
+    /// Le haut compte comme les autres — sous de la pierre, les coins du
+    /// dessus lisent les colonnes des sections d'à côté, et la face peut se
+    /// voir.
+    pub fn noyee<F: Formes + ?Sized>(&self, a: Adresse, f: &F) -> bool {
+        let Some(s) = self.sections.get(&a) else {
+            return false;
+        };
+        let Some(genre) = s
+            .palette
+            .first()
+            .and_then(|id| f.fluide(*id))
+            .map(|x| x.genre)
+        else {
+            return false;
+        };
+        let que_lui = |s: &Section| {
+            s.palette
+                .iter()
+                .all(|id| f.est_air(*id) && f.fluide(*id).is_some_and(|x| x.genre == genre))
+        };
+        que_lui(s)
+            && FACES.iter().all(|face| {
+                let n = face.pas();
+                let Ok(y) = i8::try_from(a.2 as i32 + n[1]) else {
+                    return false;
+                };
+                self.sections
+                    .get(&(a.0 + n[0], a.1 + n[2], y))
+                    .is_some_and(|v| que_lui(v))
+            })
+    }
+
     /// Vrai si la PALETTE de cette section porte un fluide.
     ///
     /// Sur la palette et pas sur les cases : c'est gratuit, et c'est une borne
@@ -238,6 +281,14 @@ impl Grille {
     ) -> Option<Lot> {
         if self.sans_contenu(a, f) {
             return None;
+        }
+        // Noyée : le lot VIDE que les trois passes auraient rendu, sans les
+        // faire. Pas `None` : la présence d'un lot ne dépend que de la palette
+        // de SA section, et la noyade dépend de celles des voisines — une
+        // voisine éditée loin de leur frontière ne fait pas remailler
+        // celle-ci, et un rechargement complet la verrait autrement.
+        if self.noyee(a, f) {
+            return Some(Lot::vide(a));
         }
         self.voisinage(a, v);
         let op = Opacite::relever(v, f);
@@ -454,52 +505,108 @@ impl Grille {
         out
     }
 
-    /// **Les sections AUTOUR d'une boîte — faces, arêtes et coins — qui
-    /// portent du fluide.**
+    /// **Les sections AUTOUR d'une boîte — faces, arêtes et coins — dont la
+    /// surface de fluide peut changer quand la boîte change.**
     ///
     /// La passe de fluides lit plus loin que les deux autres : la hauteur d'un
     /// coin de surface dépend des quatre colonnes qui le touchent et de ce
     /// qu'il y a au-dessus, le sens du courant des cases sous ses voisines.
-    /// Un bloc qui change peut donc changer la surface d'une section en
-    /// DIAGONALE — mais seulement si elle a du fluide : sans, elle n'a aucune
-    /// face de fluide à refaire, et la croix suffit à ses blocs.
+    /// Une case qui change peut donc changer la surface d'une section en
+    /// DIAGONALE — mais seulement celle d'une case de fluide À UN BLOC d'elle.
     ///
-    /// Sur les palettes (`porte_du_fluide`) : gratuit, et une borne
-    /// supérieure. Les sections de la boîte n'y sont pas — elles sont
-    /// remaillées de toute façon. Triées.
+    /// **La règle est à la CASE, pas à la palette, et la mesure l'a imposé.**
+    /// Sur la palette — « la voisine porte de l'eau quelque part » — la
+    /// fixture `Terrain`, dont chaque section porte des poches d'eau et de
+    /// lave comme un vrai sous-sol 1.18, remaillait les vingt-six voisines
+    /// de toute édition : 60 sections pour les deux bouts d'un déplacement
+    /// qui en demande 11. Le rechargement de zone qu'on traque, revenu par
+    /// la porte des fluides. On ne regarde donc que la BANDE de la voisine
+    /// qui tombe dans la boîte élargie d'un bloc — une couche, une arête ou
+    /// une case — et seulement si sa palette porte un fluide.
+    ///
+    /// Les sections qui portent des cases de la boîte n'y sont pas : elles
+    /// sont remaillées de toute façon. Triées.
     pub fn voisines_fluides<F: Formes + ?Sized>(
         &self,
         min: [i32; 3],
         max: [i32; 3],
         f: &F,
     ) -> Vec<Adresse> {
-        let sec = |v: i32| (v as i64).div_euclid(16) as i32;
-        let (x0, x1) = (sec(min[0]), sec(max[0]));
-        let (y0, y1) = (sec(min[1]), sec(max[1]));
-        let (z0, z1) = (sec(min[2]), sec(max[2]));
+        let sec = |v: i64| v.div_euclid(16) as i32;
+        // La boîte élargie d'un bloc, en `i64` : près de `i32::MIN` la marge
+        // s'enroulerait et viserait l'autre bout du monde.
+        let lo: [i64; 3] = std::array::from_fn(|k| min[k] as i64 - 1);
+        let hi: [i64; 3] = std::array::from_fn(|k| max[k] as i64 + 1);
+        // Les sections de la boîte (`b`) et de la boîte élargie (`e`) : la
+        // seconde déborde d'au plus une section de chaque côté.
+        let b0: [i32; 3] = std::array::from_fn(|k| sec(min[k] as i64));
+        let b1: [i32; 3] = std::array::from_fn(|k| sec(max[k] as i64));
+        let e0: [i32; 3] = std::array::from_fn(|k| sec(lo[k]));
+        let e1: [i32; 3] = std::array::from_fn(|k| sec(hi[k]));
         let mut out = Vec::new();
-        // La COQUILLE de la boîte élargie d'une section, pas son volume : une
-        // édition de toute une région ne parcourt que son pourtour.
-        for cz in z0 - 1..=z1 + 1 {
-            for cx in x0 - 1..=x1 + 1 {
-                let bord = cx < x0 || cx > x1 || cz < z0 || cz > z1;
-                let hauteurs: Vec<i32> = if bord {
-                    (y0 - 1..=y1 + 1).collect()
+        let mut voir = |cx: i32, cy: i32, cz: i32| {
+            let Ok(y) = i8::try_from(cy) else {
+                return;
+            };
+            let a = (cx, cz, y);
+            if !self.porte_du_fluide(a, f) {
+                return;
+            }
+            // La bande : la section, bornée à la boîte élargie.
+            let base = [cx as i64 * 16, cy as i64 * 16, cz as i64 * 16];
+            let d: [i64; 3] = std::array::from_fn(|k| lo[k].max(base[k]) - base[k]);
+            let h: [i64; 3] = std::array::from_fn(|k| hi[k].min(base[k] + 15) - base[k]);
+            if self.fluide_dans(a, d, h, f) {
+                out.push(a);
+            }
+        };
+        // La COQUILLE de la boîte élargie, pas son volume : une édition de
+        // toute une région ne parcourt que son pourtour.
+        for cz in e0[2]..=e1[2] {
+            for cx in e0[0]..=e1[0] {
+                let bord = cx < b0[0] || cx > b1[0] || cz < b0[2] || cz > b1[2];
+                if bord {
+                    for cy in e0[1]..=e1[1] {
+                        voir(cx, cy, cz);
+                    }
                 } else {
-                    vec![y0 - 1, y1 + 1]
-                };
-                for cy in hauteurs {
-                    let Ok(y) = i8::try_from(cy) else {
-                        continue;
-                    };
-                    if self.porte_du_fluide((cx, cz, y), f) {
-                        out.push((cx, cz, y));
+                    if e0[1] < b0[1] {
+                        voir(cx, e0[1], cz);
+                    }
+                    if e1[1] > b1[1] {
+                        voir(cx, e1[1], cz);
                     }
                 }
             }
         }
         out.sort_unstable();
         out
+    }
+
+    /// Une case de fluide dans cette section, entre ces bornes LOCALES
+    /// (incluses) ?
+    fn fluide_dans<F: Formes + ?Sized>(
+        &self,
+        a: Adresse,
+        lo: [i64; 3],
+        hi: [i64; 3],
+        f: &F,
+    ) -> bool {
+        let Some(s) = self.sections.get(&a) else {
+            return false;
+        };
+        for y in lo[1]..=hi[1] {
+            for z in lo[2]..=hi[2] {
+                for x in lo[0]..=hi[0] {
+                    if s.get(x as usize, y as usize, z as usize)
+                        .is_some_and(|id| f.fluide(id).is_some())
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// **Quelles faces de la section ont au moins une case OPAQUE dans leur

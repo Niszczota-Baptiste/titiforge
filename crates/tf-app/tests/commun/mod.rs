@@ -125,6 +125,12 @@ fn tuile(nom: &str) -> Vec<u8> {
 /// que l'atlas courant : le tableau n'a qu'une taille de couche, et la règle
 /// du dépôt est d'agrandir les petites plutôt que de réduire les grandes.
 fn tuile_de(nom: &str, cote: u32) -> Vec<u8> {
+    tuile_alpha(nom, cote, 255)
+}
+
+/// La même, d'une opacité choisie : l'eau du jeu est TRANSLUCIDE (180 sur
+/// 255), et c'est ce qui la fait passer au mélange plutôt qu'au dessin opaque.
+fn tuile_alpha(nom: &str, cote: u32, alpha: u8) -> Vec<u8> {
     let h = nom.bytes().fold(0x811c9dc5u32, |a, b| {
         (a ^ b as u32).wrapping_mul(0x01000193)
     });
@@ -133,7 +139,7 @@ fn tuile_de(nom: &str, cote: u32) -> Vec<u8> {
         (h >> 8) as u8 | 0x40,
         h as u8 | 0x40,
     );
-    let pixels: Vec<u8> = (0..cote * cote).flat_map(|_| [r, g, b, 255]).collect();
+    let pixels: Vec<u8> = (0..cote * cote).flat_map(|_| [r, g, b, alpha]).collect();
     let mut out = Vec::new();
     {
         let mut e = png::Encoder::new(&mut out, cote, cote);
@@ -233,6 +239,28 @@ pub fn codex(racine: &Path, extras: &[&str]) -> String {
     }
     for nom in BLOCS.iter().chain(extras.iter()) {
         ligne(&mut etats, "minecraft", nom);
+        // L'eau et la lave comme le codex du site les livre : un modèle SANS
+        // élément, et leurs textures sous les noms du jeu. En cube, l'eau
+        // serait un mur OPAQUE — et `Terrain`, qui en porte dans chaque
+        // section, n'aurait jamais fait passer la coque par les fluides.
+        if let Some(alpha) = opacite_du_fluide(nom) {
+            let modele =
+                format!(r##"{{"textures":{{"particle":"minecraft:block/{nom}_still"}}}}"##);
+            ecrire(
+                racine,
+                &format!("models/block_{nom}.json"),
+                modele.as_bytes(),
+            );
+            for t in ["still", "flow"] {
+                let feuille = format!("{nom}_{t}");
+                ecrire(
+                    racine,
+                    &format!("render-textures/block_{feuille}.png"),
+                    &tuile_alpha(&feuille, 16, alpha),
+                );
+            }
+            continue;
+        }
         ecrire(
             racine,
             &format!("models/block_{nom}.json"),
@@ -247,6 +275,15 @@ pub fn codex(racine: &Path, extras: &[&str]) -> String {
     etats.push('}');
     ecrire(racine, "blockstates.json", etats.as_bytes());
     racine.to_str().expect("chemin lisible").to_string()
+}
+
+/// L'opacité des textures d'un fluide, ou `None` si ce n'en est pas un.
+fn opacite_du_fluide(nom: &str) -> Option<u8> {
+    match nom {
+        "water" => Some(180),
+        "lava" => Some(255),
+        _ => None,
+    }
 }
 
 /// Sème un monde d'essai : `cote × cote` régions de terrain, avec biomes.
@@ -401,6 +438,33 @@ pub fn montre_modeles(o: &Ouvert, c: &[u32]) -> Vec<([u32; 4], u32, u64)> {
         })
         .collect();
     v.sort_unstable();
+    v
+}
+
+/// **Ce que la passe de FLUIDES dessine** : chaque face par sa géométrie, ses
+/// hauteurs, son courant, sa teinte, l'origine de sa section et le NOM de sa
+/// texture — les mêmes raisons que `montre`, et les trous sautés de même.
+pub fn montre_fluides(o: &Ouvert, c: &[u32]) -> Vec<(u32, u32, u32, u32, [u32; 4], String)> {
+    let origines = o.monde.arene.origines();
+    let mut v: Vec<(u32, u32, u32, u32, [u32; 4], String)> = o
+        .monde
+        .fluides
+        .visibles()
+        .map(|i| {
+            let couche = (i.couche_angle & 0xFFFF) as usize;
+            let nom = c
+                .get(couche)
+                .and_then(|_| o.monde.atlas.couches.get(couche))
+                .map(|x| x.nom.clone())
+                .unwrap_or_default();
+            let org = origines
+                .get(i.section as usize)
+                .map(|p| p.position.map(|f| f.to_bits()))
+                .unwrap_or([0; 4]);
+            (i.geo, i.hauteurs, i.couche_angle >> 16, i.teinte, org, nom)
+        })
+        .collect();
+    v.sort();
     v
 }
 

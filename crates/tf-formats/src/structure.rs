@@ -28,7 +28,7 @@ use crate::{
 /// Au-delà de 128³ cases, un `.nbt` ne sert plus à rien qu'à attendre.
 ///
 /// Une LISTE de blocs coûte une trentaine d'octets par case, air compris.
-/// Mesuré (`--example mesurer`) sur 12,6 millions de cases : 6,9 s pour
+/// Mesuré (`--example formats`) sur 12,6 millions de cases : 6,9 s pour
 /// écrire, 4,9 s pour relire, 32,6 Mo — là où `.schem` fait le même
 /// extrait en 0,3 s et 1 Mo. Un bloc de structure n'en sauve de toute façon
 /// pas plus de 48 × 48 × 48 ; pour un build entier, `.schem` et

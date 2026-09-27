@@ -738,7 +738,7 @@ fn les_deux_arenes_designent_la_meme_section() {
         faces_de(c, &blanc(c.len()))
     });
 
-    assert!(!arene.instances.is_empty() && !modeles.poses.is_empty());
+    assert!(!arene.instances().is_empty() && !modeles.poses.is_empty());
     let origines = tf_render::origines(&chantier);
     assert_eq!(
         arene.origines(),
@@ -755,7 +755,7 @@ fn les_deux_arenes_designent_la_meme_section() {
         "la pose désigne l'origine de SON chunk, pas celle du lot précédent"
     );
     // Et le cube est bien dans l'autre.
-    let q = arene.instances[0];
+    let q = arene.instances()[0];
     let o = origines[q.section as usize].position;
     assert_eq!([o[0], o[2]], [0.0, 0.0]);
 }
@@ -826,7 +826,7 @@ fn deux_biomes_donnent_deux_teintes_dans_l_arene() {
     );
 
     let teintes: std::collections::BTreeSet<u32> =
-        arene.instances.iter().map(|i| i.teinte).collect();
+        arene.instances().iter().map(|i| i.teinte).collect();
     assert_eq!(
         teintes.len(),
         2,
@@ -1527,7 +1527,14 @@ fn comme_une_neuve(
         cible: centre,
         ..face
     };
-    let neuve = Scene::pour(app, arene, modeles, atlas, tf_render::scene::FORMAT);
+    let neuve = Scene::pour(
+        app,
+        arene,
+        modeles,
+        &tf_render::AreneFluides::default(),
+        atlas,
+        tf_render::scene::FORMAT,
+    );
     for (nom, cam) in [("de face", face), ("de dos", dos)] {
         let cible = Cible::nouvelle(app, cote, cote);
         let (a, ca) = suivie.rendre(&cible, &cam);
@@ -1582,7 +1589,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
         faces_de(c, &blanc(c.len()))
     });
     let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "départ");
     let grandi = scene.agrandissements();
 
@@ -1607,7 +1618,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
         arrivees.push((cx, cz));
     }
     refaire_colonnes(&g, &t, &mut arene, &mut modeles, &arrivees);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     assert!(
         scene.agrandissements() >= grandi + 4,
         "la prémisse : les quatre tampons ont dû grandir ({} → {})",
@@ -1624,7 +1639,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     g.retirer((7, 1, 0));
     g.retirer((3, 1, 0));
     refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(7, 1), (3, 1)]);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     assert_eq!(
         scene.agrandissements(),
         avant,
@@ -1636,7 +1655,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     g.poser(2, 0, colonne(2, 0, 4, 3));
     g.poser(3, 1, colonne(3, 1, 7, 2));
     refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(2, 0), (3, 1)]);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "changement");
 
     // **Une PETITE croissance** : deux colonnes de plus, les poses grandissent
@@ -1647,7 +1670,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     g.poser(8, 0, colonne(8, 0, 2, 3));
     g.poser(8, 1, colonne(8, 1, 2, 3));
     refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(8, 0), (8, 1)]);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     let marge = scene.capacites()[3] / 16;
     assert!(
         (modeles.poses.len() as u64) < marge && marge > p,
@@ -1664,7 +1691,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
     let (avant, p) = (scene.capacites()[3], modeles.poses.len());
     g.poser(9, 1, colonne(9, 1, 6, 3));
     refaire_colonnes(&g, &t, &mut arene, &mut modeles, &[(9, 1)]);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     assert!(
         scene.capacites()[3] == avant && modeles.poses.len() > p,
         "la prémisse : des poses en plus, dans la marge ({p} → {}, {} → {} octets)",
@@ -1685,7 +1716,11 @@ fn une_scene_synchronisee_dessine_ce_que_dessine_une_scene_neuve() {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "rechargement");
 }
 
@@ -1711,7 +1746,11 @@ fn une_scene_ne_montre_jamais_ce_qu_elle_n_a_pas_recu() {
     arene.prendre_sales();
     modeles.prendre_sales();
     let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
-    scene.synchroniser(&mut arene, &mut modeles);
+    scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     comme_une_neuve(&app, &scene, &arene, &modeles, &atlas, "sales déjà prises");
 }
 
@@ -1733,14 +1772,22 @@ fn synchroniser_n_envoie_que_ce_qui_a_change() {
         faces_de(c, &blanc(c.len()))
     });
     let mut scene = Scene::vide(&app, &atlas, tf_render::scene::FORMAT);
-    let tout = scene.synchroniser(&mut arene, &mut modeles);
+    let tout = scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     let attendu = arene.octets() + std::mem::size_of_val(arene.origines()) + modeles.octets();
     assert_eq!(
         tout as usize, attendu,
         "la première fois, tout part — une fois"
     );
     assert_eq!(
-        scene.synchroniser(&mut arene, &mut modeles),
+        scene.synchroniser(
+            &mut arene,
+            &mut modeles,
+            &mut tf_render::AreneFluides::default()
+        ),
         0,
         "rien n'a changé, rien ne part"
     );
@@ -1767,7 +1814,11 @@ fn synchroniser_n_envoie_que_ce_qui_a_change() {
         let c = t.cuboides(s);
         faces_de(c, &blanc(c.len()))
     });
-    let envoyes = scene.synchroniser(&mut arene, &mut modeles);
+    let envoyes = scene.synchroniser(
+        &mut arene,
+        &mut modeles,
+        &mut tf_render::AreneFluides::default(),
+    );
     let section_neuve = neufs.octets();
     assert!(envoyes > 0, "la section changée part");
     assert!(

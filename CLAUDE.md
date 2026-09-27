@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1106 tests aujourd’hui)
+cargo test            # tous les crates (1140 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -331,7 +331,7 @@ cargo run --release -p tf-app -- ../titisite/public/codex --capture concep.png -
 # d'arrivée. Le format se reconnaît au CONTENU, jamais à l'extension
 cargo run --release -p tf-app -- ../titisite/public/codex --capture coller.png --importer porte.litematic
 cargo run --release -p tf-formats --example lire -- porte.litematic
-cargo run --release -p tf-formats --example mesurer
+cargo run --release -p tf-formats --example formats
 cargo bench -p tf-bench -- --save-baseline v0   # figer la référence
 cargo bench -p tf-bench -- --baseline v0        # comparer
 
@@ -386,10 +386,15 @@ crates/
                structure ✅ — entre un fichier et le presse-papiers ; le
                .schematic d'avant 1.13 est refusé et NOMMÉ
   tf-assets/   packs ✅ · modèles ✅ · textures ✅ · atlas ✅ · .jar + launcher ✅
-               couleurs de biome DÉRIVÉES du jeu ✅
+               couleurs de biome DÉRIVÉES du jeu ✅ · FLUIDES ✅ (lus dans
+               l'ÉTAT : `level`, `waterlogged`, le varech — le pack n'en dit rien)
   tf-mesh/     glouton ✅ · modèles ✅ · instances ✅ · teinte par BIOME ✅
-               (gloutonne ET modèles) · AO, LOD à venir
-  tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅ · indirect, HZB
+               (gloutonne ET modèles) · FLUIDES ✅ (la passe du jeu, croisée à
+               une référence indépendante ; le remaillage lit en DIAGONALE)
+               · AO, LOD à venir
+  tf-render/   wgpu : arène ✅ · hors écran ✅ · modèles ✅ · teinte ✅
+               · fluides ✅ (lave opaque, eau translucide après le reste)
+               · indirect, HZB
                pilotage ✅ : le JOUEUR est le point fixe (pur, sans écran)
                viser ✅ : quel bloc, quelle FACE sous le curseur
                quadrillage ✅ : un calque de lignes, chunks et .mca,
@@ -479,6 +484,8 @@ couvriront le même terrain.
 | Un champ au document des composants | `Projet::encoder` / `lire_definition` / `lire_instance`, À LA FIN du blob de la définition ou de l'instance — c'est ce que l'enveloppe permet. Un champ qui change le SENS du document demande une version de plus : `decoder` refuse ce qui est plus récent que lui |
 | Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
 | Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas. Côté coque, son dossier dans `dossier_par_defaut` (`tf-app/src/etat.rs`, le compilateur l'exige) : là où l'outil qui le lit le CHERCHE. Son extension, l'export et la liste d'import la tirent de `Format::extension` |
+| Un bloc plein d'eau SANS propriété qui le dise | `TOUJOURS_INONDES` (`tf-assets/src/fluides.rs`). Un bloc qui porte `waterlogged` — `minefield:*` compris — n'a rien à y faire : l'état le dit |
+| Une chose que la surface d'un fluide LIT (une case de plus, un voisin de plus) | d'abord la référence indépendante (`tf-mesh/tests/fluides.rs`, qui transcrit le jeu), puis la passe (`fluides.rs`) : c'est leur croisement qui tranche. Si elle lit à plus d'UN bloc, `voisines_fluides` (`chantier.rs`) doit s'élargir d'autant — les deux tests de remaillage avec de l'eau rougiront sinon |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
 
 ## Pièges déjà rencontrés
@@ -2292,3 +2299,48 @@ propres à ce dépôt.
   12,6 millions de cases, contre 0,3 s et 1 Mo en `.schem`. Le format n'a pas
   été fait pour un build entier, et son plafond (128³) le dit au lieu de
   laisser l'utilisateur attendre.
+- **Un masque appliqué AVANT un décalage mange la peau.** La passe de fluides
+  tient ses cases par rangées de dix-huit bits, peau comprise ; décaler une
+  rangée déjà réduite à ses cases INTÉRIEURES faisait lire du vide au voisin
+  de bord, et toutes les faces ±X au bord d'une section sortaient fausses. Le
+  masque s'applique au résultat, jamais à ce qu'on décale. Trouvé par le
+  croisement avec une référence qui transcrit le jeu case par case et ne
+  partage rien avec la passe — 252 616 faces sur soixante mondes. Un cas écrit
+  à la main ne l'aurait pas vu : il tombe au milieu d'une section.
+- **La règle par PALETTE ramenait le rechargement de zone.** Une section
+  voisine « porte de l'eau quelque part » : gratuit à savoir, et sur `Terrain`
+  vrai de toutes. La règle remaillait donc les vingt-six voisines de chaque
+  édition — **60 sections au lieu de 11** pour les deux bouts d'un
+  déplacement, le défaut même que ce dépôt traque, revenu par la porte des
+  fluides. La surface ne lit qu'à UN bloc : on regarde la BANDE de la voisine
+  qui tombe dans la boîte élargie d'un bloc, case par case, et seulement si
+  sa palette porte un fluide. Un raccourci gratuit mais faux d'un facteur six
+  n'est pas un raccourci.
+- **Une section noyée rend un lot VIDE, pas `None`.** Rien qu'un fluide, et
+  le même sur ses six faces : elle ne peut rien produire, et la sauter en
+  O(1) évite trois passes pour rien. Mais la PRÉSENCE d'un lot ne dépendait
+  jusque-là que de la palette de SA section ; la noyade, elle, dépend de
+  celles des voisines — qu'une édition loin de leur frontière change sans
+  faire remailler celle-ci. Rendre `None` aurait laissé la scène sans lot là
+  où un rechargement complet en aurait mis un vide. Un raccourci doit rendre
+  EXACTEMENT ce que le chemin lent rend, forme comprise ; et puisque le
+  résultat est le même avec ou sans lui, c'est ce qu'il n'a pas LU qui prouve
+  qu'il est pris — le test compte les lectures d'opacité.
+- **Le codex des tests déclarait l'eau comme un CUBE.** Tous les tests de la
+  coque tournaient donc avec une eau opaque : la passe de fluides n'y voyait
+  que de l'eau contre de l'air, et `Terrain` — qui en sème dans chaque
+  section — ne découvrait jamais la roche autour. Déclarée comme le jeu la
+  livre, sans élément, elle a fait passer `Terrain` de 23 à 59,8 Mo résidents
+  au vol : ses cases d'eau isolées découvrent chacune six faces de pierre.
+  C'est le piège du pack de démonstration d'`ExeWorldEdit` — il doit
+  reproduire le cas DIFFICILE — et c'est aussi un rappel que `Terrain` ne
+  mesure pas le rendu.
+- **La commande documentée faisait SAUTER le test qu'elle devait lancer.**
+  `TF_PACK=../titisite/public/codex cargo test -p tf-assets --test codex_reel`
+  : cargo lance un test depuis le dossier de SON crate, où ce chemin relatif
+  ne désigne rien. Le test se disait « TF_PACK non défini » — il l'était — et
+  passait au vert sans avoir rien lu, depuis toujours. Un chemin donné mais
+  illisible fait maintenant échouer le test en le nommant, et un chemin
+  relatif se lit aussi depuis la racine du dépôt, comme la documentation
+  l'écrit. Un test qui ne tourne pas ne dit rien ; un test qui dit qu'il ne
+  PEUT pas tourner alors qu'on le lui a demandé ment.

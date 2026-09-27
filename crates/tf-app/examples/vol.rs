@@ -160,6 +160,7 @@ impl CoteGpu<'_> {
                     self.app,
                     &o.monde.arene,
                     &o.monde.modeles,
+                    &o.monde.fluides,
                     &atlas,
                     tf_render::scene::FORMAT,
                 );
@@ -173,8 +174,11 @@ impl CoteGpu<'_> {
                         .changer_atlas(&monter_atlas(self.app, &o.monde.atlas));
                     self.atlas = cle;
                 }
-                self.scene
-                    .synchroniser(&mut o.monde.arene, &mut o.monde.modeles)
+                self.scene.synchroniser(
+                    &mut o.monde.arene,
+                    &mut o.monde.modeles,
+                    &mut o.monde.fluides,
+                )
             }
         }
     }
@@ -207,7 +211,11 @@ fn voler(
             &monter_atlas(app, &o.monde.atlas),
             tf_render::scene::FORMAT,
         );
-        scene.synchroniser(&mut o.monde.arene, &mut o.monde.modeles);
+        scene.synchroniser(
+            &mut o.monde.arene,
+            &mut o.monde.modeles,
+            &mut o.monde.fluides,
+        );
         CoteGpu {
             app,
             scene,

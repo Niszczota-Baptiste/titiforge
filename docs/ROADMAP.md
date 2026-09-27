@@ -650,11 +650,20 @@ Minecraft ne sait faire, et c'est la raison d'être du projet.
 ## Phase 8 — Finitions du rendu
 
 Ce qui a été laissé de côté sciemment, chiffré : les **fluides** (4,5 % des
-blocs posés de Mosslorn, dont 6,2 M d'eau, aujourd'hui invisibles), les
-**biomes** décodés pour la vraie teinte, l'**occlusion ambiante**, `uvlock`,
-le **LOD** par octree de région, et l'occlusion HZB. Et la découpe des lignes
-du calque dans le shader de sommets, si le calque dépasse quelques milliers
-de segments : aujourd'hui au processeur, ≈ 33 ns par segment et par image.
+blocs posés de Mosslorn, dont 6,2 M d'eau), les **biomes** décodés pour la
+vraie teinte, l'**occlusion ambiante**, `uvlock`, le **LOD** par octree de
+région, et l'occlusion HZB. Et la découpe des lignes du calque dans le shader
+de sommets, si le calque dépasse quelques milliers de segments : aujourd'hui
+au processeur, ≈ 33 ns par segment et par image.
+
+| Morceau | État |
+|---|---|
+| Les biomes décodés, la teinte par case | ✅ (phase 2) |
+| **Les fluides** — eau, lave, blocs inondés | ✅ une troisième passe sur les règles du jeu (`LiquidBlockRenderer`), croisée à une référence INDÉPENDANTE sur 252 616 faces ; la lave opaque, l'eau translucide après le reste, deux appels de dessin de plus seulement quand il y en a ; le remaillage lit en DIAGONALE — à la case, pas à la palette, sinon 60 sections au lieu de 11 — et une section noyée ne coûte rien. Restent : le tri de l'eau d'arrière en avant, l'animation, le voile contre le verre (absent du codex), l'eau d'un bloc inondé contre sa propre forme (`docs/ETAT.md`, § 7) |
+| L'occlusion ambiante | à faire — elle lira les DIAGONALES des blocs : le test qui croise la croix avec un remaillage complet rougira ce jour-là, et le remède est `sections_autour`, pas un test qu'on fait taire |
+| `uvlock` | à faire |
+| Le LOD par octree de région | à faire |
+| L'occlusion HZB, le rendu indirect | à faire |
 
 > **Sortie.** 60 FPS à un rayon de 4 000 blocs. Sous terre, < 3 % des sections
 > résidentes effectivement dessinées.

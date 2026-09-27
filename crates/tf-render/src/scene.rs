@@ -16,6 +16,7 @@ use wgpu::util::DeviceExt;
 
 use crate::arene::Arene;
 use crate::camera::{Camera, CameraGpu};
+use crate::fluides::{AreneFluides, InstanceFluide};
 use crate::modeles::{AreneModeles, FaceModele, Origine, Pose};
 use crate::Appareil;
 
@@ -58,6 +59,8 @@ pub struct Scene {
     instances: Tampon,
     nombre: u32,
     modeles: PasseModeles,
+    /// L'eau et la lave : deux pipelines sur les mêmes instances.
+    fluides: PasseFluides,
     /// Le QUADRILLAGE — chunks, `.mca`, sélection. Absent par défaut : une
     /// scène qui n'en demande pas n'en paie pas.
     lignes: Option<PasseLignes>,
@@ -103,6 +106,22 @@ struct PasseModeles {
     nb_poses: usize,
     /// Nombre de FACES à dessiner — une instance chacune, trous compris.
     a_dessiner: u32,
+}
+
+/// Ce que la passe des fluides tient au GPU.
+///
+/// **Deux pipelines pour les mêmes instances.** La lave est opaque : elle
+/// écrit la profondeur, avec les blocs. L'eau est translucide : elle passe
+/// APRÈS tout ce qui est opaque, se mélange à ce qu'elle recouvre et n'écrit
+/// pas la profondeur — sinon une surface d'eau cacherait le fond du lac
+/// qu'elle recouvre, ou le cacherait à moitié selon l'ordre des faces. Chaque
+/// pipeline écrase en trou ce qui n'est pas à lui : un appel chacun, et une
+/// seule arène à tenir.
+struct PasseFluides {
+    opaque: wgpu::RenderPipeline,
+    translucide: wgpu::RenderPipeline,
+    instances: Tampon,
+    nombre: u32,
 }
 
 /// Un tampon GPU qui GRANDIT sans repartir de zéro.
@@ -184,6 +203,7 @@ struct Sales {
     instances: Vec<(u32, u32)>,
     origines: Vec<(u32, u32)>,
     poses: Vec<(u32, u32)>,
+    fluides: Vec<(u32, u32)>,
     /// Début de la queue de `faces` à envoyer.
     faces_depuis: usize,
 }
@@ -236,14 +256,15 @@ impl Scene {
         Scene::avec_modeles(app, arene, &AreneModeles::default(), atlas)
     }
 
-    /// La scène complète : les cubes gloutons ET les blocs-modèles.
+    /// Les cubes gloutons ET les blocs-modèles — SANS fluides : une scène
+    /// qui porte de l'eau passe par [`Scene::pour`].
     pub fn avec_modeles(
         app: &Appareil,
         arene: &Arene,
         modeles: &AreneModeles,
         atlas: &AtlasGpu,
     ) -> Scene {
-        Scene::pour(app, arene, modeles, atlas, FORMAT)
+        Scene::pour(app, arene, modeles, &AreneFluides::default(), atlas, FORMAT)
     }
 
     /// La même, pour un format de cible donné, remplie d'un coup.
@@ -255,6 +276,7 @@ impl Scene {
         app: &Appareil,
         arene: &Arene,
         modeles: &AreneModeles,
+        fluides: &AreneFluides,
         atlas: &AtlasGpu,
         format: wgpu::TextureFormat,
     ) -> Scene {
@@ -263,9 +285,10 @@ impl Scene {
             instances: vec![(0, arene.len() as u32)],
             origines: vec![(0, arene.origines().len() as u32)],
             poses: vec![(0, modeles.poses.len() as u32)],
+            fluides: vec![(0, fluides.len() as u32)],
             faces_depuis: 0,
         };
-        s.envoyer(arene, modeles, tout);
+        s.envoyer(arene, modeles, fluides, tout);
         s
     }
 
@@ -397,6 +420,8 @@ impl Scene {
 
         let modeles =
             PasseModeles::nouvelle(&device, &disposition_commune, &disposition_origines, format);
+        let fluides =
+            PasseFluides::nouvelle(&device, &disposition_commune, &disposition_origines, format);
 
         Scene {
             appareil: device,
@@ -412,6 +437,7 @@ impl Scene {
             instances,
             nombre: 0,
             modeles,
+            fluides,
             lignes: None,
             format,
             envoyes: 0,
@@ -428,9 +454,15 @@ impl Scene {
     /// synchronisation l'envoie en entier sans rien avoir à deviner.
     ///
     /// Rend les octets envoyés par cet appel.
-    pub fn synchroniser(&mut self, arene: &mut Arene, modeles: &mut AreneModeles) -> u64 {
+    pub fn synchroniser(
+        &mut self,
+        arene: &mut Arene,
+        modeles: &mut AreneModeles,
+        fluides: &mut AreneFluides,
+    ) -> u64 {
         let (mut instances, emplacements) = arene.prendre_sales();
         let (mut poses, faces_depuis) = modeles.prendre_sales();
+        let mut plages_fluides = fluides.prendre_sales();
         let mut origines = en_plages(&emplacements);
         // **Ce que le GPU n'a jamais tenu est sale, quoi que disent les
         // arènes.** Au-delà de l'ancienne longueur, le tampon porte au mieux
@@ -439,30 +471,45 @@ impl Scene {
         ajouter_queue(&mut instances, self.nombre as usize, arene.len());
         ajouter_queue(&mut origines, self.nb_origines, arene.origines().len());
         ajouter_queue(&mut poses, self.modeles.nb_poses, modeles.poses.len());
+        ajouter_queue(
+            &mut plages_fluides,
+            self.fluides.nombre as usize,
+            fluides.len(),
+        );
         let faces_depuis = faces_depuis.min(self.modeles.nb_faces);
         self.envoyer(
             arene,
             modeles,
+            fluides,
             Sales {
                 instances,
                 origines,
                 poses,
+                fluides: plages_fluides,
                 faces_depuis,
             },
         )
     }
 
     /// Envoie les plages dites, en agrandissant d'abord ce qui doit l'être.
-    fn envoyer(&mut self, arene: &Arene, modeles: &AreneModeles, s: Sales) -> u64 {
+    fn envoyer(
+        &mut self,
+        arene: &Arene,
+        modeles: &AreneModeles,
+        fluides: &AreneFluides,
+        s: Sales,
+    ) -> u64 {
         const QUAD: usize = std::mem::size_of::<crate::arene::InstanceQuad>();
         const ORIGINE: usize = std::mem::size_of::<Origine>();
         const FACE: usize = std::mem::size_of::<FaceModele>();
         const POSE: usize = std::mem::size_of::<Pose>();
+        const FLUIDE: usize = std::mem::size_of::<InstanceFluide>();
         let device = self.appareil.clone();
         let queue = self.queue.clone();
 
         let (n, o) = (arene.len(), arene.origines().len());
         let (f, p) = (modeles.faces.len(), modeles.poses.len());
+        let nf = fluides.len();
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("agrandir la scène"),
         });
@@ -492,6 +539,12 @@ impl Scene {
                 (p * POSE) as u64,
                 (m.nb_poses * POSE) as u64,
             ),
+            self.fluides.instances.assurer(
+                &device,
+                &mut enc,
+                (nf * FLUIDE) as u64,
+                self.fluides.nombre as u64 * FLUIDE as u64,
+            ),
         ];
         if grandi.iter().any(|&g| g) {
             // **La copie part AVANT les écritures.** `write_buffer` s'exécute
@@ -509,11 +562,12 @@ impl Scene {
         self.ecritures += (s.instances.len()
             + s.origines.len()
             + s.poses.len()
+            + s.fluides.len()
             + usize::from(s.faces_depuis < f)) as u64;
         let mut envoyes = 0u64;
         for &(d, k) in &s.instances {
             let fin = (d as usize + k as usize).min(n);
-            for (i, t) in arene.instances.plage(d as usize, fin) {
+            for (i, t) in arene.instances().plage(d as usize, fin) {
                 envoyes += self.instances.ecrire(&queue, i, t);
             }
         }
@@ -536,6 +590,12 @@ impl Scene {
                 envoyes += m.poses.ecrire(&queue, i, t);
             }
         }
+        for &(d, k) in &s.fluides {
+            let fin = (d as usize + k as usize).min(nf);
+            for (i, t) in fluides.instances().plage(d as usize, fin) {
+                envoyes += self.fluides.instances.ecrire(&queue, i, t);
+            }
+        }
         // Les poses sont liées à leur taille EXACTE : la liaison se refait
         // dès que leur nombre change, pas seulement quand le tampon grandit.
         if grandi[2] || grandi[3] || p != m.nb_poses {
@@ -544,6 +604,7 @@ impl Scene {
 
         self.nombre = n as u32;
         self.nb_origines = o;
+        self.fluides.nombre = nf as u32;
         m.nb_faces = f;
         m.nb_poses = p;
         m.a_dessiner = modeles.faces_a_dessiner;
@@ -658,6 +719,20 @@ impl Scene {
             passe.draw(0..6, 0..m.a_dessiner);
         }
 
+        // Les fluides : la lave avec la profondeur, puis l'eau par-dessus
+        // TOUT ce qui est opaque — c'est ce qui laisse voir le fond d'un lac
+        // à travers sa surface.
+        let fl = &self.fluides;
+        if fl.nombre > 0 {
+            passe.set_vertex_buffer(0, fl.instances.buf.slice(..));
+            passe.set_bind_group(0, &self.commune, &[]);
+            passe.set_bind_group(1, &self.liaison_origines, &[]);
+            passe.set_pipeline(&fl.opaque);
+            passe.draw(0..6, 0..fl.nombre);
+            passe.set_pipeline(&fl.translucide);
+            passe.draw(0..6, 0..fl.nombre);
+        }
+
         // **Le quadrillage passe en DERNIER, et sans test de
         // profondeur.** Un repère qui disparaît derrière le mur qu'on est
         // en train d'aligner n'est pas un repère : c'est un calque, il se
@@ -740,8 +815,9 @@ impl Scene {
         Compte {
             appels_de_dessin: 1
                 + u32::from(self.modeles.a_dessiner > 0)
+                + 2 * u32::from(self.fluides.nombre > 0)
                 + u32::from(self.lignes.as_ref().is_some_and(|l| l.nombre.get() > 0)),
-            instances: self.nombre + self.modeles.a_dessiner,
+            instances: self.nombre + self.modeles.a_dessiner + 2 * self.fluides.nombre,
         }
     }
 
@@ -911,6 +987,81 @@ impl PasseModeles {
             poses,
             nb_poses: 0,
             a_dessiner: 0,
+        }
+    }
+}
+
+impl PasseFluides {
+    fn nouvelle(
+        device: &wgpu::Device,
+        commune: &wgpu::BindGroupLayout,
+        origines: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+    ) -> PasseFluides {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fluides"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("fluides.wgsl").into()),
+        });
+        let agencement = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fluides"),
+            bind_group_layouts: &[commune, origines],
+            push_constant_ranges: &[],
+        });
+        let tampon = [wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceFluide>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![
+                0 => Uint32, 1 => Uint32, 2 => Uint32, 3 => Unorm8x4, 4 => Uint32
+            ],
+        }];
+        let pipeline = |nom: &str, vs: &str, fs: &str, translucide: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(nom),
+                layout: Some(&agencement),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: vs,
+                    compilation_options: Default::default(),
+                    buffers: &tampon,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: fs,
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: translucide.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    // Une surface d'eau se voit des DEUX côtés : d'en dessous,
+                    // on regarde le ciel à travers elle. Le jeu dessine la
+                    // face à l'envers en plus ; ici, rien n'est trié.
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: PROFONDEUR,
+                    // L'eau n'écrit pas la profondeur : une face d'eau
+                    // dessinée avant une autre la cacherait selon l'ordre
+                    // des instances, pas selon la distance.
+                    depth_write_enabled: !translucide,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        PasseFluides {
+            opaque: pipeline("lave", "vs_opaque", "fs_opaque", false),
+            translucide: pipeline("eau", "vs_translucide", "fs_translucide", true),
+            instances: Tampon::vide(device, "fluides", wgpu::BufferUsages::VERTEX),
+            nombre: 0,
         }
     }
 }

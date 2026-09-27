@@ -167,10 +167,11 @@ fn main() {
         }
     };
     println!(
-        "scène : {} · {} quads, {} poses{}",
+        "scène : {} · {} quads, {} poses, {} faces de fluide{}",
         ouvert.monde.quoi,
         ouvert.monde.quads,
         ouvert.monde.poses,
+        ouvert.monde.faces_fluides,
         if ouvert.editable() {
             " · éditable (copie de travail)"
         } else {
@@ -394,7 +395,14 @@ fn capturer(
         m.atlas.len() as u32,
         &m.atlas.pyramide(),
     );
-    let mut sc = Scene::avec_modeles(&app, &m.arene, &m.modeles, &atlas);
+    let mut sc = Scene::pour(
+        &app,
+        &m.arene,
+        &m.modeles,
+        &m.fluides,
+        &atlas,
+        tf_render::scene::FORMAT,
+    );
 
     let camera = etat.vue.camera(&modele_camera(m));
     etat.relever_reticule(&camera, aspect, 256.0, &m.solide());

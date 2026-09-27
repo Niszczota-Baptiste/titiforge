@@ -784,7 +784,8 @@ fn regarnir(g: &mut Gpu, o: &mut scene::Ouvert) {
     }
     let t = std::time::Instant::now();
     let m = &mut o.monde;
-    g.scene.synchroniser(&mut m.arene, &mut m.modeles);
+    g.scene
+        .synchroniser(&mut m.arene, &mut m.modeles, &mut m.fluides);
     tf_app::scene::phase("gpu", t);
 }
 
@@ -841,7 +842,11 @@ fn preparer(f: &Arc<Window>, o: &mut scene::Ouvert) -> Result<Gpu, String> {
         &monter_atlas(&appareil, &o.monde.atlas),
         config.format,
     );
-    scene.synchroniser(&mut o.monde.arene, &mut o.monde.modeles);
+    scene.synchroniser(
+        &mut o.monde.arene,
+        &mut o.monde.modeles,
+        &mut o.monde.fluides,
+    );
     let atlas_monte = cle_atlas(o);
     let m = &o.monde;
     let egui = egui::Context::default();

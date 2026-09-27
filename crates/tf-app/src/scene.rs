@@ -7,7 +7,7 @@
 
 use tf_anvil::{Interner, StateId};
 use tf_mesh::{Grille, TableFormes};
-use tf_render::{Arene, AreneModeles, Lignes};
+use tf_render::{Arene, AreneFluides, AreneModeles, Lignes};
 use tf_world::coords::BlockPos;
 use tf_world::decoupe::{cellules_autour, Niveau};
 
@@ -197,12 +197,17 @@ pub struct Monde {
     pub table: std::sync::Arc<TableFormes>,
     pub arene: Arene,
     pub modeles: AreneModeles,
+    /// L'eau et la lave, à leur place — les mêmes emplacements que l'arène
+    /// des quads.
+    pub fluides: AreneFluides,
     pub atlas: tf_assets::Atlas,
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub quoi: String,
     pub quads: usize,
     pub poses: usize,
+    /// Les faces d'eau et de lave de la scène.
+    pub faces_fluides: usize,
     /// Le maillage, gardé LOT PAR LOT et indexé par section.
     ///
     /// C'est ce qui rend le remaillage incrémental possible : on remplace les
@@ -419,17 +424,24 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
 
     let chantier = grille.mailler_parallele(&table);
     let (arene, modeles) = arenes(&chantier, &table, &habillage, &interner, climat);
+    let fluides = AreneFluides::depuis(
+        &chantier,
+        arene.emplacements(),
+        &apparence_fluide(&atlas, &interner, climat, teintes),
+    );
 
     let (min, max) = arene.bornes().unwrap_or(([0.0; 3], [64.0; 3]));
     Ok(Monde {
         quads: chantier.quads(),
         poses: chantier.poses(),
+        faces_fluides: chantier.fluides(),
         maillages: tf_mesh::Maillages::depuis(chantier),
         quoi,
         grille,
         table: std::sync::Arc::new(table),
         arene,
         modeles,
+        fluides,
         atlas,
         min,
         max,
@@ -482,6 +494,31 @@ fn teinte_de(
         tf_assets::GenreTeinte::Aucune => None,
     }?;
     Some(tf_assets::apparence::teinte_finale(c))
+}
+
+/// **L'habillage d'une face de FLUIDE** : sa couche d'atlas, et pour l'eau la
+/// couleur de son biome — le défaut du jeu quand le biome ne dit rien.
+///
+/// Écrite une fois pour le chargement et le remaillage, comme `apparence` :
+/// deux copies finiraient par colorer l'eau d'un lac différemment selon
+/// qu'on vient de l'ouvrir ou d'y poser un bloc.
+fn apparence_fluide<'a>(
+    atlas: &'a tf_assets::Atlas,
+    interner: &'a Interner,
+    climat: &'a tf_assets::climat::Climat,
+    teintes: &'a tf_assets::Teintes,
+) -> impl Fn(tf_mesh::GenreFluide, tf_mesh::TextureFluide, StateId) -> (u32, [f32; 3]) + 'a {
+    move |genre, texture, biome| {
+        let couche = tf_assets::fluides::couche(atlas, genre, texture);
+        let teinte = match genre {
+            tf_mesh::GenreFluide::Eau => {
+                teinte_de(interner, climat, tf_assets::GenreTeinte::Eau, biome)
+                    .unwrap_or_else(|| tf_assets::apparence::teinte_finale(teintes.eau))
+            }
+            tf_mesh::GenreFluide::Lave => [1.0; 3],
+        };
+        (couche, teinte)
+    }
 }
 
 fn arenes(
@@ -1094,6 +1131,24 @@ impl Ouvert {
         if visees.is_empty() {
             return Ok(());
         }
+        // **Les voisines qui portent du FLUIDE**, arêtes et coins compris : la
+        // surface d'un lac lit en diagonale. Elles se REMAILLENT sans se
+        // relire — l'édition ne les a pas touchées, seule leur surface peut
+        // changer. Là où il n'y a pas d'eau, la liste est vide et rien ne
+        // coûte de plus.
+        let mut fluides: Vec<tf_mesh::Adresse> = zones
+            .iter()
+            .flat_map(|b| {
+                self.monde.grille.voisines_fluides(
+                    [b.min.x, b.min.y, b.min.z],
+                    [b.max.x, b.max.y, b.max.z],
+                    &*self.monde.table,
+                )
+            })
+            .filter(|a| visees.binary_search(a).is_err())
+            .collect();
+        fluides.sort_unstable();
+        fluides.dedup();
         // **On relit ce que la scène PORTE, là où l'édition a eu lieu** : les
         // visées dont la cellule est résidente — la zone d'ouverture l'est
         // aussi, elle y est inscrite. La lecture était serrée sur la ZONE,
@@ -1168,6 +1223,8 @@ impl Ouvert {
         // Le poids des cellules éditées change — leurs sections comme leur
         // maillage : `appliquer` les repèse. Sans cette repesée, la fenêtre
         // de résidence dériverait à chaque geste d'édition.
+        visees.extend(fluides.into_iter().filter(|a| self.porte(a)));
+        visees.sort_unstable();
         self.refaire(&visees, connus);
         Ok(())
     }
@@ -1510,6 +1567,7 @@ impl Ouvert {
             if a.adresse != b.adresse
                 || a.quads.quads != b.quads.quads
                 || a.poses.poses != b.poses.poses
+                || a.fluides != b.fluides
             {
                 return Err(format!(
                     "la section {:?} ne porte pas le maillage de son contenu",
@@ -1561,11 +1619,25 @@ impl Ouvert {
             ),
         );
         phase("modèles  ", t3);
+        // Les fluides APRÈS les quads : c'est l'arène des quads qui attribue
+        // les emplacements qu'elle lit.
+        self.monde.fluides.remplacer(
+            self.monde.arene.emplacements(),
+            &visees,
+            &neufs.lots,
+            &apparence_fluide(
+                &self.monde.atlas,
+                &self.monde.interner,
+                &self.assets.climat,
+                &self.assets.teintes,
+            ),
+        );
         let t1b = std::time::Instant::now();
         self.monde.maillages.remplacer(&visees, neufs);
         phase("chantier ", t1b);
         self.monde.quads = self.monde.maillages.quads();
         self.monde.poses = self.monde.maillages.poses();
+        self.monde.faces_fluides = self.monde.maillages.fluides();
         // **La pesée vient APRÈS le maillage** — le poids ne se connaît
         // qu'alors — et l'éviction qu'elle déclenche part au prochain appel :
         // voir `a_degager`.

@@ -14,7 +14,10 @@ use tf_bench::catalogue::{Forme, BLOCS};
 use tf_bench::{build, Build};
 use tf_mesh::forme::Cuboide;
 use tf_mesh::opacite::Opacite;
-use tf_mesh::{glouton, mailler, mailler_pour_gpu, modeles, Formes, TableFormes, Voisinage, COTE};
+use tf_mesh::{
+    fluides as passe_fluides, glouton, mailler, mailler_pour_gpu, modeles, Fluide, Formes,
+    GenreFluide, TableFormes, Voisinage, COTE,
+};
 
 /// Les identifiants que les scénarios partagent.
 const AIR: StateId = 0;
@@ -157,6 +160,171 @@ fn complet(c: &mut Criterion) {
     g.finish();
 }
 
+/// **La passe de FLUIDES**, sur les profils où elle travaille — et sur celui
+/// où elle ne devrait rien coûter.
+///
+/// Dans la vraie chaîne, une section dont la palette ne porte aucun fluide
+/// ne l'appelle même pas (`Grille::porte_du_fluide`) ; « sans fluide » mesure
+/// donc ce qu'elle coûterait si l'on s'en passait. Le nombre de faces est
+/// imprimé une fois par profil : un temps ne dit rien sans ce qu'il produit.
+fn fluides(c: &mut Criterion) {
+    let (mut t, modeles) = table();
+    let eau = |niveau| Fluide {
+        genre: GenreFluide::Eau,
+        niveau,
+    };
+    let source = t.pousser(true, false, Vec::new());
+    t.marquer_fluide(source, eau(0));
+    let courantes: Vec<StateId> = (1..8)
+        .map(|n| {
+            let id = t.pousser(true, false, Vec::new());
+            t.marquer_fluide(id, eau(n));
+            id
+        })
+        .collect();
+    // Le décor INONDÉ : les mêmes modèles, avec de l'eau dans la case.
+    let inondes: Vec<StateId> = modeles
+        .iter()
+        .map(|m| {
+            let id = t.pousser(false, false, t.cuboides(*m).to_vec());
+            t.marquer_fluide(id, eau(0));
+            id
+        })
+        .collect();
+    let f: &dyn Formes = &t;
+    let n = COTE as i32;
+
+    let mut profils: Vec<(&str, Voisinage)> = Vec::new();
+    // La salle décorée des autres passes : aucun fluide.
+    let salle = profils_sans_fluide();
+    profils.push(("sans fluide", salle));
+    // Le fond de la mer : de l'eau partout, dessus compris — aucune face.
+    let mut v = Voisinage::new();
+    v.remplir(|_, _, _| source);
+    profils.push(("fond de mer", v));
+    // Un lac : de l'eau jusqu'à mi-hauteur, de l'air au-dessus, jusque dans
+    // la peau. Un seul dessus, fusionné sur toute la section.
+    let mut v = Voisinage::new();
+    v.remplir(|_, y, _| if y < 8 { source } else { AIR });
+    profils.push(("lac", v));
+    // Une rivière en pente : des niveaux qui changent d'une case à l'autre,
+    // donc des coins tous différents et un courant partout — le pire cas de
+    // la fusion.
+    let mut v = Voisinage::new();
+    v.remplir(|x, y, z| {
+        if y < 3 {
+            CUBE
+        } else if y == 3 {
+            courantes[((x + 2 * z).rem_euclid(7)) as usize]
+        } else {
+            AIR
+        }
+    });
+    profils.push(("rivière", v));
+    // Une salle inondée : des murs, de l'eau, et du décor inondé au sol.
+    let mut k = 0usize;
+    let mut v = Voisinage::new();
+    v.remplir(|x, y, z| {
+        k = k.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let mur = x == 0 || z == 0 || y == 0 || x == n - 1 || z == n - 1;
+        if mur {
+            return CUBE;
+        }
+        if y == 1 && k % 100 < 55 {
+            return inondes[k % inondes.len()];
+        }
+        if y < 10 {
+            source
+        } else {
+            AIR
+        }
+    });
+    profils.push(("salle inondée", v));
+
+    let mut g = c.benchmark_group("fluides");
+    for (nom, v) in &profils {
+        let op = Opacite::relever(v, f);
+        let mut faces = Vec::new();
+        passe_fluides::mailler_avec(v, f, &op, &mut faces);
+        eprintln!("fluides/{nom} : {} faces", faces.len());
+        g.bench_function(format!("{nom}/passe"), |b| {
+            b.iter_batched_ref(
+                Vec::new,
+                |out| passe_fluides::mailler_avec(v, f, &op, out),
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    g.finish();
+}
+
+/// **Un océan** : de la pierre, trois sections d'eau pleine, une surface, du
+/// ciel — seize chunks de côté. Le cas qui décide ce que coûte l'eau PROFONDE,
+/// dont un monde vanilla est couvert aux deux tiers.
+fn ocean(c: &mut Criterion) {
+    use tf_anvil::{bits_for, pack, Packing, Section};
+    let mut t = TableFormes::new();
+    let air = t.pousser(true, false, Vec::new());
+    let pierre = t.pousser(false, true, Vec::new());
+    let eau = t.pousser(true, false, Vec::new());
+    t.marquer_fluide(
+        eau,
+        Fluide {
+            genre: GenreFluide::Eau,
+            niveau: 0,
+        },
+    );
+    // La surface : de l'eau sur quatorze couches, de l'air au-dessus.
+    let surface = {
+        let idx: Vec<u16> = (0..4096)
+            .map(|i| if i / 256 < 14 { 0 } else { 1 })
+            .collect();
+        let bits = bits_for(2);
+        Section {
+            y: 3,
+            palette: vec![eau, air],
+            bits,
+            data: pack(&idx, bits as usize, Packing::NoStraddle).into_boxed_slice(),
+            packing: Packing::NoStraddle,
+        }
+    };
+    let cote = 16;
+    let mut grille = tf_mesh::Grille::new();
+    for cz in 0..cote {
+        for cx in 0..cote {
+            for sy in -4..=7i8 {
+                let s = match sy {
+                    -4..=-1 => Section::uniform(sy, pierre),
+                    0..=2 => Section::uniform(sy, eau),
+                    3 => surface.clone(),
+                    _ => Section::uniform(sy, air),
+                };
+                grille.poser(cx, cz, s);
+            }
+        }
+    }
+    let ch = grille.mailler(&t);
+    eprintln!(
+        "océan : {} lots, {} quads, {} faces de fluide",
+        ch.lots.len(),
+        ch.quads(),
+        ch.fluides()
+    );
+    let mut g = c.benchmark_group("ocean");
+    g.sample_size(20);
+    g.bench_function("mailler_1_fil", |b| b.iter(|| grille.mailler(&t)));
+    g.finish();
+}
+
+/// La salle décorée de `profils`, seule.
+fn profils_sans_fluide() -> Voisinage {
+    profils()
+        .into_iter()
+        .find(|(nom, _)| *nom == "salle décorée")
+        .map(|(_, v)| v)
+        .expect("le profil existe")
+}
+
 /// Une région bâtie, de bout en bout : c'est le chiffre qui compte pour
 /// l'utilisateur, et le seul qui intègre le coût de lecture.
 ///
@@ -234,5 +402,5 @@ fn charger(octets: &[u8], b: &Build) -> (tf_mesh::Grille, TableFormes) {
     (grille, t)
 }
 
-criterion_group!(benches, passes, complet, region);
+criterion_group!(benches, passes, complet, fluides, ocean, region);
 criterion_main!(benches);

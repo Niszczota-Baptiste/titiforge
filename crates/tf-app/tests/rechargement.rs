@@ -21,7 +21,7 @@ mod commun;
 
 use std::time::{Duration, Instant};
 
-use commun::{canon, codex, montre, montre_modeles, semer, streamer, Jetable};
+use commun::{canon, codex, montre, montre_fluides, montre_modeles, semer, streamer, Jetable};
 use tf_app::chargeur::Chargeur;
 use tf_app::moteur::{Commande, Moteur, Reponse};
 use tf_app::scene::Ouvert;
@@ -862,6 +862,124 @@ fn l_arene_remplacee_dit_la_meme_chose_qu_un_rebati() {
         "arène : {} quads et {} faces de modèles, la même image par remplacement et par rechargement",
         lent.len(),
         lent_poses.len()
+    );
+    moteur.arreter();
+}
+
+/// **Et l'arène des FLUIDES, là où la croix ne suffit pas.**
+///
+/// La surface d'une eau lit ses voisines EN DIAGONALE : un coin est la
+/// moyenne des quatre colonnes qui le touchent. Creuser la case au coin
+/// d'une section change donc la surface de la section en DIAGONALE — que la
+/// croix ne remaille pas. Sans `voisines_fluides`, la scène garderait une
+/// marche d'eau figée au bord de l'édition, et rien d'autre ne le verrait :
+/// l'image reste plausible, le maillage de la grille reste juste.
+///
+/// L'eau est POSÉE, pas trouvée : un terrain tiré d'une graine en porte, mais
+/// pas forcément là où la diagonale se joue, et un test qui ne met pas sa
+/// prémisse en jeu ne prouve rien.
+#[test]
+fn l_arene_des_fluides_remplacee_dit_la_meme_chose_qu_une_rebatie() {
+    let j = Jetable::neuf("codex");
+    let pack = codex(j.chemin(), &[]);
+    let m = Jetable::neuf("monde");
+    semer(m.chemin(), 1, 4);
+
+    let mut o = Ouvert::ouvrir(&pack, Some(m.texte()), [0, 0, 3, 3]).expect("monde ouvert");
+    let mut moteur = Moteur::lancer(
+        o.staging.clone().unwrap(),
+        tf_world::Dimension::Overworld,
+        Journal::new(),
+        Some(m.chemin().to_path_buf()),
+    );
+    // Un bassin dans la section (1, −3, 1), contre son coin nord-ouest ; puis
+    // une poche d'AIR dans la section (0, −3, 0), contre son coin sud-est.
+    // Les deux ne se touchent que par l'ARÊTE verticale x = z = 16 : la
+    // surface du bassin descend du côté de la poche.
+    for (bloc, a, b) in [
+        ("minecraft:water", [16, -40, 16], [17, -39, 17]),
+        ("minecraft:air", [12, -40, 12], [15, -37, 15]),
+    ] {
+        let sel = BBox::new(
+            BlockPos::new(a[0], a[1], a[2]),
+            BlockPos::new(b[0], b[1], b[2]),
+        );
+        let bornes = poser(&mut moteur, bloc, sel).expect("écrit");
+        o.remailler(Some(bornes)).expect("remaillage");
+    }
+    assert_eq!(o.rechargements, 0);
+    o.maillage_juste().expect("le maillage de la grille");
+
+    let mut mots = Vec::new();
+    let c = canon(&o, &mut mots);
+    let vite = montre_fluides(&o, &c);
+    assert_eq!(
+        o.monde.faces_fluides,
+        vite.len(),
+        "le compte de faces de fluide suit le remaillage"
+    );
+    // Le bassin se dessine, teinté de l'eau du jeu : ce codex n'a pas de
+    // `data/`, donc aucun biome ne donne la sienne.
+    let eau = tf_render::empaqueter_fluide(
+        &tf_mesh::FaceFluide {
+            pos: [0; 3],
+            taille: [1, 1],
+            face: tf_mesh::Face::PlusY,
+            genre: tf_mesh::GenreFluide::Eau,
+            texture: tf_mesh::TextureFluide::Immobile,
+            hauteurs: [0; 4],
+            angle: 0,
+            biome: 0,
+        },
+        0,
+        tf_assets::apparence::teinte_finale(tf_assets::Teintes::default().eau),
+        0,
+    )
+    .teinte;
+    let bassin = o
+        .monde
+        .fluides
+        .visibles()
+        .filter(|i| !i.opaque() && i.teinte == eau)
+        .count();
+    assert!(bassin > 0, "le bassin posé se dessine, teinté de l'eau");
+    assert!(
+        o.monde
+            .fluides
+            .visibles()
+            .all(|i| i.opaque() || i.teinte == eau),
+        "toute l'eau prend la couleur d'eau"
+    );
+    // Et la texture de SON fluide : une couche prise à côté se lirait comme
+    // une eau en andésite, sans la moindre erreur.
+    for f in &vite {
+        let lave = (f.0 >> 26) & 1 == 1;
+        let attendu = if lave { "lava_" } else { "water_" };
+        assert!(f.5.contains(attendu), "{} pour une face de {attendu}", f.5);
+    }
+
+    o.remailler(None).expect("rechargement complet");
+    let c = canon(&o, &mut mots);
+    let lent = montre_fluides(&o, &c);
+    assert_eq!(
+        vite.len(),
+        lent.len(),
+        "pas le même nombre de faces de fluide : {} contre {}",
+        vite.len(),
+        lent.len()
+    );
+    if let Some(k) = (0..vite.len()).find(|&k| vite[k] != lent[k]) {
+        panic!(
+            "face de fluide {k} sur {} : remplacée {:?} contre rebâtie {:?}",
+            vite.len(),
+            vite[k],
+            lent[k]
+        );
+    }
+    assert_eq!(o.monde.faces_fluides, lent.len());
+    println!(
+        "fluides : {} faces, la même image par remplacement et par rechargement",
+        lent.len()
     );
     moteur.arreter();
 }

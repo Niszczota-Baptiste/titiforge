@@ -12,16 +12,47 @@
 //! qu'un pack écrit à la main ne reproduit jamais ce qu'un vrai serveur
 //! contient.
 
-use tf_assets::catalogue::{classer, Classement, Disposition};
-use tf_assets::{Catalogue, Dossier};
+use std::path::{Path, PathBuf};
+
+use tf_assets::catalogue::{classer, table_formes, Classement, Disposition};
+use tf_assets::fluides;
+use tf_assets::{textures_des_etats, Atlas, Catalogue, Dossier};
+use tf_mesh::{Formes, GenreFluide, TextureFluide};
+
+/// Le chemin de `TF_PACK`, lu comme la documentation l'écrit : RELATIF À LA
+/// RACINE du dépôt quand il ne se trouve pas d'ici.
+///
+/// Cargo lance un test depuis le dossier de SON crate : la commande du
+/// `CLAUDE.md`, `TF_PACK=../titisite/public/codex`, y désignait un dossier
+/// qui n'existe pas. Le test se disait alors « TF_PACK non défini » — il
+/// l'était — et passait au vert sans avoir rien lu.
+fn chemin_du_pack() -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var_os("TF_PACK")?);
+    if p.is_relative() && !p.exists() {
+        let depuis_la_racine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(&p);
+        if depuis_la_racine.exists() {
+            return Some(depuis_la_racine);
+        }
+    }
+    Some(p)
+}
+
+/// Le pack désigné et sa source. `None` seulement si RIEN n'est désigné : un
+/// chemin donné mais illisible n'est pas un test à sauter, c'est une commande
+/// qui ne fait pas ce qu'on croit.
+fn pack_et_source() -> Option<(Dossier, Catalogue)> {
+    let racine = chemin_du_pack()?;
+    let src = Dossier::ouvrir(&racine)
+        .unwrap_or_else(|e| panic!("TF_PACK = {} ne s'ouvre pas : {e}", racine.display()));
+    let mut cat = Catalogue::new(Disposition::Codex);
+    cat.charger_codex(&src)
+        .unwrap_or_else(|e| panic!("TF_PACK = {} n'est pas un codex : {e}", racine.display()));
+    cat.resoudre_modeles(&src);
+    Some((src, cat))
+}
 
 fn pack() -> Option<Catalogue> {
-    let racine = std::env::var("TF_PACK").ok()?;
-    let src = Dossier::ouvrir(&racine).ok()?;
-    let mut cat = Catalogue::new(Disposition::Codex);
-    cat.charger_codex(&src).ok()?;
-    cat.resoudre_modeles(&src);
-    Some(cat)
+    pack_et_source().map(|(_, cat)| cat)
 }
 
 #[test]
@@ -180,5 +211,81 @@ fn la_rotation_d_une_variante_fait_un_vrai_travail_sur_le_pack() {
         part < 25.0,
         "{part:.1} % des couples rendent la même géométrie — la rotation de la \
          variante n'est pas appliquée (elle donnerait 100 %)"
+    );
+}
+
+#[test]
+fn l_eau_et_la_lave_du_codex_sont_des_fluides_qu_aucun_cube_ne_double() {
+    let Some((src, cat)) = pack_et_source() else {
+        eprintln!("TF_PACK non défini : test sauté");
+        return;
+    };
+    // Le codex ne livre aucun modèle d'eau, et celui de la lave n'a pas
+    // d'élément (`"render": "cube"` et une particule). Un cube lu là-dedans
+    // se dessinerait PAR-DESSUS la surface : une eau opaque, une lave
+    // doublée.
+    let cles = [
+        "minecraft:water|level=0",
+        "minecraft:water|level=5",
+        "minecraft:lava|level=0",
+        "minecraft:kelp|age=3",
+        "minecraft:oak_stairs|facing=east,half=bottom,shape=straight,waterlogged=true",
+    ];
+    let t = table_formes(&cat, cles.iter().map(|c| c.to_string()), &|_| false);
+    for (i, cle) in cles.iter().enumerate() {
+        assert!(t.fluide(i as u32).is_some(), "{cle} porte un fluide");
+    }
+    for (i, cle) in cles.iter().enumerate().take(3) {
+        let i = i as u32;
+        assert!(
+            t.est_air(i) && !t.opaque(i) && t.cuboides(i).is_empty(),
+            "{cle} : aucun cube ne doit doubler la surface"
+        );
+    }
+    assert!(
+        !t.cuboides(4).is_empty(),
+        "l'escalier inondé reste un escalier"
+    );
+    // Les textures : l'immobile et le courant de chaque fluide, trouvés
+    // pour de vrai — pas par le repli, qui masquerait une texture absente.
+    let atlas = Atlas::batir(
+        &src,
+        textures_des_etats(&cat, cles.iter().map(|c| c.to_string())),
+        &|n| Disposition::Codex.chemins_texture(n),
+    );
+    for (genre, texture, nom) in [
+        (
+            GenreFluide::Eau,
+            TextureFluide::Immobile,
+            fluides::EAU_IMMOBILE,
+        ),
+        (
+            GenreFluide::Eau,
+            TextureFluide::Courant,
+            fluides::EAU_COURANTE,
+        ),
+        (
+            GenreFluide::Lave,
+            TextureFluide::Immobile,
+            fluides::LAVE_IMMOBILE,
+        ),
+        (
+            GenreFluide::Lave,
+            TextureFluide::Courant,
+            fluides::LAVE_COURANTE,
+        ),
+    ] {
+        let couche = atlas
+            .couche(nom)
+            .unwrap_or_else(|| panic!("{nom} dans l'atlas"));
+        assert_eq!(fluides::couche(&atlas, genre, texture), couche, "{nom}");
+    }
+    eprintln!(
+        "voile de l'eau dans le codex : {}",
+        if atlas.couche(fluides::EAU_VOILE).is_some() {
+            "présent"
+        } else {
+            "absent, replié sur le courant"
+        }
     );
 }

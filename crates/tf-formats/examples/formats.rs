@@ -6,7 +6,7 @@
 //! difficile. Médiane de trois, en release.
 //!
 //! ```text
-//! cargo run --release -p tf-formats --example mesurer
+//! cargo run --release -p tf-formats --example formats
 //! ```
 
 use std::time::Instant;

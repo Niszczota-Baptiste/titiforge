@@ -331,14 +331,39 @@ impl Libres {
 /// gagnerait rien de mesurable et coûterait une recopie entière.
 pub const TASSER_AU_DELA: u64 = 1 << 16;
 
-/// Les instances de tout un chantier, chaque section à sa PLACE.
+/// **Ce qu'une arène range** : une instance GPU qui sait être un TROU.
+///
+/// Les quads gloutons et les faces de fluide ont chacun leur forme — seize
+/// et vingt octets, d'autres champs — mais la même vie : une section occupe
+/// une place, la rend, et le trou qu'elle laisse ne dessine rien.
+pub trait Case: Pod + Copy + PartialEq + std::fmt::Debug {
+    /// L'instance qui ne dessine rien : le trou d'une place libérée.
+    const VIDE: Self;
+    /// Vrai pour un trou — le critère que le shader applique.
+    fn est_vide(&self) -> bool;
+}
+
+impl Case for InstanceQuad {
+    const VIDE: Self = InstanceQuad::VIDE;
+    fn est_vide(&self) -> bool {
+        (self.geo >> 23) & 7 > 5
+    }
+}
+
+/// **Des places STABLES dans un tableau d'instances** — la mécanique que
+/// l'arène des quads et celle des fluides partagent, écrite une fois.
+///
+/// Une section occupe une plage qui ne bouge pas tant qu'elle existe ; la
+/// remplacer ne réécrit que sa plage ; la retirer en fait un trou qui se
+/// réemploie au plus juste ; et le tableau se TASSE quand ses trous pèsent
+/// plus que ce qu'il dessine. Deux copies de cette mécanique divergeraient au
+/// premier correctif — et ce dépôt a payé quatre fois ce piège-là.
 #[derive(Debug)]
-pub struct Arene {
+pub struct Places<T: Case> {
     /// Le tableau que le GPU dessine d'un seul appel — trous compris. Par
     /// PAGES : un `Vec` qui double recopiait toute la scène, 16 ms d'une image
     /// de vol à 2,4 millions d'instances (`crate::pages`).
-    pub instances: crate::pages::Pages<InstanceQuad>,
-    emplacements: Emplacements,
+    pub instances: crate::pages::Pages<T>,
     places: HashMap<Adresse, Tranche>,
     libres: Libres,
     /// Plages réécrites depuis le dernier envoi au GPU, `(début, nombre)`.
@@ -350,11 +375,10 @@ pub struct Arene {
     tassements: u32,
 }
 
-impl Default for Arene {
-    fn default() -> Arene {
-        Arene {
-            instances: crate::pages::Pages::new(InstanceQuad::VIDE),
-            emplacements: Emplacements::default(),
+impl<T: Case> Default for Places<T> {
+    fn default() -> Places<T> {
+        Places {
+            instances: crate::pages::Pages::new(T::VIDE),
             places: HashMap::new(),
             libres: Libres::default(),
             sales: Vec::new(),
@@ -362,6 +386,188 @@ impl Default for Arene {
             tassements: 0,
         }
     }
+}
+
+impl<T: Case> Places<T> {
+    /// Pose (ou repose) les `n` instances d'une section à sa place.
+    /// `remplir(k)` rend la k-ième.
+    pub(crate) fn poser(&mut self, a: Adresse, n: u32, mut remplir: impl FnMut(usize) -> T) {
+        // La place d'avant : réemployée si elle suffit, sinon rendue.
+        let debut = match self.places.remove(&a) {
+            Some(t) if t.nombre >= n => {
+                self.liberer(t.debut + n, t.nombre - n);
+                t.debut
+            }
+            Some(t) => {
+                self.liberer(t.debut, t.nombre);
+                self.allouer(n)
+            }
+            None => self.allouer(n),
+        };
+        for k in 0..n as usize {
+            self.instances[debut as usize + k] = remplir(k);
+        }
+        self.ecrites += n as u64;
+        if n > 0 {
+            self.sales.push((debut, n));
+            self.places.insert(
+                a,
+                Tranche {
+                    adresse: a,
+                    debut,
+                    nombre: n,
+                },
+            );
+        }
+    }
+
+    /// Retire une section : sa place devient un trou.
+    pub(crate) fn enlever(&mut self, a: &Adresse) {
+        if let Some(t) = self.places.remove(a) {
+            self.liberer(t.debut, t.nombre);
+        }
+    }
+
+    /// Tasse quand les trous pèsent plus que ce qu'on dessine — donc
+    /// rarement, puisqu'une cellule qui arrive réemploie en général le trou
+    /// de celle qui vient de partir.
+    pub(crate) fn tasser_si_besoin(&mut self) {
+        if self.libres.total() > TASSER_AU_DELA
+            && self.libres.total() > self.instances.len() as u64 / 2
+        {
+            self.tasser();
+        }
+    }
+
+    /// Une plage de `n` instances, prise dans les trous ou ajoutée au bout.
+    fn allouer(&mut self, n: u32) -> u32 {
+        if let Some(d) = self.libres.prendre(n) {
+            return d;
+        }
+        let d = self.instances.len() as u32;
+        self.instances.resize(self.instances.len() + n as usize);
+        d
+    }
+
+    /// Rend une plage : elle devient un trou — et si elle finit le tableau,
+    /// le tableau raccourcit.
+    fn liberer(&mut self, debut: u32, n: u32) {
+        if n == 0 {
+            return;
+        }
+        self.instances
+            .fill(debut as usize, (debut + n) as usize, T::VIDE);
+        self.sales.push((debut, n));
+        self.libres.rendre(debut, n);
+        if let Some(d) = self.libres.couper_fin(self.instances.len() as u32) {
+            self.instances.truncate(d as usize);
+        }
+    }
+
+    /// **Tasse** : chaque section recopiée bout à bout, plus un seul trou. En
+    /// O(scène), et c'est pourquoi il n'a lieu que quand les trous pèsent plus
+    /// que ce qu'on dessine.
+    fn tasser(&mut self) {
+        let mut places: Vec<Tranche> = self.places.values().copied().collect();
+        places.sort_unstable_by_key(|t| t.debut);
+        let mut neuves = crate::pages::Pages::new(T::VIDE);
+        neuves.resize(self.instances.len() - self.libres.total() as usize);
+        let mut d = 0usize;
+        for t in &mut places {
+            let debut = d;
+            for (_, morceau) in self
+                .instances
+                .plage(t.debut as usize, (t.debut + t.nombre) as usize)
+            {
+                for &i in morceau {
+                    neuves[d] = i;
+                    d += 1;
+                }
+            }
+            t.debut = debut as u32;
+            self.places.insert(t.adresse, *t);
+        }
+        neuves.truncate(d);
+        self.instances = neuves;
+        self.libres.vider();
+        self.sales.clear();
+        self.sales.push((0, self.instances.len() as u32));
+        self.tassements += 1;
+    }
+
+    /// Les tranches occupées, dans l'ordre du tableau.
+    pub fn tranches(&self) -> Vec<Tranche> {
+        let mut v: Vec<Tranche> = self.places.values().copied().collect();
+        v.sort_unstable_by_key(|t| t.debut);
+        v
+    }
+
+    /// Les instances DESSINÉES — les trous sautés.
+    pub fn visibles(&self) -> impl Iterator<Item = &T> + '_ {
+        self.instances.iter().filter(|i| !i.est_vide())
+    }
+
+    /// Les plages d'instances réécrites depuis le dernier appel, triées et
+    /// recollées : ce que le GPU doit renvoyer, et rien d'autre.
+    pub fn prendre_sales(&mut self) -> Vec<(u32, u32)> {
+        let mut v = std::mem::take(&mut self.sales);
+        v.sort_unstable();
+        let mut plages: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+        for (d, n) in v {
+            match plages.last_mut() {
+                Some((pd, pn)) if *pd + *pn >= d => {
+                    *pn = (*pn).max(d + n - *pd);
+                }
+                _ => plages.push((d, n)),
+            }
+        }
+        // Une plage peut viser au-delà d'un tableau qui a raccourci depuis.
+        let fin = self.instances.len() as u32;
+        plages.retain_mut(|(d, n)| {
+            if *d >= fin {
+                return false;
+            }
+            *n = (*n).min(fin - *d);
+            true
+        });
+        plages
+    }
+
+    /// Instances écrites depuis la création : le coût RÉEL des remplacements.
+    pub fn ecrites(&self) -> u64 {
+        self.ecrites
+    }
+
+    /// Combien de fois le tableau s'est tassé.
+    pub fn tassements(&self) -> u32 {
+        self.tassements
+    }
+
+    /// Instances au tableau, trous compris : ce que l'appel de dessin couvre.
+    pub fn len(&self) -> usize {
+        self.instances.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+
+    /// Les instances dans les trous — ce que l'appel de dessin paie pour
+    /// rien.
+    pub fn trous(&self) -> u64 {
+        self.libres.total()
+    }
+
+    pub fn octets(&self) -> usize {
+        self.instances.len() * std::mem::size_of::<T>()
+    }
+}
+
+/// Les instances de tout un chantier, chaque section à sa PLACE.
+#[derive(Debug, Default)]
+pub struct Arene {
+    places: Places<InstanceQuad>,
+    emplacements: Emplacements,
 }
 
 impl Arene {
@@ -407,7 +613,8 @@ impl Arene {
     /// soit la taille de la scène. `ecrites` le compte.
     ///
     /// **C'est aussi elle qui attribue et rend les emplacements**, pour les
-    /// deux passes : la passe de modèles se remplace ENSUITE et lit ceux-ci.
+    /// trois passes : celles des modèles et des fluides se remplacent ENSUITE
+    /// et lisent ceux-ci.
     pub fn remplacer(
         &mut self,
         visees: &[Adresse],
@@ -422,17 +629,14 @@ impl Arene {
             neufs.iter().map(|l| l.adresse).collect();
         for a in visees {
             if !reviennent.contains(a) {
-                self.enlever(a);
+                self.places.enlever(a);
+                self.emplacements.rendre(a);
             }
         }
         for lot in neufs {
             self.poser(lot, apparence);
         }
-        if self.libres.total() > TASSER_AU_DELA
-            && self.libres.total() > self.instances.len() as u64 / 2
-        {
-            self.tasser();
-        }
+        self.places.tasser_si_besoin();
     }
 
     /// Pose (ou repose) le lot à sa place.
@@ -446,110 +650,27 @@ impl Arene {
         ) -> (u32, [f32; 3]),
     ) {
         let slot = self.emplacements.prendre(lot.adresse);
-        let n = lot.quads.quads.len() as u32;
-        // La place d'avant : réemployée si elle suffit, sinon rendue.
-        let debut = match self.places.remove(&lot.adresse) {
-            Some(t) if t.nombre >= n => {
-                self.liberer(t.debut + n, t.nombre - n);
-                t.debut
-            }
-            Some(t) => {
-                self.liberer(t.debut, t.nombre);
-                self.allouer(n)
-            }
-            None => self.allouer(n),
-        };
-        for (k, q) in lot.quads.quads.iter().enumerate() {
+        let quads = &lot.quads.quads;
+        self.places.poser(lot.adresse, quads.len() as u32, |k| {
+            let q = &quads[k];
             let (couche, teinte) = apparence(q.id, q.face, q.biome);
-            self.instances[debut as usize + k] = InstanceQuad {
+            InstanceQuad {
                 geo: empaqueter(q.min, q.taille, q.face as u32),
                 couche,
                 teinte: en_rgba8(teinte),
                 // Le quad est LOCAL à sa section : sans l'origine, tout le
                 // monde se dessinerait empilé sur la section zéro.
                 section: slot,
-            };
-        }
-        self.ecrites += n as u64;
-        if n > 0 {
-            self.sales.push((debut, n));
-            self.places.insert(
-                lot.adresse,
-                Tranche {
-                    adresse: lot.adresse,
-                    debut,
-                    nombre: n,
-                },
-            );
-        }
-    }
-
-    /// Retire une section : sa place devient un trou, son emplacement se rend.
-    fn enlever(&mut self, a: &Adresse) {
-        if let Some(t) = self.places.remove(a) {
-            self.liberer(t.debut, t.nombre);
-        }
-        self.emplacements.rendre(a);
-    }
-
-    /// Une plage de `n` instances, prise dans les trous ou ajoutée au bout.
-    fn allouer(&mut self, n: u32) -> u32 {
-        if let Some(d) = self.libres.prendre(n) {
-            return d;
-        }
-        let d = self.instances.len() as u32;
-        self.instances.resize(self.instances.len() + n as usize);
-        d
-    }
-
-    /// Rend une plage : elle devient un trou — et si elle finit le tableau,
-    /// le tableau raccourcit.
-    fn liberer(&mut self, debut: u32, n: u32) {
-        if n == 0 {
-            return;
-        }
-        self.instances
-            .fill(debut as usize, (debut + n) as usize, InstanceQuad::VIDE);
-        self.sales.push((debut, n));
-        self.libres.rendre(debut, n);
-        if let Some(d) = self.libres.couper_fin(self.instances.len() as u32) {
-            self.instances.truncate(d as usize);
-        }
-    }
-
-    /// **Tasse l'arène** : chaque section recopiée bout à bout, plus un seul
-    /// trou. En O(scène), et c'est pourquoi il n'a lieu que quand les trous
-    /// pèsent plus que ce qu'on dessine — donc rarement, puisqu'une cellule
-    /// qui arrive réemploie en général le trou de celle qui vient de partir.
-    fn tasser(&mut self) {
-        let mut places: Vec<Tranche> = self.places.values().copied().collect();
-        places.sort_unstable_by_key(|t| t.debut);
-        let mut neuves = crate::pages::Pages::new(InstanceQuad::VIDE);
-        neuves.resize(self.instances.len() - self.libres.total() as usize);
-        let mut d = 0usize;
-        for t in &mut places {
-            let debut = d;
-            for (_, morceau) in self
-                .instances
-                .plage(t.debut as usize, (t.debut + t.nombre) as usize)
-            {
-                for &i in morceau {
-                    neuves[d] = i;
-                    d += 1;
-                }
             }
-            t.debut = debut as u32;
-            self.places.insert(t.adresse, *t);
-        }
-        neuves.truncate(d);
-        self.instances = neuves;
-        self.libres.vider();
-        self.sales.clear();
-        self.sales.push((0, self.instances.len() as u32));
-        self.tassements += 1;
+        });
     }
 
-    /// Les emplacements — donc les origines — que les deux passes partagent.
+    /// Le tableau que le GPU dessine, trous compris.
+    pub fn instances(&self) -> &crate::pages::Pages<InstanceQuad> {
+        &self.places.instances
+    }
+
+    /// Les emplacements — donc les origines — que les passes partagent.
     pub fn emplacements(&self) -> &Emplacements {
         &self.emplacements
     }
@@ -561,70 +682,51 @@ impl Arene {
 
     /// Les tranches occupées, dans l'ordre du tableau.
     pub fn tranches(&self) -> Vec<Tranche> {
-        let mut v: Vec<Tranche> = self.places.values().copied().collect();
-        v.sort_unstable_by_key(|t| t.debut);
-        v
+        self.places.tranches()
     }
 
     /// Les instances DESSINÉES — les trous sautés.
     pub fn visibles(&self) -> impl Iterator<Item = &InstanceQuad> + '_ {
-        self.instances.iter().filter(|i| !i.est_vide())
+        self.places.visibles()
     }
 
     /// Ce que le GPU doit renvoyer depuis le dernier appel : les plages
     /// d'instances réécrites (triées, recollées) et les emplacements
     /// réécrits.
     pub fn prendre_sales(&mut self) -> (Vec<(u32, u32)>, Vec<u32>) {
-        let mut v = std::mem::take(&mut self.sales);
-        v.sort_unstable();
-        let mut plages: Vec<(u32, u32)> = Vec::with_capacity(v.len());
-        for (d, n) in v {
-            match plages.last_mut() {
-                Some((pd, pn)) if *pd + *pn >= d => {
-                    *pn = (*pn).max(d + n - *pd);
-                }
-                _ => plages.push((d, n)),
-            }
-        }
-        // Une plage peut viser au-delà d'un tableau qui a raccourci depuis.
-        let fin = self.instances.len() as u32;
-        plages.retain_mut(|(d, n)| {
-            if *d >= fin {
-                return false;
-            }
-            *n = (*n).min(fin - *d);
-            true
-        });
-        (plages, self.emplacements.prendre_sales())
+        (
+            self.places.prendre_sales(),
+            self.emplacements.prendre_sales(),
+        )
     }
 
     /// Instances écrites depuis la création : le coût RÉEL des remplacements.
     pub fn ecrites(&self) -> u64 {
-        self.ecrites
+        self.places.ecrites()
     }
 
     /// Combien de fois l'arène s'est tassée.
     pub fn tassements(&self) -> u32 {
-        self.tassements
+        self.places.tassements()
     }
 
     /// Instances au tableau, trous compris : ce que l'appel de dessin couvre.
     pub fn len(&self) -> usize {
-        self.instances.len()
+        self.places.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.instances.is_empty()
+        self.places.is_empty()
     }
 
     /// Les instances dans les trous — ce que l'appel de dessin paie pour
     /// rien.
     pub fn trous(&self) -> u64 {
-        self.libres.total()
+        self.places.trous()
     }
 
     pub fn octets(&self) -> usize {
-        self.instances.len() * std::mem::size_of::<InstanceQuad>()
+        self.places.octets()
     }
 
     /// Bornes du contenu, en blocs monde. `None` si l'arène est vide.
