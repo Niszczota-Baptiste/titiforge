@@ -5,7 +5,7 @@
 //! façon : d'une case, ou d'un côté.
 
 use tf_mesh::forme::Face;
-use tf_render::viser::{rayon_ecran, viser, PAS_MAX};
+use tf_render::viser::{ndc_du_pixel, rayon_ecran, viser, PAS_MAX};
 use tf_render::Camera;
 
 /// Un monde d'essai : un unique bloc solide.
@@ -252,7 +252,7 @@ fn cam(oeil: [f32; 3], cible: [f32; 3]) -> Camera {
     }
 }
 
-/// Le centre de l'écran vise exactement devant — c'est là qu'est le réticule.
+/// Le centre de l'écran vise exactement devant.
 #[test]
 fn le_centre_de_l_ecran_vise_droit_devant() {
     let c = cam([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
@@ -317,12 +317,133 @@ fn la_chaine_camera_vers_bloc_tient_de_bout_en_bout() {
     // L'œil à 5 de haut, regardant vers le bas et l'Est.
     let c = cam([0.5, 5.0, 0.5], [10.5, 0.0, 0.5]);
     let d = rayon_ecran(&c, [0.0, 0.0], 16.0 / 9.0);
-    let t = viser(c.oeil, d, 64.0, &plancher).expect("le réticule doit toucher le sol");
+    let t = viser(c.oeil, d, 64.0, &plancher).expect("le centre doit toucher le sol");
     assert!(t.case[1] < 0, "sous le niveau zéro");
     assert_eq!(t.face, Some(Face::PlusY), "par le dessus");
     assert_eq!(t.avant.map(|p| p[1]), Some(0));
     // Et on va bien vers l'Est : la case touchée est devant, pas derrière.
     assert!(t.case[0] > 0, "vers l'Est : {:?}", t.case);
+}
+
+/// Où la PROJECTION de la caméra dessine un point monde, en coordonnées
+/// normalisées — le calcul du shader, refait ici avec la matrice qu'il reçoit
+/// (rangée par colonnes, comme la lit WGSL).
+fn ou_dessine(c: &Camera, aspect: f32, p: [f32; 3]) -> [f32; 2] {
+    let m = c.gpu(aspect).vue_projection;
+    let p4 = [p[0], p[1], p[2], 1.0];
+    let clip: Vec<f32> = (0..4)
+        .map(|r| (0..4).map(|k| m[k][r] * p4[k]).sum())
+        .collect();
+    assert!(clip[3] > 0.0, "le point doit être DEVANT la caméra : {p:?}");
+    [clip[0] / clip[3], clip[1] / clip[3]]
+}
+
+/// **Ce que le curseur désigne est ce qui est DESSINÉ sous lui.**
+///
+/// Le rayon (`rayon_ecran`) et la projection (`Camera::gpu`) sont deux
+/// calculs indépendants de la même chose. Tant qu'on ne visait qu'au centre de
+/// l'écran, seul leur AXE devait s'accorder, et il s'accorde par construction :
+/// les deux regardent la cible. Sous le curseur, la moindre différence de
+/// champ, d'aspect ou de signe fait viser À CÔTÉ, de plus en plus loin du
+/// centre — le défaut qu'on croit être « la souris est décalée ».
+///
+/// On projette donc des points monde par la matrice que reçoit le shader, et
+/// le rayon lancé vers l'endroit où ils tombent doit passer PAR eux, pour
+/// trois formats d'écran et une caméra qui ne regarde pas dans un axe.
+#[test]
+fn le_rayon_du_curseur_passe_par_ce_que_la_projection_y_dessine() {
+    let c = Camera {
+        oeil: [3.5, 70.2, -12.25],
+        cible: [40.0, 55.0, 18.0],
+        fov: 50f32.to_radians(),
+        proche: 0.1,
+        loin: 4096.0,
+    };
+    let points = [
+        [40.0, 55.0, 18.0],
+        [30.0, 70.0, 30.0],
+        [50.0, 40.0, 0.0],
+        [20.0, 60.0, 25.0],
+        [45.5, 58.25, 9.0],
+    ];
+    let mut au_bord = 0;
+    for aspect in [16.0 / 9.0, 1.0, 0.6] {
+        for p in points {
+            let ndc = ou_dessine(&c, aspect, p);
+            if ndc[0].abs() > 1.0 || ndc[1].abs() > 1.0 {
+                continue; // hors de l'écran à ce format : pas de curseur là
+            }
+            if ndc[0].abs() > 0.3 || ndc[1].abs() > 0.3 {
+                au_bord += 1;
+            }
+            let d = rayon_ecran(&c, ndc, aspect);
+            let v = [p[0] - c.oeil[0], p[1] - c.oeil[1], p[2] - c.oeil[2]];
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let ecart = (0..3)
+                .map(|k| (d[k] - v[k] / n).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                ecart < 1e-4,
+                "aspect {aspect}, point {p:?} dessiné en {ndc:?} : le rayon {d:?} \
+                 passe à côté (écart {ecart})"
+            );
+        }
+    }
+    assert!(
+        au_bord >= 5,
+        "l'essai doit viser LOIN du centre, là où un écart se voit : {au_bord}"
+    );
+}
+
+/// **Les pixels d'une souris se comptent depuis le HAUT.** Le coin haut-gauche
+/// est (−1, +1), le coin bas-droit (+1, −1), le milieu (0, 0) — quelle que
+/// soit la taille, et une taille nulle ne divise pas par zéro.
+#[test]
+fn un_pixel_de_souris_se_retourne_une_fois() {
+    let t = [1600, 900];
+    assert_eq!(ndc_du_pixel([0.0, 0.0], t), [-1.0, 1.0]);
+    assert_eq!(ndc_du_pixel([1600.0, 900.0], t), [1.0, -1.0]);
+    assert_eq!(ndc_du_pixel([800.0, 450.0], t), [0.0, 0.0]);
+    assert_eq!(ndc_du_pixel([400.0, 225.0], t), [-0.5, 0.5]);
+    let z = ndc_du_pixel([3.0, 4.0], [0, 0]);
+    assert!(z.iter().all(|v| v.is_finite()), "{z:?}");
+}
+
+/// **La chaîne du pixel au bloc**, en traversant : un bloc est projeté, on
+/// en tire le PIXEL où l'écran le montre (la transformation de viewport de
+/// wgpu, y vers le bas), et ce pixel doit désigner ce bloc-là — pas celui du
+/// centre, qui est ailleurs.
+#[test]
+fn le_pixel_ou_un_bloc_est_dessine_designe_ce_bloc() {
+    let (l, h) = (1400u32, 900u32);
+    let aspect = l as f32 / h as f32;
+    let c = cam([0.5, 10.5, 0.5], [20.5, 0.5, 6.5]);
+    let cible = [26, 2, -3];
+    let ndc = ou_dessine(
+        &c,
+        aspect,
+        [
+            cible[0] as f32 + 0.5,
+            cible[1] as f32 + 0.5,
+            cible[2] as f32 + 0.5,
+        ],
+    );
+    let pixel = [
+        (ndc[0] + 1.0) * 0.5 * l as f32,
+        (1.0 - ndc[1]) * 0.5 * h as f32,
+    ];
+    let d = rayon_ecran(&c, ndc_du_pixel(pixel, [l, h]), aspect);
+    let t = viser(c.oeil, d, 256.0, &bloc(cible)).expect("le pixel du bloc doit le toucher");
+    assert_eq!(t.case, cible);
+    let centre = rayon_ecran(
+        &c,
+        ndc_du_pixel([l as f32 / 2.0, h as f32 / 2.0], [l, h]),
+        aspect,
+    );
+    assert!(
+        viser(c.oeil, centre, 256.0, &bloc(cible)).is_none(),
+        "le bloc n'est PAS au centre : l'essai doit pouvoir distinguer les deux"
+    );
 }
 
 // ── les deux tables de directions ───────────────────────────────────────────

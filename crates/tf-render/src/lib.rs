@@ -28,4 +28,4 @@ pub use lignes::{rgba, Lignes, Sommet, SEIZIEMES_PAR_BLOC};
 pub use modeles::{faces_de, origines, AreneModeles, FaceModele, HabillageFaces, Origine, Pose};
 pub use pages::{Pages, PAGE};
 pub use scene::{AtlasGpu, Cible, Compte, Scene};
-pub use viser::{rayon_ecran, viser, Touche};
+pub use viser::{ndc_du_pixel, rayon_ecran, viser, Touche};

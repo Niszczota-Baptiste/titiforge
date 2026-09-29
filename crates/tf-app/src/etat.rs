@@ -36,9 +36,15 @@ impl Default for Quadrillage {
     }
 }
 
-/// Ce que le réticule désigne, tel que la dernière image l'a trouvé.
+/// Ce que le CURSEUR désigne, tel que la dernière image l'a trouvé.
+///
+/// **Sous la souris, pas au centre de l'écran.** La souris est libre — la
+/// caméra tourne à la molette enfoncée —, c'est donc elle qui montre. Un
+/// réticule central obligeait à tourner toute la vue pour viser un bloc :
+/// l'habitude du jeu, où la souris EST la caméra, transportée là où elle ne
+/// l'est plus. C'est le premier retour de l'essai sous Windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SousLeReticule {
+pub struct SousLeCurseur {
     /// La case qui arrête le rayon — celle qu'on casserait.
     pub case: Option<BlockPos>,
     /// Celle d'avant — celle où l'on poserait. Les deux, parce que poser et
@@ -456,7 +462,7 @@ pub fn fichiers_d_echange(dossiers: &[std::path::PathBuf]) -> Vec<Trouve> {
 
 /// La dimension que la scène montre. La coque ne dessine que la surface
 /// aujourd'hui (`scene.rs`) ; une instance d'une autre dimension n'est donc
-/// jamais « sous le réticule ».
+/// jamais « sous le curseur ».
 pub const DIMENSION_VUE: tf_world::source::Dimension = tf_world::source::Dimension::Overworld;
 
 /// Les orientations d'une pose, dans l'ordre où l'inspecteur les propose.
@@ -534,7 +540,7 @@ pub struct Etat {
     /// La graine des tirages. Zéro en dur rendait tous les mélanges
     /// identiques d'un projet à l'autre, et elle n'était réglable nulle part.
     pub seed: u64,
-    pub reticule: SousLeReticule,
+    pub vise: SousLeCurseur,
     /// L'opération choisie et ses paramètres.
     pub atelier: Atelier,
     /// L'outil de Conception. Sans effet en Édition, où gauche et droit
@@ -577,6 +583,10 @@ pub struct Etat {
     /// L'état de la case visée, tel que la scène le tient : ce que la pipette
     /// prend, et la première proposition de chaque champ de bloc.
     pub bloc_vise: Option<String>,
+    /// **La pipette ARMÉE par son bouton** : le prochain clic gauche sur la
+    /// scène prend le bloc au lieu d'agir. Le bouton ne peut pas la déclencher
+    /// lui-même — pour l'atteindre, la souris a quitté ce qu'elle désignait.
+    pub pipette_armee: bool,
     /// Le document des composants, tel que le fil l'a PUBLIÉ. L'interface ne
     /// le lit jamais du disque.
     pub composants: crate::moteur::Composants,
@@ -621,7 +631,7 @@ impl Etat {
             creux: None,
             compter: true,
             seed: 0,
-            reticule: SousLeReticule::default(),
+            vise: SousLeCurseur::default(),
             atelier: Atelier::default(),
             outil: Outil::default(),
             tirage: None,
@@ -634,6 +644,7 @@ impl Etat {
             accueil: crate::accueil::Accueil::default(),
             nuancier: crate::nuancier::Nuancier::default(),
             bloc_vise: None,
+            pipette_armee: false,
             composants: crate::moteur::Composants::default(),
             composant_choisi: None,
             nom_composant: String::new(),
@@ -645,7 +656,7 @@ impl Etat {
 
     /// **Un autre monde vient de s'ouvrir** : la caméra se recadre sur lui, et
     /// tout ce qui désignait des cases de l'ancien s'efface — sélection,
-    /// tirage, réticule. Le reste reste : le mode, l'outil, l'opération et
+    /// tirage, visée. Le reste reste : le mode, l'outil, l'opération et
     /// ses paramètres sont des choix de l'utilisateur, pas des propriétés du
     /// monde.
     ///
@@ -654,7 +665,7 @@ impl Etat {
         self.vue = Vue::cadrer(min, max, aspect);
         self.selection = Selection::nouvelle();
         self.tirage = None;
-        self.reticule = SousLeReticule::default();
+        self.vise = SousLeCurseur::default();
         self.bloc_vise = None;
         self.demande = None;
         self.jeu_ferme = false;
@@ -854,10 +865,10 @@ impl Etat {
         self.composants = c;
     }
 
-    /// L'instance sous le réticule — la plus récente si plusieurs s'y
+    /// L'instance sous le curseur — la plus récente si plusieurs s'y
     /// chevauchent, selon la règle du document lui-même.
     pub fn instance_visee(&self) -> Option<&tf_ops::composant::Instance> {
-        let c = self.reticule.case?;
+        let c = self.vise.case?;
         self.composants.projet.instance_en(&DIMENSION_VUE, c)
     }
 
@@ -939,11 +950,11 @@ impl Etat {
     }
 
     /// **Nomme la case visée** : l'état que la scène y tient. La coque le
-    /// demande à chaque image, après `relever_reticule` — l'état ne lit pas le
+    /// demande à chaque image, après `relever_vise` — l'état ne lit pas le
     /// monde lui-même. Rien n'est alloué tant que la visée ne change pas de
     /// bloc.
     pub fn nommer_vise<'a>(&mut self, etat_en: impl FnOnce(BlockPos) -> &'a str) {
-        match self.reticule.case {
+        match self.vise.case {
             None => self.bloc_vise = None,
             Some(c) => {
                 let nom = etat_en(c);
@@ -960,7 +971,7 @@ impl Etat {
     /// jeu a écrit. Rend `false` quand rien n'est visé.
     pub fn pipette(&mut self) -> bool {
         let Some(cle) = self.bloc_vise.clone() else {
-            self.message = "pipette : rien sous le réticule".into();
+            self.message = "pipette : rien sous le curseur".into();
             return false;
         };
         self.bloc_tirage = catalogue::bloc_affiche(&cle);
@@ -969,7 +980,45 @@ impl Etat {
         true
     }
 
-    /// Relève ce que le réticule désigne, et ce que l'accrochage en fait.
+    /// **Arme (ou désarme) la pipette** : c'est le bouton de l'inspecteur. Le
+    /// clic qui suit sur la scène passe par [`Etat::clic_de_pipette`].
+    pub fn armer_pipette(&mut self, armee: bool) {
+        self.pipette_armee = armee;
+        self.message = if armee {
+            "pipette : cliquer le bloc à prendre (Échap pour renoncer)".into()
+        } else {
+            "pipette rangée".into()
+        };
+    }
+
+    /// **Un clic gauche sur la scène est-il pour la pipette ?** Oui si Alt est
+    /// tenu, ou si son bouton l'a armée — et alors il la prend, et la range.
+    ///
+    /// Rend faux quand le clic est pour l'outil. Une pipette armée qui ne
+    /// trouve rien sous le curseur reste armée : un clic dans le ciel ne
+    /// doit ni prendre de l'air, ni poser un coin à la place.
+    pub fn clic_de_pipette(&mut self, alt: bool) -> bool {
+        if !alt && !self.pipette_armee {
+            return false;
+        }
+        if self.pipette() {
+            self.pipette_armee = false;
+        }
+        true
+    }
+
+    /// Relève ce que le curseur désigne, et ce que l'accrochage en fait.
+    ///
+    /// `curseur` est la souris en coordonnées normalisées
+    /// ([`tf_render::viser::ndc_du_pixel`]), ou `None` quand elle n'est pas
+    /// SUR la scène — sur l'inspecteur, sur l'accueil, hors de la fenêtre.
+    ///
+    /// **Hors de la scène, la visée se FIGE, elle ne s'efface pas.** On
+    /// quitte la scène pour aller lire l'inspecteur, ou taper un nom dans le
+    /// sélecteur de blocs — qui propose justement le bloc visé en tête. Effacer
+    /// la visée à ce moment effaçait ce qu'on venait lire. Rien n'agit pour
+    /// autant sur la case figée : un clic sur l'interface est pris par
+    /// l'interface, et la coque ne le transmet pas.
     ///
     /// `solide` est la couture vers le monde — la même que `viser`. La coque
     /// ne lit pas les chunks elle-même : elle demande.
@@ -977,16 +1026,18 @@ impl Etat {
     /// **L'axe de la face est VERROUILLÉ pour l'accrochage.** Sans ça, la
     /// paroi visée est à un bloc — donc dans la tolérance — et l'inférence
     /// ramène la pose DANS le mur qu'on vise.
-    pub fn relever_reticule(
+    pub fn relever_vise(
         &mut self,
         camera: &tf_render::Camera,
         aspect: f32,
+        curseur: Option<[f32; 2]>,
         portee: f32,
         solide: &dyn Fn([i32; 3]) -> bool,
     ) {
-        let d = tf_render::viser::rayon_ecran(camera, [0.0, 0.0], aspect);
+        let Some(ndc) = curseur else { return };
+        let d = tf_render::viser::rayon_ecran(camera, ndc, aspect);
         let Some(t) = tf_render::viser::viser(camera.oeil, d, portee, solide) else {
-            self.reticule = SousLeReticule::default();
+            self.vise = SousLeCurseur::default();
             return;
         };
         let case = BlockPos::new(t.case[0], t.case[1], t.case[2]);
@@ -1007,7 +1058,7 @@ impl Etat {
             }
             _ => None,
         };
-        self.reticule = SousLeReticule {
+        self.vise = SousLeCurseur {
             case: Some(case),
             pose,
             accroche,
@@ -1027,10 +1078,10 @@ impl Etat {
     /// pourrait plus attraper le bord d'une paroi — qui est justement ce
     /// qu'il vise le plus souvent.
     ///
-    /// Rend faux quand le réticule ne désigne rien : un clic dans le ciel ne
+    /// Rend faux quand le curseur ne désigne rien : un clic dans le ciel ne
     /// doit pas déplacer une sélection existante.
     pub fn poser_coin(&mut self, premier: bool) -> bool {
-        let Some(c) = self.reticule.case else {
+        let Some(c) = self.vise.case else {
             return false;
         };
         if premier {
@@ -1050,20 +1101,25 @@ impl Etat {
 
     /// Le point qu'un clic poserait : l'accroché s'il y en a un, sinon le brut.
     pub fn point_de_pose(&self) -> Option<BlockPos> {
-        match &self.reticule.accroche {
+        match &self.vise.accroche {
             Some(a) => Some(a.position),
-            None => self.reticule.pose,
+            None => self.vise.pose,
         }
     }
 
     /// **Attrape une face de la sélection.** Le début du pousser-tirer.
     ///
-    /// Le rayon est celui du réticule, comme tout le reste : on tire la face
-    /// qu'on REGARDE. Rend faux quand le rayon ne touche aucune face — un clic
-    /// à côté ne doit pas démarrer un geste fantôme qui déplacera la sélection
-    /// au premier mouvement de souris.
-    pub fn attraper(&mut self, camera: &tf_render::Camera, aspect: f32) -> bool {
-        let d = tf_render::viser::rayon_ecran(camera, [0.0, 0.0], aspect);
+    /// Le rayon part du CURSEUR, comme tout le reste : on tire la face qu'on
+    /// MONTRE. Et c'est le même rayon que celui de [`Etat::tirer`], ce qui
+    /// n'était pas le cas quand on attrapait au centre de l'écran : l'ancre
+    /// se prenait au centre, le glissement se lisait sous la souris, et la
+    /// face SAUTAIT de tout l'écart entre les deux au premier mouvement.
+    ///
+    /// Rend faux quand le rayon ne touche aucune face — un clic à côté ne doit
+    /// pas démarrer un geste fantôme qui déplacera la sélection au premier
+    /// mouvement de souris.
+    pub fn attraper(&mut self, camera: &tf_render::Camera, aspect: f32, curseur: [f32; 2]) -> bool {
+        let d = tf_render::viser::rayon_ecran(camera, curseur, aspect);
         let Some((face, t)) = self.selection.face_visee(camera.oeil, d) else {
             return false;
         };
@@ -1220,6 +1276,10 @@ impl Etat {
     /// droit pendant le tirage : SketchUp fait les deux, et un geste qu'on ne
     /// peut pas annuler est un geste qu'on n'ose pas commencer.
     pub fn abandonner(&mut self) -> bool {
+        if self.pipette_armee {
+            self.armer_pipette(false);
+            return true;
+        }
         let Some(t) = self.tirage.take() else {
             return false;
         };
@@ -1277,7 +1337,7 @@ impl Etat {
     /// `viser` existe pour fermer, et il se refermerait ici si l'un des deux
     /// gestes prenait la case de l'autre.
     pub fn casser_un_bloc(&mut self) -> Option<crate::moteur::Commande> {
-        let c = self.reticule.case?;
+        let c = self.vise.case?;
         self.commande_une_case(c, "minecraft:air".to_string())
     }
 

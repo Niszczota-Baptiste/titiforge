@@ -3,7 +3,7 @@
 //! ```text
 //! titiforge                                   (un double clic suffit)
 //! titiforge [<assets>] [--monde <dossier>] [--zone "cx0,cz0,cx1,cz1"]
-//! titiforge [<assets>] --capture sortie.png [--taille 1400x900]
+//! titiforge [<assets>] --capture sortie.png [--taille 1400x900] [--curseur 700,450]
 //! ```
 //!
 //! **Tout est facultatif.** Sans assets, on prend l'installation de Minecraft
@@ -36,6 +36,9 @@ fn main() {
     let mut capture: Option<String> = None;
     let mut montrer_accueil = false;
     let mut bloc_tape: Option<String> = None;
+    // Une capture n'a pas de souris : son curseur est au CENTRE, sauf si on
+    // le pose — en pixels, comptés depuis le haut à gauche, comme une souris.
+    let mut curseur: Option<[f32; 2]> = None;
     let mut outil: Option<tf_app::etat::Outil> = None;
     let mut a_importer: Option<String> = None;
     let mut mode = tf_render::controles::Mode::Edition;
@@ -98,6 +101,17 @@ fn main() {
                     rayon = r.min(tf_world::RAYON_MAX);
                 }
             }
+            "--curseur" => {
+                let v: Vec<f32> = args
+                    .next()
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
+                if v.len() == 2 {
+                    curseur = Some([v[0], v[1]]);
+                }
+            }
             "--taille" => {
                 if let Some(t) = args.next() {
                     let v: Vec<u32> = t.split('x').filter_map(|s| s.parse().ok()).collect();
@@ -126,7 +140,7 @@ fn main() {
                  usage : titiforge [<assets>] [--monde <dossier>] [--zone \"cx0,cz0,cx1,cz1\"]\n\
                  \x20       [--rayon <cellules>]\n\
                  \x20       titiforge [<assets>] --capture sortie.png [--taille 1400x900]\n\
-                 \x20                 [--accueil] [--bloc <texte>] [--mode conception]\n\
+                 \x20                 [--curseur x,y] [--accueil] [--bloc <texte>] [--mode conception]\n\
                  \x20                 [--outil composant] [--importer <fichier>]\n\n\
                  <assets> : un codex extrait, un pack, ou une INSTALLATION de launcher.\n\
                  Le genre se reconnaît au CONTENU — demander de le choisir serait\n\
@@ -229,6 +243,7 @@ fn main() {
                     outil,
                     composants,
                     presse: a_importer.map(|f| presse_de(&f)),
+                    curseur,
                 },
             )
         }
@@ -283,6 +298,8 @@ struct AMontrer {
     outil: Option<tf_app::etat::Outil>,
     composants: tf_app::moteur::Composants,
     presse: Option<tf_app::moteur::PressePapiers>,
+    /// Le curseur, en pixels ; `None` = le centre de l'image.
+    curseur: Option<[f32; 2]>,
 }
 
 /// Le presse-papiers qu'un fichier donnerait — lu par le MÊME lecteur que le
@@ -326,6 +343,7 @@ fn capturer(
         outil,
         composants,
         presse,
+        curseur,
     } = montrer;
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -405,7 +423,8 @@ fn capturer(
     );
 
     let camera = etat.vue.camera(&modele_camera(m));
-    etat.relever_reticule(&camera, aspect, 256.0, &m.solide());
+    let ndc = curseur.map_or([0.0, 0.0], |p| tf_render::ndc_du_pixel(p, [larg, haut]));
+    etat.relever_vise(&camera, aspect, Some(ndc), 256.0, &m.solide());
     etat.nommer_vise(|c| m.etat_en(c.x, c.y, c.z));
 
     // Le quadrillage suit le JOUEUR, pas le build : c'est autour de lui qu'on
@@ -431,11 +450,19 @@ fn capturer(
     lignes
         .sommets
         .extend(scene::contour_d_arrivee(arrivee).sommets);
+    let avant_vise = lignes.len();
+    lignes
+        .sommets
+        .extend(scene::contour_vise(etat.vise.case).sommets);
     println!(
         "calque : {quadrillage} segment(s) de découpage, {selection} de sélection, \
-         {composants_vus} d'instances de composants, {} d'arrivée",
-        lignes.len() - quadrillage - selection - composants_vus
+         {composants_vus} d'instances de composants, {} d'arrivée, {} du bloc visé",
+        avant_vise - quadrillage - selection - composants_vus,
+        lignes.len() - avant_vise
     );
+    if let Some(c) = etat.vise.case {
+        println!("  sous le curseur : {}, {}, {}", c.x, c.y, c.z);
+    }
     if let Some(b) = arrivee {
         println!("  arrivée : {:?} → {:?}", b.min, b.max);
     }

@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1150**, zéro échec |
+| Tests | **1160**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1150 tests, répartis par ce qu'ils PROUVENT :
+1160 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -84,11 +84,11 @@ cargo test --workspace
 | `tf-render` fluides | 8 | **au pixel** : vingt octets par face, des champs empaquetés qui ne se marchent pas dessus ; qu'un côté monte du côté de sa PREMIÈRE hauteur, sur ±Z comme sur ±X où ses rangées sont le premier axe du plan ; qu'un dessus monte chacun de ses quatre coins ; que l'eau laisse voir ce qu'elle recouvre et la lave non ; que l'eau n'écrit pas la profondeur ; et qu'une scène SUIVIE montre les fluides d'une scène neuve, à l'arrivée, au départ d'une section, et pour une scène neuve qui rattrape une arène déjà synchronisée |
 | `tf-render` champ | 7 | la découpe des lignes au champ de la caméra : sur 2 000 segments tirés d'une graine, tout ce qui reste est DANS le champ et tout ce qui était visible est RESTÉ ; un segment qui traverse l'œil commence au plan proche, un segment qui file au loin s'arrête au plan lointain, un segment qui sort par le côté s'arrête au bord |
 | `tf-render` controles | 12 | le pilotage : le JOUEUR est le point fixe, et les bornes qui évitent une vue dégénérée |
-| `tf-render` viser | 19 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; et le GESTE SketchUp complet, de bout en bout |
+| `tf-render` viser | 22 | quel bloc et quelle FACE sous le curseur ; que poser et casser ne visent pas la même case ; que les DEUX tables de directions disent la même chose ; le GESTE SketchUp complet, de bout en bout ; et que le rayon lancé vers un pixel passe par ce que la PROJECTION du shader y dessine — trois formats d'écran, loin du centre — et que le pixel où un bloc est dessiné, compté depuis le haut comme une souris, désigne ce bloc-là et pas celui du milieu |
 | `tf-world` decoupe | 17 | les cellules de chunk et de `.mca` ; que `//chunk` ÉTEND sans rétrécir ; et qu'il ne suffit PAS à l'étage palette sans la hauteur |
 | `tf-world` selection | 24 | deux coins, `//expand` qui ne se retourne pas, la face qu'on attrape, le VERROU que la pose impose, et le POUSSER-TIRER : combien de blocs un rayon désigne le long d'un axe, et la TRANCHE que le geste écrit |
 | `tf-world` inference | 15 | accrocher à ce qui est bâti : un axe = un plan, deux = une droite, trois = un point |
-| `tf-app` etat | 48 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main ; et l'outil COMPOSANT : il pose la définition choisie au point de pose dans l'orientation choisie, le clic droit la tourne d'un quart de tour, l'instance visée vient du document PUBLIÉ, et une définition disparue — ou un autre monde — fait oublier ce qu'on avait choisi ; et les ÉCHANGES : chaque format se range là où l'outil qui le lit le CHERCHE — Litematica et WorldEdit dans l'installation, le bloc de structure dans le MONDE ; un nom devient un nom de fichier sans perdre un accent ni un hangeul, et un nom réservé de Windows (`CON`, `lpt1.txt`, `COM¹`) prend un préfixe ; les fichiers trouvés se listent du plus récent — le `.schematic` d'avant 1.13 compris, que la lecture NOMMERA, et le dossier d'export tapé aussi, une seule fois ; exporter demande une sélection ET un dossier ; « Coller » pose le presse-papiers au point de pose et son CONTOUR d'arrivée dit où, tourné avec lui — un composant aussi ; un presse-papiers neuf met l'outil en main ; et un fichier d'un Minecraft plus récent que le monde se signale |
+| `tf-app` etat | 55 | la JONCTION que la coque fait : viser → accrocher → poser, et que l'axe de POSE ne s'accroche pas ; que le verdict de sélection se COMPTE ; que la PIPETTE prend le bloc visé sous son état exact, que « Poser » l'envoie sous la clé du décodeur, et qu'un clic dans le ciel ne vide pas la main ; et l'outil COMPOSANT : il pose la définition choisie au point de pose dans l'orientation choisie, le clic droit la tourne d'un quart de tour, l'instance visée vient du document PUBLIÉ, et une définition disparue — ou un autre monde — fait oublier ce qu'on avait choisi ; et les ÉCHANGES : chaque format se range là où l'outil qui le lit le CHERCHE — Litematica et WorldEdit dans l'installation, le bloc de structure dans le MONDE ; un nom devient un nom de fichier sans perdre un accent ni un hangeul, et un nom réservé de Windows (`CON`, `lpt1.txt`, `COM¹`) prend un préfixe ; les fichiers trouvés se listent du plus récent — le `.schematic` d'avant 1.13 compris, que la lecture NOMMERA, et le dossier d'export tapé aussi, une seule fois ; exporter demande une sélection ET un dossier ; « Coller » pose le presse-papiers au point de pose et son CONTOUR d'arrivée dit où, tourné avec lui — un composant aussi ; un presse-papiers neuf met l'outil en main ; et un fichier d'un Minecraft plus récent que le monde se signale ; et la visée SOUS LE CURSEUR : un curseur loin du centre désigne ce qui est sous lui et le coin s'y pose, la visée se FIGE hors de la scène sans lancer de rayon, une face attrapée sous le curseur ne saute pas au premier mouvement, le bouton ARME la pipette — qui sert une fois, reste armée dans le vide, et qu'Échap range avant de quitter —, et le bloc visé a son contour, un cheveu hors du bloc |
 | `tf-app` chantier | 9 | **tournent désormais partout**, sur le codex écrit à la volée quand `TF_PACK` manque ; la jonction coque ↔ fil : ce que le fil écrit, la coque le RELIT — depuis la copie de travail, jamais depuis la source ; que la SAUVEGARDE porte le monde d'AVANT octet pour octet ; et que le remaillage INCRÉMENTAL donne exactement la même scène qu'un rechargement complet, y compris quand une section se vide ou qu'un état inconnu apparaît (demande `TF_PACK`) ; et qu'un `//move` de deux cents blocs en diagonale ne remaille — et ne DÉCOMPRESSE — que ses deux bouts, 11 sections au lieu de 196, annulation comprise, pour la même scène qu'un rechargement complet |
 | `tf-app` moteur | 19 + 1 unitaire | le fil : que l'interface ne bloque JAMAIS, qu'une commande rend exactement une réponse, et qu'une commande fautive revient en échec sans tuer le moteur ; que chaque action est rangée dans la séance, dans l'ordre, et la séance fermée APRÈS la dernière ; qu'une annulation refusée ne bouge pas le curseur ; qu'un journal qui ne s'écrit pas se DIT ; et que les ZONES à remailler ne gardent que les chunks de blocs de la dimension regardée, un chunk une fois, borné par ce que l'opération a écrit ; et que les COMPOSANTS passent par le fil — créer, poser, mettre à jour, annuler, refaire, détacher, renommer — avec leur document PUBLIÉ qui suit chaque pas, annulation comprise, publié dès le lancement, jamais réécrit s'il est illisible, et dont la version ne bouge pas quand il ne change pas ; et les ÉCHANGES par le fil : un export ne remplace JAMAIS le fichier d'hier (« porte (2).litematic »), l'import publie un presse-papiers qui dit sa source et sa version, ce qui se colle est ce qui s'est copié, un Ctrl+Z le défait, et seul le collage entre dans la séance — exporter et importer n'écrivent rien dans le monde ; copier la sélection puis coller TOURNÉ donne la copie tournée ; coller sans l'air garde ce qui est là, avec l'air creuse ; un presse-papiers vide, un fichier illisible ou absent se disent par leur nom, sans rien charger |
 | `tf-app` seance | 1 | la jonction de bout en bout sur un vrai monde : éditer, fermer, rouvrir, annuler l'action d'hier, fermer — et plus rien ne traîne |
@@ -188,7 +188,7 @@ Trois propriétés valent d'être nommées :
   mutations, aucun survivant.
 - **Les tests de la coque aussi.** Cinq mutations, cinq tests rouges : le
   verrou d'axe retiré, la conversion `Face → Direction` décalée d'un axe, la
-  pose qui ignore l'accroche, le réticule qui n'est pas remis à zéro quand on
+  pose qui ignore l'accroche, la visée qui n'est pas remise à zéro quand on
   ne vise plus rien, et le verdict de sélection DÉDUIT de « alignée sur les
   chunks » au lieu d'être compté. Le premier test porte en plus son propre
   TÉMOIN : il vérifie que sans le verrou la pose tomberait vraiment dans le
@@ -691,7 +691,7 @@ cargo run --release -p tf-app -- <assets> --capture bloc.png --bloc "oak st"
 
 Chaque champ de bloc — ceux des opérations, chaque entrée d'un mélange, et le
 bloc EN MAIN que posent « Poser » et le pousser-tirer — propose sous le texte,
-dans cet ordre : le bloc **visé** par le réticule, les **récents**, ce que le
+dans cet ordre : le bloc **visé** sous le curseur, les **récents**, ce que le
 **monde** porte déjà sous l'état exact que le jeu a écrit, puis ce que le
 **pack** déclare. On tape `oak st`, on voit les escaliers et les tabourets de
 chêne, vanilla et `minefield:*` mêlés ; Entrée prend le premier, un clic en
@@ -874,7 +874,7 @@ son test :
 l'inspecteur liste les définitions du monde, crée depuis la sélection,
 renomme, choisit l'orientation de la pose ; le clic gauche pose la définition
 choisie à la case visée, le droit la tourne d'un quart de tour ; l'instance
-sous le réticule se met à jour ou se détache d'un bouton. Les instances ont
+sous le curseur se met à jour ou se détache d'un bouton. Les instances ont
 leur CONTOUR dans la vue — plus vif pour celles de la définition choisie,
 blanc pour celle qu'on vise —, parce que leurs blocs ne sont que des blocs.
 
@@ -886,7 +886,7 @@ Le document ne se décode pas dans l'interface : le fil le PUBLIE (un `Arc`
 et une version) au lancement et après chaque action, annulation et
 rétablissement compris, et la coque ne recopie que ce qui a changé. Le
 document entier plutôt qu'un résumé : un résumé aurait eu sa propre règle
-pour « l'instance sous le réticule », et deux règles pour la même chose
+pour « l'instance sous le curseur », et deux règles pour la même chose
 finissent par diverger. 15 mutations sur ce chemin, toutes tuées (trois au
 second tour) — et une vérification retirée en route, parce qu'elle doublait
 exactement le refus d'un document illisible que `faire` porte déjà.
@@ -1015,6 +1015,52 @@ en exposant (`COM¹` à `LPT³`) et `CONIN$`, et juge `CON .txt` comme `CON` ; l
 `.schematic` d'avant 1.13 reste dans la liste, pour que la lecture le NOMME au
 lieu que la liste le taise ; et le dossier d'export tapé s'y ajoute — une
 fois, même quand c'est un dossier par défaut.
+
+### Viser sous la souris, pas au centre de l'écran
+
+```bash
+cargo test -p tf-app --test etat
+cargo test -p tf-render --test viser
+cargo run --release -p tf-app -- <assets> --monde <save> --capture vise.png --curseur 640,640
+```
+
+Le premier retour de l'essai sous Windows, avant tout le reste : « la
+sélection se fait au centre de la caméra et non sur le curseur ». La coque
+avait repris la visée du jeu — le bloc au milieu de l'écran, un « + » pour le
+montrer — alors qu'ici la caméra tourne à la molette enfoncée : la souris ne
+pilote pas le regard, elle MONTRE. Tout part maintenant du pixel sous la
+souris : les deux coins de l'Édition, poser, casser, la pipette, le composant,
+le collage, la face qu'on attrape.
+
+- **Le rayon passe par ce que la projection dessine sous le curseur.** Tant
+  qu'on visait au centre, le rayon et la matrice du shader n'avaient qu'à
+  s'accorder sur leur AXE, ce qu'ils font par construction. Hors du centre, un
+  facteur de champ faux fait viser à côté, de plus en plus loin du milieu. Le
+  test projette des points monde par la matrice que reçoit le shader, sur
+  trois formats d'écran, et le rayon lancé vers leur pixel doit repasser par
+  eux ; un autre part du PIXEL d'un bloc, tel que la fenêtre le compte (depuis
+  le haut), et doit toucher ce bloc-là. La mutation « tangente du champ entier
+  au lieu de la moitié » passait tous les tests d'avant.
+- **Attraper et tirer partent du même rayon.** On attrapait la face au centre
+  et on la tirait sous la souris : elle sautait de tout l'écart entre les deux
+  au premier mouvement. Attrapée sous un curseur éloigné du centre, elle ne
+  bouge plus tant que la souris ne bouge pas.
+- **Le bloc visé a son contour**, blanc, un cheveu plus grand que le bloc. Le
+  « + » du centre de l'écran est parti : il désignait un endroit où rien ne se
+  passait plus.
+- **Sur l'inspecteur, la visée se FIGE.** On quitte la scène pour lire la
+  fiche ou taper dans le sélecteur de blocs — qui propose le bloc visé en
+  tête : l'effacer à ce moment effaçait ce qu'on venait lire. Rien n'agit pour
+  autant sur la case figée : un clic sur l'interface est pris par l'interface.
+- **Le bouton « pipette » ARME la pipette**, le clic suivant sur la scène la
+  prend — le geste de toute pipette de logiciel de dessin. Déclenchée par le
+  bouton, elle aurait pris le bloc du BORD de la scène, le dernier que la
+  souris a survolé en allant vers lui. Alt + clic prend directement ; Échap la
+  range avant de faire quoi que ce soit d'autre, sinon il quitte.
+
+**13 mutations, toutes tuées** — dont les quatre du rayon (sens vertical,
+aspect sur la verticale, aspect oublié, tangente entière), que seuls les
+tests de jonction voient.
 
 ---
 
@@ -1511,6 +1557,26 @@ change. Trois tests au pixel et à l'octet, onze mutations, zéro survivant ;
 deux d'entre elles passaient tant que les tampons grandissaient pile à la
 taille demandée.
 
+#### Sur un VRAI GPU — le premier essai, sous Windows
+
+Le `vol.exe` compilé depuis ce dépôt, lancé par l'utilisateur sur sa machine
+(le 29 septembre, une seule exécution, sans `--gpu` donc les trois modes) :
+
+| | GPU | image, médiane | p95 | pire | images > 8 ms | étape GPU, médiane / pire | envoyé sur le vol |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `Terrain` | aucun | 1,02 ms | 1,47 ms | 2,2 ms | 0 / 400 | — | — |
+| `Terrain` | refaire | 5,27 ms | 7,78 ms | 10,7 ms | 13 / 400 | 4,24 / 8,6 ms | 4 726 Mo |
+| `Terrain` | **synchro** | **1,43 ms** | **2,30 ms** | **3,8 ms** | **0 / 400** | **0,25 / 1,6 ms** | **57 Mo** |
+
+Trois lectures. **La synchronisation tient sur une vraie carte** : aucune
+image au-delà du budget, 0,25 ms d'étape GPU en médiane — et l'ancienne
+reconstruction y aurait envoyé 4,7 Go pour ce vol, quatre-vingt-trois fois
+plus. **Les comptes se transposent** : 798 cellules posées et 59,8 Mo
+résidents, comme ici. **Ce n'est que `Terrain`** — la fixture qui mesure
+Anvil ; les lignes `Build`, qui mesurent le rendu et portent la promesse pour
+Minefield, ne sont pas dans ce qui a été rapporté. Une mesure, une machine :
+c'est un premier point, pas une conclusion.
+
 #### Trois défauts de justesse, trouvés en découpant la queue
 
 La découpe par image (`TF_PHASES`, une ligne `IMAGE` par image dans `--example
@@ -1636,11 +1702,11 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **Un bloc inondé dessine son eau contre sa propre forme** | le jeu masque la face d'eau qu'un escalier inondé couvre de sa propre géométrie ; ici elle reste, sous le modèle |
 | **La solidité d'un voisin est approchée** | le jeu demande au MATÉRIAU d'un bloc s'il arrête l'eau ; on répond « opaque, ou un cuboïde qui a du volume ». Une torche ou un tapis comptent donc comme solides dans la moyenne d'un coin |
 | **Le sens des textures d'eau n'a pas été vérifié au pixel contre le jeu** | la géométrie l'est (référence indépendante, 252 616 faces), les coordonnées de texture non : sur les côtés sud et ouest, le jeu retourne la texture de courant, pas nous — invisible sur une texture sans motif orienté |
-| **`uvlock` non appliqué** | une dalle tournée montre la bonne portion de texture, pas forcément dans le bon sens |
 | **Pas d'occlusion ambiante, pas de LOD** | le rendu est plat, et tout ce qui est résident est dessiné |
 | **La découpe des lignes se refait à chaque image, au processeur** | ≈ 33 ns par segment : 0,33 ms pour 10 000 segments — les contours de 833 instances de composants — et 3,5 ms pour 100 000, plus leur envoi au GPU. La faire dans le shader de sommets (un segment par instance, découpé là où il se dessine) la rendrait gratuite, au prix d'un second exemplaire de l'algorithme, en WGSL |
 | **Pas de rendu indirect ni de HZB** | 2 appels de dessin suffisent aujourd'hui, 4 avec des fluides ; ils ne suffiront plus avec un remaillage partiel |
-| **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) : ce sont les agrandissements de tampons GPU, que llvmpipe copie sur le processeur. **Jamais mesuré sur un vrai GPU** — c'est là que la promesse de la phase 5 se tranchera |
+| **La queue des images de vol sur du bâti** | médiane 2,6 ms, 6 à 10 images sur 400 au-delà de 8 ms (`--example vol`) sous llvmpipe : ce sont les agrandissements de tampons GPU, qu'il copie sur le processeur. Sur un VRAI GPU, seul `Terrain` a été mesuré — zéro image au-delà de 8 ms (§ 6 bis) ; les lignes `Build`, celles qui portent la promesse pour Minefield, manquent encore |
+| **La visée sous le curseur n'a été vue que par des captures** | le rayon, la visée figée, la pipette armée et la face attrapée sont testés dans l'état, et une capture (`--curseur`) montre le contour sous un pixel donné ; le suivi de la souris lui-même — et le « la souris est sur l'inspecteur » d'egui — vit dans la boucle de la fenêtre, derrière winit |
 | **L'éclairage et les points d'intérêt après une édition n'ont jamais été vus EN JEU** | le jeu est chargé de rééclairer les chunks dont les blocs ont changé (`isLightOn` à 0, `Heightmaps` retiré) et de relire leurs points d'intérêt (`Valid` à 0 dans `poi/`) : ce sont ses propres mécanismes de chargement, mais personne ne les a encore regardés dans une vraie partie. Limite connue : une lumière qui DIMINUE de l'autre côté d'une frontière de chunk — une torche retirée contre un chunk non modifié — peut y rester, le voisin n'étant pas rééclairé |
 | **Le suivi des entités n'a jamais été vu EN JEU** | tout est vérifié contre le FORMAT et contre les formules du jeu (placement d'un tableau, dessin d'un cadre), relu par un décodeur indépendant — mais personne n'a encore ouvert une partie après un `--copier-vers --tourner 90`. La règle la plus fragile est celle de l'objet d'un cadre AU SOL ou au PLAFOND, dérivée du code de rendu |
 | **Ce qu'un vrai build Minefield porte comme entités n'est pas mesuré** | pas de vraie save dans l'environnement de travail. `recenser_entites` le dit en une commande : types, cadres au sol tournés, et ce que le moteur annoncerait comme approché |
@@ -1669,9 +1735,10 @@ Chiffré quand c'est possible — un trou nommé vaut mieux qu'un trou tu.
 | **La garde du clavier n'a pas de test** | elle vit dans le gestionnaire d'événements de la fenêtre (`coque.rs`), derrière winit |
 | **Blocs hors pack** | 0,9 % sur Mosslorn (`reinforced_deepslate`, `mud`, `sculk`…) : un codex d'époque 1.18 ne connaît pas le 1.20. C'est pourquoi lire l'installation de l'utilisateur vaut mieux qu'un catalogue préparé |
 
-Et une limite de méthode : **tous les temps de rendu sont mesurés sur un
-rastériseur logiciel** et ne valent rien. Les comptes — quads, poses, appels de
-dessin, octets — sont transposables ; les millisecondes, non.
+Et une limite de méthode : **les temps de rendu sont mesurés sur un
+rastériseur logiciel** et ne valent rien — sauf le vol de `Terrain`, passé une
+fois sur un vrai GPU (§ 6 bis). Les comptes — quads, poses, appels de dessin,
+octets — sont transposables ; les millisecondes, non.
 
 ### Le remaillage, et ce qu'il a appris
 

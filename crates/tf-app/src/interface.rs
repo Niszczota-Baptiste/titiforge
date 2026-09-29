@@ -51,12 +51,11 @@ pub fn dessiner(ctx: &egui::Context, e: &mut Etat) {
     egui::SidePanel::right("inspecteur")
         .default_width(310.0)
         .show(ctx, |ui| inspecteur(ui, e));
+    // **Pas de réticule au centre** : on vise sous la SOURIS, et le bloc
+    // visé se montre par son contour, dans la scène. Un « + » au milieu de
+    // l'écran désignerait un endroit où rien ne se passe.
     if e.accueil.ouvert {
         accueil(ctx, &mut e.accueil);
-    } else {
-        // Le réticule est au premier plan : il se dessinerait PAR-DESSUS la
-        // fenêtre d'accueil, en plein milieu de la liste des saves.
-        reticule(ctx);
     }
 }
 
@@ -113,10 +112,10 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
     ui.add_space(4.0);
     ui.heading("Inspecteur");
 
-    // ── ce que le réticule désigne
+    // ── ce que le curseur désigne
     ui.add_space(6.0);
-    ui.label(RichText::new("SOUS LE RÉTICULE").strong().color(GRIS));
-    match (e.reticule.case, e.reticule.pose) {
+    ui.label(RichText::new("SOUS LE CURSEUR").strong().color(GRIS));
+    match (e.vise.case, e.vise.pose) {
         (Some(c), pose) => {
             ui.label(format!("casser : {}, {}, {}", c.x, c.y, c.z));
             match pose {
@@ -133,7 +132,7 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
     }
 
     // ── l'accrochage, et POURQUOI
-    if let Some(a) = &e.reticule.accroche {
+    if let Some(a) = &e.vise.accroche {
         ui.add_space(4.0);
         let n = a.axes_accroches();
         let quoi = match n {
@@ -288,8 +287,8 @@ fn tirage(ui: &mut Ui, e: &mut Etat) {
         ui.label(
             RichText::new(
                 "Poser et casser ne visent pas la même case : un rayon touche \
-                 une FACE, donc un plan ENTRE deux cases. Le panneau du \
-                 réticule montre les deux.",
+                 une FACE, donc un plan ENTRE deux cases. « Sous le curseur » \
+                 montre les deux.",
             )
             .small()
             .color(GRIS),
@@ -441,18 +440,18 @@ fn composants(ui: &mut Ui, e: &mut Etat) {
         }
     });
 
-    // ── l'instance sous le réticule
+    // ── l'instance sous le curseur
     ui.add_space(6.0);
     match e.instance_visee().cloned() {
         None => {
-            ui.label(RichText::new("sous le réticule : aucune instance").color(GRIS));
+            ui.label(RichText::new("sous le curseur : aucune instance").color(GRIS));
         }
         Some(i) => {
             let nom = projet
                 .definition(i.definition)
                 .map_or("?", |d| d.nom.as_str());
             ui.label(format!(
-                "sous le réticule : instance n° {} de « {nom} » ({})",
+                "sous le curseur : instance n° {} de « {nom} » ({})",
                 i.id,
                 nom_orientation(i.transfo)
             ));
@@ -698,19 +697,26 @@ fn coller(ui: &mut Ui, e: &mut Etat) {
 pub const ID_BLOC_EN_MAIN: &str = "bloc-en-main";
 
 /// **Le bloc EN MAIN** — celui que posent « Poser » et le pousser-tirer — et
-/// la pipette qui le prend sous le réticule.
+/// la pipette qui le prend dans la scène.
+///
+/// **Le bouton ARME la pipette, il ne la déclenche pas.** Pour l'atteindre, la
+/// souris quitte la scène : ce qu'elle désignait en dernier est le bloc du
+/// bord, pas celui qu'on voulait. C'est le geste de toute pipette de logiciel
+/// de dessin : on la prend, PUIS on clique ce qu'on veut.
 fn bloc_en_main(ui: &mut Ui, e: &mut Etat) {
     ui.horizontal(|ui| {
         ui.label("bloc");
+        let bouton = egui::SelectableLabel::new(e.pipette_armee, "pipette");
         if ui
-            .small_button("pipette")
+            .add(bouton)
             .on_hover_text(
-                "Prend le bloc sous le réticule, sous l'état exact que le jeu a \
-                 écrit. Aussi : Alt + clic gauche.",
+                "Puis cliquer un bloc dans la scène : il devient le bloc en \
+                 main, sous l'état exact que le jeu a écrit. Aussi : Alt + clic \
+                 gauche, directement.",
             )
             .clicked()
         {
-            e.pipette();
+            e.armer_pipette(!e.pipette_armee);
         }
     });
     let aide = Aide {
@@ -1280,21 +1286,4 @@ fn ligne_de_save(ui: &mut Ui, s: &crate::accueil::SaveVue) -> bool {
         );
     }
     r.clicked()
-}
-
-/// Le réticule, au centre exact de la zone de dessin.
-///
-/// Dessiné par-dessus tout, en deux traits croisés : un point unique
-/// disparaît sur un fond clair, et on ne saurait plus où l'on vise.
-fn reticule(ctx: &egui::Context) {
-    let ecran = ctx.screen_rect();
-    let c = ecran.center();
-    let peintre = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("reticule"),
-    ));
-    let trait_ = egui::Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 200));
-    let r = 7.0;
-    peintre.line_segment([c - egui::vec2(r, 0.0), c + egui::vec2(r, 0.0)], trait_);
-    peintre.line_segment([c - egui::vec2(0.0, r), c + egui::vec2(0.0, r)], trait_);
 }

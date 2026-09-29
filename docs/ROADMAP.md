@@ -232,8 +232,9 @@ C'est ce qui transforme un moteur mesuré en outil.
 **Ce qui tient debout aujourd'hui** (`cargo run --release -p tf-app -- <assets>`) :
 une fenêtre `winit`, le viewport `wgpu` — le MÊME code que la capture hors
 écran — et l'interface `egui` par-dessus. On vole (molette enfoncée pour
-tourner, +Maj panoramique, roulée pour avancer ; ZQSD/WASD), on vise au
-réticule, on lit la case qu'on casserait et celle où l'on poserait, on pose
+tourner, +Maj panoramique, roulée pour avancer ; ZQSD/WASD), on vise SOUS LA
+SOURIS — le bloc visé a son contour —, on lit la case qu'on casserait et
+celle où l'on poserait, on pose
 les deux coins d'une sélection, on l'accroche à ce qui est bâti en voyant
 POURQUOI axe par axe, on allume le quadrillage des chunks et celui des `.mca`,
 et le panneau annonce ce que la sélection coûtera — en sections entières
@@ -591,7 +592,10 @@ de 8 ms — des agrandissements de tampon que llvmpipe copie sur le processeur.
 
 1. **Mesurer sur un VRAI GPU.** Tout ce qui est au-delà de 8 ms aujourd'hui
    est une copie que llvmpipe exécute sur le processeur ; sur une carte, elle
-   est asynchrone. La promesse se tranche là, pas ici.
+   est asynchrone. La promesse se tranche là, pas ici. **Commencé** : sur la
+   machine de l'utilisateur, `Terrain` ne passe aucune image au-delà de 8 ms
+   (médiane 1,43 ms, pire 3,8, étape GPU 0,25 ms) ; il manque `Build`, qui
+   est celle qui compte pour Minefield (`docs/ETAT.md`, § 6 bis).
 2. **Le monde de 800 régions.** Le vol mesuré traverse deux régions et ne
    remplit que 178 Mo : il faut un monde qui dépasse le budget de 1,5 Go,
    survolé assez longtemps pour que l'éviction tourne en continu.

@@ -1963,7 +1963,7 @@ pub fn quadrillage(q: &Quadrillage, centre: BlockPos, y: (i32, i32)) -> Lignes {
 
 /// **Les boîtes des instances de composants** de la dimension regardée :
 /// violettes, plus vives pour celles de la définition choisie — ce qu'une
-/// mise à jour réestamperait —, blanche pour celle que le réticule désigne.
+/// mise à jour réestamperait —, blanche pour celle que le curseur désigne.
 ///
 /// Une instance ne se voit pas autrement : ses blocs sont des blocs. Sans son
 /// contour, rien ne dit qu'une fenêtre est l'une des vingt et pas une copie
@@ -2002,6 +2002,28 @@ pub fn contour_d_arrivee(b: Option<tf_world::coords::BBox>) -> Lignes {
     if let Some(b) = b {
         let (min, max) = b.coins();
         l.contour(min, max, tf_render::rgba(255, 196, 64, 255));
+    }
+    l
+}
+
+/// **Le bloc sous le curseur**, en blanc — le blanc de ce que le curseur
+/// désigne, comme l'instance visée.
+///
+/// Sans lui, rien ne montrait où l'on vise : le réticule du centre de l'écran
+/// était le seul repère, et il ne disait plus rien une fois la visée passée
+/// sous la souris. Le contour déborde d'un cheveu du bloc : posé pile sur ses
+/// arêtes, il se confondrait avec celui d'une sélection qui s'arrête là.
+pub fn contour_vise(case: Option<BlockPos>) -> Lignes {
+    let mut l = Lignes::new();
+    if let Some(c) = case {
+        const MARGE: f32 = 0.02;
+        let min = [c.x as f32 - MARGE, c.y as f32 - MARGE, c.z as f32 - MARGE];
+        let max = [
+            c.x as f32 + 1.0 + MARGE,
+            c.y as f32 + 1.0 + MARGE,
+            c.z as f32 + 1.0 + MARGE,
+        ];
+        l.contour(min, max, tf_render::rgba(255, 255, 255, 230));
     }
     l
 }

@@ -329,12 +329,12 @@ impl ApplicationHandler for Coque {
                 } else if state == ElementState::Pressed
                     && !pris
                     && button == MouseButton::Left
-                    && g.alt
+                    && g.etat.clic_de_pipette(g.alt)
                 {
                     // **La pipette**, dans les deux modes : le bloc visé
-                    // devient le bloc en main. Alt est un modificateur, donc
-                    // aucun outil n'y perd son bouton.
-                    g.etat.pipette();
+                    // devient le bloc en main — par Alt + clic, ou au clic
+                    // qui suit son bouton. Alt est un modificateur, donc aucun
+                    // outil n'y perd son bouton.
                 } else if state == ElementState::Pressed && !pris {
                     match (g.etat.mode, button) {
                         // **Édition** : gauche = coin 1, droit = coin 2. La
@@ -352,7 +352,9 @@ impl ApplicationHandler for Coque {
                             let (cam, aspect) = vue_courante(g);
                             match (g.etat.outil, b) {
                                 (Outil::Tirer, MouseButton::Left) => {
-                                    g.etat.attraper(&cam, aspect);
+                                    if let Some(ndc) = ndc_de_la_souris(g) {
+                                        g.etat.attraper(&cam, aspect, ndc);
+                                    }
                                 }
                                 (Outil::Tirer, MouseButton::Right) => {
                                     g.etat.abandonner();
@@ -393,15 +395,14 @@ impl ApplicationHandler for Coque {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let p = (position.x, position.y);
-                // Un tirage en cours suit la souris — c'est le seul geste qui
-                // lit sa position à l'écran plutôt que le réticule, parce que
-                // c'est une POIGNÉE qu'on déplace, pas une visée.
+                // Un tirage en cours suit la souris : c'est une POIGNÉE qu'on
+                // déplace, par le même rayon que celui qui l'a attrapée.
                 if g.etat.tirage.is_some() && !pris {
                     let (cam, aspect) = vue_courante(g);
-                    let ndc = [
-                        (p.0 as f32 / g.config.width as f32) * 2.0 - 1.0,
-                        1.0 - (p.1 as f32 / g.config.height as f32) * 2.0,
-                    ];
+                    let ndc = tf_render::ndc_du_pixel(
+                        [p.0 as f32, p.1 as f32],
+                        [g.config.width, g.config.height],
+                    );
                     g.etat.tirer(&cam, aspect, ndc);
                 }
                 if let (Some(a), true) = (g.souris, g.tourne && !pris) {
@@ -416,6 +417,9 @@ impl ApplicationHandler for Coque {
                 }
                 g.souris = Some(p);
             }
+            // La souris sort de la fenêtre : il n'y a plus de curseur sur la
+            // scène. La visée se fige là où elle était (`relever_vise`).
+            WindowEvent::CursorLeft { .. } => g.souris = None,
             WindowEvent::MouseWheel { delta, .. } => {
                 if !pris {
                     let n = match delta {
@@ -666,6 +670,26 @@ fn titre(o: &scene::Ouvert) -> String {
     }
 }
 
+/// **La souris, en coordonnées normalisées** — `None` si elle est hors de la
+/// fenêtre.
+fn ndc_de_la_souris(g: &Gpu) -> Option<[f32; 2]> {
+    let p = g.souris?;
+    Some(tf_render::ndc_du_pixel(
+        [p.0 as f32, p.1 as f32],
+        [g.config.width, g.config.height],
+    ))
+}
+
+/// **Le curseur SUR LA SCÈNE** : `None` quand la souris survole l'interface
+/// — l'inspecteur, la barre, l'accueil — ou n'est pas dans la fenêtre. La
+/// visée ne suit que ce qui montre le monde.
+fn curseur_sur_scene(g: &Gpu) -> Option<[f32; 2]> {
+    if g.egui.is_pointer_over_area() {
+        return None;
+    }
+    ndc_de_la_souris(g)
+}
+
 /// La caméra et le rapport d'image du moment. Deux endroits en avaient besoin,
 /// et les recopier aurait fini par donner deux champs de vision différents
 /// selon le geste.
@@ -890,7 +914,9 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
     let (camera, aspect) = vue_courante(g);
-    g.etat.relever_reticule(&camera, aspect, 256.0, &m.solide());
+    let curseur = curseur_sur_scene(g);
+    g.etat
+        .relever_vise(&camera, aspect, curseur, 256.0, &m.solide());
     g.etat.nommer_vise(|c| m.etat_en(c.x, c.y, c.z));
 
     let oeil = tf_world::coords::BlockPos::new(
@@ -911,6 +937,9 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
     lignes
         .sommets
         .extend(scene::contour_d_arrivee(g.etat.contour_d_arrivee()).sommets);
+    lignes
+        .sommets
+        .extend(scene::contour_vise(g.etat.vise.case).sommets);
     g.scene.poser_lignes(&lignes);
 
     g.scene.dessiner_sur(

@@ -16,6 +16,11 @@ use tf_world::decoupe::Niveau;
 use tf_world::inference::{accrocher, Ancre};
 use tf_world::selection::Direction;
 
+/// Le curseur au MILIEU de l'écran. La plupart des essais vérifient ce qui
+/// est visé, pas d'où l'on vise : ils gardent le milieu, et ceux qui portent
+/// sur le curseur le déplacent.
+const CENTRE: [f32; 2] = [0.0, 0.0];
+
 /// Un mur plein à partir de x = 10, et rien d'autre.
 fn mur(case: [i32; 3]) -> bool {
     case[0] >= 10
@@ -52,9 +57,9 @@ fn etat_devant_le_mur() -> Etat {
 #[test]
 fn l_axe_de_pose_ne_s_accroche_pas() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
 
-    let r = e.reticule;
+    let r = e.vise;
     assert_eq!(r.case, Some(BlockPos::new(10, 7, 0)), "la case qu'on casse");
     assert_eq!(r.pose, Some(BlockPos::new(9, 7, 0)), "la case où l'on pose");
 
@@ -83,8 +88,8 @@ fn l_axe_de_pose_ne_s_accroche_pas() {
 #[test]
 fn les_axes_libres_s_accrochent_et_le_disent() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let a = e.reticule.accroche.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let a = e.vise.accroche.unwrap();
 
     // y : la pose brute est à 7, le haut de la sélection à 8.
     assert_eq!(a.position.y, 8);
@@ -101,18 +106,18 @@ fn les_axes_libres_s_accrochent_et_le_disent() {
     assert!(a.a_bouge());
 }
 
-/// Un réticule périmé fait poser un bloc là où l'utilisateur ne regarde plus.
+/// Une visée périmée fait poser un bloc là où l'utilisateur ne montre plus.
 #[test]
-fn un_rayon_qui_ne_touche_rien_efface_le_reticule() {
+fn un_rayon_qui_ne_touche_rien_efface_la_visee() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    assert!(e.reticule.case.is_some());
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    assert!(e.vise.case.is_some());
 
     // Le mur a disparu — ou l'on s'est tourné vers le ciel.
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
-    assert_eq!(e.reticule.case, None);
-    assert_eq!(e.reticule.pose, None);
-    assert!(e.reticule.accroche.is_none());
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &|_| false);
+    assert_eq!(e.vise.case, None);
+    assert_eq!(e.vise.pose, None);
+    assert!(e.vise.accroche.is_none());
     assert_eq!(e.point_de_pose(), None);
 }
 
@@ -121,17 +126,17 @@ fn un_rayon_qui_ne_touche_rien_efface_le_reticule() {
 #[test]
 fn au_dela_de_la_portee_on_ne_vise_rien() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 5.0, &mur);
-    assert_eq!(e.reticule.case, None);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 5.0, &mur);
+    assert_eq!(e.vise.case, None);
 }
 
 #[test]
 fn le_point_de_pose_prefere_l_accroche() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let a = e.reticule.accroche.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let a = e.vise.accroche.unwrap();
     assert_eq!(e.point_de_pose(), Some(a.position));
-    assert_ne!(e.point_de_pose(), e.reticule.pose, "sinon on ne teste rien");
+    assert_ne!(e.point_de_pose(), e.vise.pose, "sinon on ne teste rien");
 }
 
 /// Zéro éteint l'accrochage — et rend la pose BRUTE, pas une pose figée par
@@ -140,8 +145,8 @@ fn le_point_de_pose_prefere_l_accroche() {
 fn une_tolerance_nulle_eteint_l_accrochage() {
     let mut e = etat_devant_le_mur();
     e.tolerance = 0;
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    assert!(e.reticule.accroche.is_none());
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    assert!(e.vise.accroche.is_none());
     assert_eq!(e.point_de_pose(), Some(BlockPos::new(9, 7, 0)));
 }
 
@@ -201,7 +206,7 @@ fn la_conversion_de_face_porte_le_sens_et_pas_le_rang() {
     assert_eq!(pas.len(), 6, "deux faces ont été traduites pareil");
 }
 
-/// Le verrou que `relever_reticule` pose est bien celui de la face TRAVERSÉE,
+/// Le verrou que `relever_vise` pose est bien celui de la face TRAVERSÉE,
 /// pas celui de la case qu'on casse. L'inverser ferait poser de l'autre côté
 /// du mur.
 #[test]
@@ -219,10 +224,10 @@ fn le_verrou_porte_sur_l_axe_de_la_face_traversee() {
     let mut e = Etat::cadre([0.0, 0.0, 0.0], [32.0, 32.0, 32.0], 1.0);
     e.selection.poser_coin1(BlockPos::new(0, 10, 0));
     e.selection.poser_coin2(BlockPos::new(8, 20, 8));
-    e.relever_reticule(&cam, 1.0, 64.0, &plafond);
+    e.relever_vise(&cam, 1.0, Some(CENTRE), 64.0, &plafond);
 
-    assert_eq!(e.reticule.pose, Some(BlockPos::new(7, 9, 0)));
-    let a = e.reticule.accroche.unwrap();
+    assert_eq!(e.vise.pose, Some(BlockPos::new(7, 9, 0)));
+    let a = e.vise.accroche.unwrap();
     assert_eq!(a.position.y, 9, "l'axe vertical devait être verrouillé");
     assert_eq!(a.raisons[1].unwrap().genre, Ancre::Dernier);
     // ... et x, lui, est libre : 7 s'accroche au coin 8.
@@ -291,9 +296,9 @@ fn les_deux_niveaux_de_decoupe_ne_se_confondent_pas() {
 fn un_clic_pose_le_coin_sur_la_case_visee() {
     let mut e = etat_devant_le_mur();
     e.selection.vider();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let vise = e.reticule.case.unwrap();
-    let pose = e.reticule.pose.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let vise = e.vise.case.unwrap();
+    let pose = e.vise.pose.unwrap();
     assert_ne!(vise, pose, "sinon le test ne distingue rien");
 
     assert!(e.poser_coin(true));
@@ -310,8 +315,8 @@ fn un_clic_pose_le_coin_sur_la_case_visee() {
         proche: 0.1,
         loin: 1000.0,
     };
-    e.relever_reticule(&cam, 1.0, 64.0, &mur);
-    let autre = e.reticule.case.unwrap();
+    e.relever_vise(&cam, 1.0, Some(CENTRE), 64.0, &mur);
+    let autre = e.vise.case.unwrap();
     assert!(e.poser_coin(false));
     let b = e.selection.boite().unwrap();
     assert_eq!(b, BBox::new(vise, autre));
@@ -328,13 +333,170 @@ fn un_clic_pose_le_coin_sur_la_case_visee() {
 fn un_clic_dans_le_vide_ne_touche_pas_la_selection() {
     let mut e = etat_devant_le_mur();
     let avant = e.selection.boite();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &|_| false);
     assert!(!e.poser_coin(true));
     assert!(!e.poser_coin(false));
     assert_eq!(e.selection.boite(), avant);
 }
 
 // ── le POUSSER-TIRER ────────────────────────────────────────────────────────
+
+// ── viser SOUS LE CURSEUR ───────────────────────────────────────────────────
+
+/// **On vise sous la souris, pas au centre de l'écran.** Le premier retour de
+/// l'essai sous Windows : la sélection se posait au milieu de la vue, là où
+/// était le réticule, et non là où l'on cliquait.
+///
+/// Devant le mur plein, le centre désigne (10, 7, 0). Le curseur en haut à
+/// droite de l'écran — le Sud, puisqu'on regarde l'Est — doit désigner une
+/// case plus HAUTE et plus au SUD, sur la même face ouest du mur ; et le coin
+/// qu'un clic pose est celle-là.
+#[test]
+fn on_vise_sous_le_curseur_pas_au_centre() {
+    let mut e = etat_devant_le_mur();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    assert_eq!(e.vise.case, Some(BlockPos::new(10, 7, 0)));
+
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some([0.5, 0.5]), 64.0, &mur);
+    let c = e.vise.case.expect("le mur est partout à l'est");
+    assert_eq!(c.x, 10, "toujours la face ouest du mur");
+    assert!(c.y > 7 && c.z > 0, "plus haut et plus au sud : {c:?}");
+    assert_eq!(c, BlockPos::new(10, 10, 3));
+    assert_eq!(e.vise.pose, Some(BlockPos::new(9, 10, 3)));
+
+    assert!(e.poser_coin(true));
+    assert_eq!(
+        e.selection.coin1,
+        Some(c),
+        "le coin est posé SOUS LA SOURIS"
+    );
+}
+
+/// **Hors de la scène, la visée se FIGE.** On quitte la scène pour lire
+/// l'inspecteur ou taper dans le sélecteur de blocs, qui propose le bloc visé
+/// en tête : l'effacer à ce moment effaçait ce qu'on venait lire. Même si la
+/// caméra bouge entre-temps — le monde, lui, n'est pas relu.
+#[test]
+fn hors_de_la_scene_la_visee_se_fige() {
+    let mut e = etat_devant_le_mur();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    e.nommer_vise(|_| "minecraft:stone");
+    let avant = e.vise;
+    assert!(avant.case.is_some());
+
+    let ailleurs = Camera {
+        oeil: [0.5, 70.5, 0.5],
+        cible: [0.5, 80.5, 0.5],
+        ..camera_face_au_mur()
+    };
+    e.relever_vise(&ailleurs, 1.0, None, 64.0, &|_| {
+        panic!("hors de la scène, on ne lance aucun rayon")
+    });
+    assert_eq!(e.vise, avant);
+    assert_eq!(e.bloc_vise.as_deref(), Some("minecraft:stone"));
+}
+
+/// **Attraper et tirer partent du MÊME rayon.** Attraper se faisait au centre
+/// de l'écran, tirer sous la souris : la face sautait de tout l'écart entre
+/// les deux au premier mouvement. Attrapée sous un curseur éloigné du centre,
+/// elle ne doit pas bouger tant que la souris ne bouge pas.
+#[test]
+fn une_face_attrapee_sous_le_curseur_ne_saute_pas() {
+    let (mut e, cam) = devant_un_cube();
+    let depart = e.selection;
+    let curseur = [0.15, -0.12];
+    assert!(
+        e.attraper(&cam, 1.0, curseur),
+        "la face est sous ce curseur"
+    );
+    assert_eq!(e.tirage.as_ref().unwrap().face, Direction::PlusX);
+    e.tirer(&cam, 1.0, curseur);
+    assert_eq!(
+        e.selection, depart,
+        "la souris n'a pas bougé : la face non plus"
+    );
+    assert_eq!(e.tirage.as_ref().unwrap().blocs, 0);
+
+    // Et un curseur à côté du cube n'attrape rien, même si le CENTRE, lui,
+    // tombe sur une face.
+    let (mut e, cam) = devant_un_cube();
+    assert!(!e.attraper(&cam, 1.0, [0.9, 0.9]));
+    assert!(e.tirage.is_none());
+}
+
+/// **Le bouton « pipette » ARME la pipette**, le clic suivant sur la scène la
+/// prend. Pour atteindre le bouton, la souris a quitté ce qu'elle désignait :
+/// prendre le bloc à ce moment-là prendrait celui du bord de la scène.
+#[test]
+fn le_bouton_arme_la_pipette_et_le_clic_suivant_la_prend() {
+    let mut e = etat_devant_le_mur();
+    assert!(
+        !e.clic_de_pipette(false),
+        "sans Alt ni bouton : le clic est à l'outil"
+    );
+
+    e.armer_pipette(true);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    e.nommer_vise(|_| "minecraft:oak_log|axis=x");
+    assert!(e.clic_de_pipette(false), "armée : le clic est à la pipette");
+    assert_eq!(e.bloc_tirage, "minecraft:oak_log[axis=x]");
+    assert!(!e.pipette_armee, "une pipette sert une fois");
+    assert!(
+        !e.clic_de_pipette(false),
+        "le clic d'après est de nouveau à l'outil"
+    );
+
+    // Alt + clic prend directement, sans l'armer.
+    e.nommer_vise(|_| "minecraft:stone");
+    assert!(e.clic_de_pipette(true));
+    assert_eq!(e.bloc_tirage, "minecraft:stone");
+}
+
+/// Une pipette armée qui ne trouve rien sous le curseur RESTE armée, et le
+/// clic ne va pas à l'outil : cliquer dans le ciel ne doit ni prendre de
+/// l'air, ni poser un coin à la place.
+#[test]
+fn une_pipette_armee_dans_le_vide_reste_armee() {
+    let mut e = etat_devant_le_mur();
+    e.bloc_tirage = "minecraft:stone".into();
+    e.armer_pipette(true);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &|_| false);
+    e.nommer_vise(|_| unreachable!());
+    assert!(e.clic_de_pipette(false));
+    assert!(e.pipette_armee);
+    assert_eq!(e.bloc_tirage, "minecraft:stone");
+}
+
+/// Échap range une pipette armée AVANT de faire quoi que ce soit d'autre :
+/// sinon, sans tirage en cours, il quitte l'application.
+#[test]
+fn echap_range_la_pipette_avant_de_quitter() {
+    let mut e = etat_devant_le_mur();
+    e.armer_pipette(true);
+    assert!(e.abandonner(), "Échap a trouvé quelque chose à abandonner");
+    assert!(!e.pipette_armee);
+    assert!(!e.abandonner(), "plus rien : l'Échap suivant quitterait");
+}
+
+/// Le contour du bloc visé : rien sans visée, les douze arêtes d'un cube
+/// sinon — un cheveu PLUS grand que le bloc, pour ne pas se confondre avec
+/// l'arête d'une sélection qui s'arrête là.
+#[test]
+fn le_bloc_vise_a_son_contour() {
+    assert_eq!(tf_app::scene::contour_vise(None).len(), 0);
+    let l = tf_app::scene::contour_vise(Some(BlockPos::new(4, -2, 7)));
+    assert_eq!(l.len(), 12);
+    for v in &l.sommets {
+        for (k, (a, b)) in [(4.0, 5.0), (-2.0, -1.0), (7.0, 8.0)].iter().enumerate() {
+            let p = v.position[k];
+            assert!(
+                (p - a).abs() < 0.1 || (p - b).abs() < 0.1,
+                "sur une arête du bloc : {p}"
+            );
+            assert!(p < *a || p > *b, "à l'extérieur, d'un cheveu : {p}");
+        }
+    }
+}
 
 /// Une sélection de dix blocs de côté, et l'œil à l'est qui la regarde.
 fn devant_un_cube() -> (Etat, Camera) {
@@ -364,7 +526,7 @@ fn devant_un_cube() -> (Etat, Camera) {
 fn pousser_tirer_ecrit_la_tranche_et_rien_d_autre() {
     let (mut e, cam) = devant_un_cube();
     e.bloc_tirage = "minecraft:stone".into();
-    assert!(e.attraper(&cam, 1.0), "la face doit être attrapée");
+    assert!(e.attraper(&cam, 1.0, CENTRE), "la face doit être attrapée");
     assert_eq!(e.tirage.as_ref().unwrap().face, Direction::PlusX);
 
     // La souris vise x = 14 depuis un autre point de vue : quatre blocs.
@@ -411,7 +573,7 @@ fn pousser_tirer_ecrit_la_tranche_et_rien_d_autre() {
 #[test]
 fn pousser_retire_la_matiere() {
     let (mut e, cam) = devant_un_cube();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [7.0, 5.0, 5.0],
@@ -448,7 +610,7 @@ fn pousser_retire_la_matiere() {
 #[test]
 fn un_tirage_ne_cumule_pas() {
     let (mut e, cam) = devant_un_cube();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = |x: f32| Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [x, 5.0, 5.0],
@@ -469,7 +631,7 @@ fn un_tirage_ne_cumule_pas() {
 #[test]
 fn regarder_dans_l_axe_ne_ramene_pas_la_face() {
     let (mut e, cam) = devant_un_cube();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [13.0, 5.0, 5.0],
@@ -504,7 +666,7 @@ fn attraper_a_cote_ne_demarre_rien() {
         proche: 0.1,
         loin: 1000.0,
     };
-    assert!(!e.attraper(&ailleurs, 1.0));
+    assert!(!e.attraper(&ailleurs, 1.0, CENTRE));
     assert!(e.tirage.is_none());
     assert!(e.lacher().is_none());
 }
@@ -515,7 +677,7 @@ fn attraper_a_cote_ne_demarre_rien() {
 fn abandonner_un_tirage_remet_la_selection() {
     let (mut e, cam) = devant_un_cube();
     let avant = e.selection.boite().unwrap();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [16.0, 5.0, 5.0],
@@ -537,7 +699,7 @@ fn abandonner_un_tirage_remet_la_selection() {
 #[test]
 fn un_tirage_nul_n_ecrit_rien() {
     let (mut e, cam) = devant_un_cube();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     assert!(e.lacher().is_none());
 }
 
@@ -550,7 +712,7 @@ fn un_tirage_nul_n_ecrit_rien() {
 fn un_tirage_s_accroche_a_ce_qui_est_bati_et_le_dit() {
     let (mut e, cam) = devant_un_cube();
     e.tolerance = 2;
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
 
     // La boîte va de 0 à 9, sa face solide est à x = 10, son milieu à x = 5.
     // Viser x = 7 pousse de trois : la face arrive à 6, donc à UN bloc du
@@ -586,7 +748,7 @@ fn un_tirage_ne_deplace_que_son_axe() {
     let (mut e, cam) = devant_un_cube();
     e.tolerance = 2;
     let avant = e.selection.boite().unwrap();
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [14.0, 5.0, 5.0],
@@ -612,7 +774,7 @@ fn un_tirage_ne_deplace_que_son_axe() {
 fn une_face_ne_s_accroche_pas_a_son_propre_point_de_depart() {
     let (mut e, cam) = devant_un_cube();
     e.tolerance = 2;
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     // Un seul bloc tiré : le départ (x = 9) est à un bloc, donc dans la
     // tolérance.
     let vue = Camera {
@@ -636,7 +798,7 @@ fn une_face_ne_s_accroche_pas_a_son_propre_point_de_depart() {
 fn une_tolerance_nulle_eteint_l_accrochage_du_tirage() {
     let (mut e, cam) = devant_un_cube();
     e.tolerance = 0;
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [7.0, 5.0, 5.0],
@@ -662,7 +824,7 @@ fn une_tolerance_nulle_eteint_l_accrochage_du_tirage() {
 fn une_tolerance_nulle_ne_rapporte_meme_pas_une_coincidence() {
     let (mut e, cam) = devant_un_cube();
     e.tolerance = 0;
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     // Viser x = 6 pousse de quatre : la face arrive PILE sur le milieu (5).
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
@@ -697,7 +859,7 @@ fn tirer_une_face_negative_va_dans_le_bon_sens() {
         proche: 0.1,
         loin: 1000.0,
     };
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     assert_eq!(e.tirage.as_ref().unwrap().face, Direction::MoinsX);
 
     // Viser x = −4 tire la face vers l'ouest : la boîte s'AGRANDIT.
@@ -835,7 +997,7 @@ fn le_tirage_porte_les_reglages_mais_pas_la_forme() {
     e.compter = false;
     e.seed = 7;
     e.volume = tf_ops::Volume::Sphere { rayon: 5.0 };
-    assert!(e.attraper(&cam, 1.0));
+    assert!(e.attraper(&cam, 1.0, CENTRE));
     let vue = Camera {
         oeil: [5.0, 5.0, -40.0],
         cible: [14.0, 5.0, 5.0],
@@ -871,11 +1033,11 @@ fn le_tirage_porte_les_reglages_mais_pas_la_forme() {
 #[test]
 fn poser_un_bloc_passe_par_l_accrochage() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let accroche = e.reticule.accroche.unwrap().position;
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let accroche = e.vise.accroche.unwrap().position;
     assert_ne!(
         Some(accroche),
-        e.reticule.pose,
+        e.vise.pose,
         "sinon le test ne distingue rien"
     );
 
@@ -903,8 +1065,8 @@ fn poser_un_bloc_passe_par_l_accrochage() {
 #[test]
 fn casser_vise_la_case_arretee_et_poser_celle_d_avant() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let visee = e.reticule.case.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let visee = e.vise.case.unwrap();
 
     let tf_app::moteur::Commande::Appliquer { sel, params, .. } = e.casser_un_bloc().unwrap()
     else {
@@ -923,12 +1085,12 @@ fn casser_vise_la_case_arretee_et_poser_celle_d_avant() {
     assert_ne!(pose, sel, "poser dans le mur qu'on casse");
 }
 
-/// Rien sous le réticule : aucun geste. Un clic dans le ciel ne doit pas
+/// Rien sous le curseur : aucun geste. Un clic dans le ciel ne doit pas
 /// poser un bloc à une coordonnée inventée.
 #[test]
-fn sans_reticule_il_n_y_a_ni_pose_ni_cassure() {
+fn sans_visee_il_n_y_a_ni_pose_ni_cassure() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &|_| false);
     assert!(e.poser_un_bloc().is_none());
     assert!(e.casser_un_bloc().is_none());
 }
@@ -956,8 +1118,8 @@ fn chaque_outil_dit_ce_que_font_les_boutons() {
 #[test]
 fn la_pipette_prend_le_bloc_vise_sous_son_etat_exact() {
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let visee = e.reticule.case.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let visee = e.vise.case.unwrap();
     let cle = "minecraft:oak_stairs|facing=east,half=top";
     let mut demandee = None;
     e.nommer_vise(|c| {
@@ -982,9 +1144,9 @@ fn la_pipette_prend_le_bloc_vise_sous_son_etat_exact() {
     let n = tf_ops::catalogue::normaliser(d, &params).unwrap();
     assert_eq!(n.get("bloc"), Some(&tf_ops::catalogue::Valeur::texte(cle)));
 
-    // Rien sous le réticule : la pipette ne prend rien, et le bloc en main
+    // Rien sous le curseur : la pipette ne prend rien, et le bloc en main
     // RESTE — un clic dans le ciel ne doit pas vider la main.
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &|_| false);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &|_| false);
     e.nommer_vise(|_| panic!("rien n'est visé : on ne demande rien à la scène"));
     assert_eq!(e.bloc_vise, None);
     assert!(!e.pipette());
@@ -1033,7 +1195,7 @@ fn l_outil_composant_pose_le_choisi_et_le_droit_le_tourne() {
     use tf_app::moteur::{ActionComposant, Commande};
     use tf_blocks::Transfo;
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
     assert!(e.poser_un_composant().is_none());
     assert!(e.message.contains("aucun composant"), "{}", e.message);
 
@@ -1075,8 +1237,8 @@ fn l_outil_composant_pose_le_choisi_et_le_droit_le_tourne() {
 fn l_instance_visee_vient_du_document_publie() {
     use tf_app::moteur::{ActionComposant, Commande};
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let case = e.reticule.case.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let case = e.vise.case.unwrap();
     assert!(e.instance_visee().is_none());
     e.suivre_composants(document(case));
     assert_eq!(e.instance_visee().map(|i| i.id), Some(2));
@@ -1332,7 +1494,7 @@ fn coller_pose_le_presse_papiers_et_son_contour_le_montre() {
     use tf_app::moteur::{Commande, PressePapiers};
     use tf_blocks::Transfo;
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
     e.outil = Outil::Coller;
     assert!(e.coller_ici().is_none());
     assert!(
@@ -1415,8 +1577,8 @@ fn coller_pose_le_presse_papiers_et_son_contour_le_montre() {
 fn le_contour_d_arrivee_d_un_composant_est_sa_boite() {
     use tf_app::etat::Outil;
     let mut e = etat_devant_le_mur();
-    e.relever_reticule(&camera_face_au_mur(), 1.0, 64.0, &mur);
-    let case = e.reticule.case.unwrap();
+    e.relever_vise(&camera_face_au_mur(), 1.0, Some(CENTRE), 64.0, &mur);
+    let case = e.vise.case.unwrap();
     e.suivre_composants(document(case));
     e.outil = Outil::Composant;
     assert_eq!(e.contour_d_arrivee(), None, "aucun composant choisi");

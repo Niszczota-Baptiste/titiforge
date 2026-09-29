@@ -367,7 +367,7 @@ fn la_fiche_des_composants_se_dessine() {
         e.outil = Outil::Composant;
         e.editable = true;
         e.composant_choisi = Some(1);
-        e.reticule.case = Some(BlockPos::new(0, 0, 1));
+        e.vise.case = Some(BlockPos::new(0, 0, 1));
         e.suivre_composants(tf_app::moteur::Composants {
             projet: std::sync::Arc::new(p.clone()),
             erreur,

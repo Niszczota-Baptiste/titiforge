@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1150 tests aujourd’hui)
+cargo test            # tous les crates (1160 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -300,6 +300,9 @@ cargo run --release -p tf-ops --example editer -- D:\monde-essai --sel "3,-40,5,
 # le .exe WINDOWS, depuis Linux — pour donner l'outil à quelqu'un qui n'a pas Rust
 # (apt install mingw-w64 ; rustup target add x86_64-pc-windows-gnu)
 cargo build --release --target x86_64-pc-windows-gnu -p tf-ops --example editer --example semer
+# l'APPLICATION et la mesure de vol : `--bin` ET `--example` dans la même
+# invocation, sinon le binaire resterait celui d'avant (piège ci-dessous)
+cargo build --release --target x86_64-pc-windows-gnu -p tf-app --bin titiforge --example vol
 
 # une image, SANS écran (lavapipe suffit : apt install mesa-vulkan-drivers)
 cargo run --release -p tf-render --example adaptateur
@@ -316,7 +319,7 @@ TF_PRES=1 cargo run --release -p tf-render --example capture -- ../titisite/publ
 
 # LA COQUE. Une fenêtre, un vol à la Minecraft (molette ENFONCÉE pour tourner,
 # +Maj panoramique, molette roulée pour avancer ; gauche et droit restent aux
-# outils), la visée au réticule, la sélection à deux coins, l'accrochage.
+# outils), la visée SOUS LA SOURIS, la sélection à deux coins, l'accrochage.
 # SANS ARGUMENT : l'installation de Minecraft trouvée sur la machine, et
 # l'ACCUEIL — les saves, les récents, un chemin, un dossier à glisser.
 cargo run --release -p tf-app
@@ -327,6 +330,9 @@ cargo run --release -p tf-app -- ../titisite/public/codex --monde D:\monde --zon
 # regarde depuis une machine sans écran, et elle se vérifiera au pixel.
 cargo run --release -p tf-app -- ../titisite/public/codex --capture ecran.png --taille 1400x900
 cargo run --release -p tf-app -- ../titisite/public/codex --capture concep.png --mode conception
+# une capture n'a pas de souris : son curseur est au centre, sauf --curseur (en
+# pixels, depuis le haut à gauche) — le contour du bloc visé doit tomber dessous
+cargo run --release -p tf-app -- ../titisite/public/codex --capture vise.png --curseur 640,640
 # un fichier d'échange dans le presse-papiers : l'outil Coller et son contour
 # d'arrivée. Le format se reconnaît au CONTENU, jamais à l'extension
 cargo run --release -p tf-app -- ../titisite/public/codex --capture coller.png --importer porte.litematic
@@ -404,7 +410,9 @@ crates/
   tf-app/      coque winit + egui ✅ (fenêtre, vol, visée, sélection,
                accrochage, quadrillage) · formulaires ENGENDRÉS depuis les
                descripteurs ✅ · FIL MOTEUR ✅ (l'interface ne bloque jamais)
-               · SÉLECTION À LA SOURIS ✅ (gauche = coin 1, droit = coin 2)
+               · SÉLECTION À LA SOURIS ✅ (gauche = coin 1, droit = coin 2),
+                 SOUS LE CURSEUR et pas au centre de l'écran ; le bloc visé
+                 a son contour, et la visée se fige sur l'inspecteur
                · POUSSER-TIRER ✅ en mode Conception, qui S'ACCROCHE
                  à ce qui est bâti et DIT à quoi il tient
                · APPLIQUER / ANNULER / REFAIRE ✅ sur une copie de travail
@@ -2376,4 +2384,21 @@ propres à ce dépôt.
   d'une face tournée même sans rotation de variante ; c'est gardé, et nommé :
   une propriété « l'identité ne change rien » était MON hypothèse, pas la
   règle du jeu, et le test qui la posait avait tort.
+- **Un réticule au centre, dans un éditeur où la souris est libre.** J'avais
+  repris la visée du jeu — le bloc au milieu de l'écran — alors qu'ici la
+  caméra tourne à la molette enfoncée : la souris ne pilote pas le regard,
+  elle MONTRE. Le premier essai sous Windows l'a relevé avant tout le reste,
+  « la sélection se fait au centre de la caméra et non sur le curseur ». Un
+  défaut s'y cachait : on attrapait une face au centre et on la tirait sous
+  la souris — l'ancre et le glissement ne partaient pas du même rayon, et la
+  face sautait de tout l'écart au premier mouvement. Aucun test ne pouvait le
+  voir : tous visaient au centre, là où le rayon et la matrice du shader
+  s'accordent PAR CONSTRUCTION. La mutation « tangente du champ entier au lieu
+  de la moitié » passait ; seul un test qui projette un point par la matrice
+  du shader et exige que le rayon lancé vers ce pixel repasse par lui la tue.
+  Deux corollaires, qui viennent de ce que la souris QUITTE la scène pour
+  atteindre l'interface : sur l'inspecteur, la visée se fige au lieu de
+  s'effacer — le sélecteur de blocs propose le bloc visé en tête —, et le
+  bouton « pipette » ARME la pipette au lieu de la déclencher, sinon il
+  prendrait le bloc du bord de la scène.
 

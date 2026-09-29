@@ -31,5 +31,5 @@ pub mod pilote;
 pub mod regles;
 pub mod scene;
 
-pub use etat::{Etat, Quadrillage, ResumeSelection, SousLeReticule};
+pub use etat::{Etat, Quadrillage, ResumeSelection, SousLeCurseur};
 pub use moteur::{Commande, Moteur, Reponse};

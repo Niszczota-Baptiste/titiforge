@@ -170,17 +170,29 @@ pub fn viser(
     None
 }
 
+/// **Le point de l'écran sous un pixel de souris**, en coordonnées
+/// normalisées : ce que [`rayon_ecran`] prend.
+///
+/// Le sens vertical se retourne ICI, une fois : une souris compte ses pixels
+/// depuis le HAUT, l'espace normalisé compte depuis le BAS. Laisser chaque
+/// appelant refaire `1 - 2 * y / hauteur`, c'était autant d'endroits où
+/// retrouver le signe — et un axe inversé donne un outil qui vise
+/// symétriquement, plausible et faux.
+///
+/// `pixel` est en pixels PHYSIQUES, comme la taille de la surface : c'est ce
+/// que la fenêtre donne pour les deux. Mélanger des pixels logiques et une
+/// taille physique ferait viser d'autant plus à côté que l'écran est mis à
+/// l'échelle — juste sur la machine du développeur, faux sur un portable.
+pub fn ndc_du_pixel(pixel: [f32; 2], taille: [u32; 2]) -> [f32; 2] {
+    let (l, h) = (taille[0].max(1) as f32, taille[1].max(1) as f32);
+    [pixel[0] / l * 2.0 - 1.0, 1.0 - pixel[1] / h * 2.0]
+}
+
 /// La direction d'un rayon partant de l'œil vers un point de l'ÉCRAN.
 ///
 /// `ndc` est en coordonnées normalisées : −1 à gauche et en BAS, +1 à droite
-/// et en haut. Le centre de l'écran est `[0, 0]`, et c'est là que vise un
-/// réticule.
-///
-/// **Le sens vertical se dit, il ne se devine pas.** Une souris donne des
-/// pixels comptés depuis le HAUT, l'espace normalisé compte depuis le bas :
-/// c'est à l'appelant de faire `1 - 2 * y / hauteur`, une fois, et pas à
-/// chacun de retrouver le signe. Un axe inversé donne un outil qui vise
-/// symétriquement — plausible, et faux.
+/// et en haut. Le centre de l'écran est `[0, 0]`. Depuis une souris, on les
+/// obtient par [`ndc_du_pixel`] — c'est lui qui retourne le sens vertical.
 pub fn rayon_ecran(camera: &crate::camera::Camera, ndc: [f32; 2], aspect: f32) -> [f32; 3] {
     let avant = norm([
         camera.cible[0] - camera.oeil[0],
