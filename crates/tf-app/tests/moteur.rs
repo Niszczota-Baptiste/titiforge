@@ -911,3 +911,39 @@ fn coller_sans_l_air_garde_ce_qui_est_la() {
         ));
     }
 }
+
+/// **Un « Remplir » qui déborde de la carte le DIT.** La fixture porte
+/// 16 × 16 chunks ; une sélection qui va jusqu'au chunk 23 en saute huit
+/// colonnes de large, faute de terrain — et la réponse le dit, au lieu de
+/// laisser croire à une limite d'affichage.
+#[test]
+fn ce_qui_n_est_pas_genere_se_dit_dans_la_reponse() {
+    let (mut m, _) = moteur();
+    let mut params = Params::new();
+    params.poser("bloc", Valeur::texte("minecraft:dirt"));
+    assert!(m.envoyer(Commande::Appliquer {
+        op: "poser",
+        params,
+        sel: BBox::new(BlockPos::new(128, -48, 0), BlockPos::new(383, -33, 63)),
+        forme: Forme::Boite,
+        compter: true,
+        seed: 0,
+    }));
+    let r = attendre(&mut m);
+    let Reponse::Fait { resume, .. } = &r else {
+        panic!("attendu Fait, reçu {r:?}");
+    };
+    assert!(
+        resume.contains("32 chunk(s) de la zone jamais générés"),
+        "{resume}"
+    );
+
+    // Tout généré : la phrase n'apparaît pas.
+    assert!(m.envoyer(poser("minecraft:stone")));
+    let r = attendre(&mut m);
+    let Reponse::Fait { resume, .. } = &r else {
+        panic!("attendu Fait, reçu {r:?}");
+    };
+    assert!(!resume.contains("jamais générés"), "{resume}");
+    assert_eq!(tf_app::moteur::non_generes(0), "");
+}

@@ -19,7 +19,7 @@
 //! 3. **Une charge illisible est SAUTÉE, jamais devinée.** Un `.mca` abîmé
 //!    existe ; il ne doit ni tuer le processus ni faire croire à de l'air.
 
-use tf_anvil::{decode_section, inflate, read, scan, Interner, Section};
+use tf_anvil::{decode_section, external_file_name, inflate, read, scan, Interner, Section};
 
 use crate::coords::{BBox, ChunkPos, RegionPos};
 use crate::source::{Dimension, Folder, RegionSource};
@@ -49,11 +49,49 @@ pub struct Bilan {
     pub sans_blocs: usize,
     /// Charges qu'on n'a pas su lire. Zéro sur une save saine.
     pub illisibles: usize,
+    /// **POURQUOI**, pour les premiers illisibles : le chunk et la cause.
+    ///
+    /// « Illisible » recouvre cinq défauts qui ne se réparent pas pareil — un
+    /// fichier tronqué (copié pendant que le jeu l'écrivait), une compression
+    /// que le format ne définit pas, un `.mca` qui renvoie à un `.mcc`
+    /// absent, un NBT abîmé. Dire seulement « 1 chunk illisible » laissait
+    /// l'utilisateur sans rien à regarder. Plafonné à [`RAISONS_MAX`] : dix
+    /// raisons identiques n'en disent pas plus qu'une.
+    pub raisons: Vec<String>,
     /// Chunks DÉCOMPRESSÉS — le coût d'une lecture, que le reste du bilan ne
     /// voit pas : un chunk décompressé pour rien ne pose aucune section.
     pub decompresses: usize,
     /// Sections dont on a su lire les biomes.
     pub avec_biomes: usize,
+}
+
+/// Au-delà, on compte sans décrire.
+pub const RAISONS_MAX: usize = 4;
+
+impl Bilan {
+    /// **La suite d'un message « N illisible(s) »** : ` — ` puis les raisons,
+    /// et ce qui n'a pas été décrit. Vide quand tout s'est lu.
+    pub fn pourquoi(&self) -> String {
+        if self.raisons.is_empty() {
+            return String::new();
+        }
+        let mut t = format!(" — {}", self.raisons.join(" ; "));
+        // Une raison peut couvrir plusieurs illisibles (les emplacements d'un
+        // en-tête) : on ne compte « d'autres » que s'il en reste vraiment.
+        let decrits = self.raisons.len();
+        if self.illisibles > decrits && decrits == RAISONS_MAX {
+            t.push_str(" ; et d'autres");
+        }
+        t
+    }
+
+    /// Compte un illisible, et dit pourquoi tant qu'il y a de la place.
+    fn illisible(&mut self, n: usize, raison: impl FnOnce() -> String) {
+        self.illisibles += n;
+        if n > 0 && self.raisons.len() < RAISONS_MAX {
+            self.raisons.push(raison());
+        }
+    }
 }
 
 /// Les sections d'une emprise, matérialisées.
@@ -102,14 +140,23 @@ pub fn sections_de_si<S: RegionSource + ?Sized>(
             continue; // région absente : ce n'est pas une anomalie
         };
         let Ok(region) = read(&octets, pos.x, pos.z) else {
-            bilan.illisibles += 1;
+            bilan.illisible(1, || {
+                format!("{} : plus court que son en-tête de 8 Kio", pos.file_name())
+            });
             continue;
         };
         bilan.regions += 1;
         // Les emplacements que l'en-tête annonçait et qu'on n'a pas su
         // repérer : la région les laisse vides pour sauver les autres, le
         // bilan les dit.
-        bilan.illisibles += region.illisibles;
+        bilan.illisible(region.illisibles, || {
+            format!(
+                "{} : {} emplacement(s) de l'en-tête pointent hors du fichier \
+                 — un fichier tronqué, copié pendant que le jeu l'écrivait ?",
+                pos.file_name(),
+                region.illisibles
+            )
+        });
         for brut in region.iter() {
             // **On filtre AVANT d'inflater.** Le filtre était posé après le
             // scan : une région bâtie porte 256 chunks, donc lire UNE section
@@ -134,12 +181,48 @@ pub fn sections_de_si<S: RegionSource + ?Sized>(
                 continue;
             }
             bilan.decompresses += 1;
-            let Ok(inflated) = inflate(&brut.payload, brut.compression) else {
-                bilan.illisibles += 1;
-                continue;
+            // **Une charge DÉPORTÉE vit dans son `.mcc`** : l'en-tête ne porte
+            // qu'un talon vide. Ce chemin-ci l'oubliait — le jeu déporte tout
+            // chunk de plus d'un mégaoctet compressé, et il s'affichait
+            // « illisible » pendant que les opérations, qui le résolvent, le
+            // lisaient très bien. Le nom vient de la place du chunk, comme le
+            // jeu le forme.
+            let deporte;
+            let charge: &[u8] = if brut.needs_external() {
+                let nom = external_file_name(approx.x, approx.z);
+                match src.read_external(dim, folder, &nom) {
+                    Ok(b) => {
+                        deporte = b;
+                        &deporte
+                    }
+                    Err(_) => {
+                        bilan.illisible(1, || {
+                            format!(
+                                "chunk ({}, {}) : sa charge est déportée dans {nom}, \
+                                 introuvable",
+                                approx.x, approx.z
+                            )
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                &brut.payload
+            };
+            let inflated = match inflate(charge, brut.compression) {
+                Ok(i) => i,
+                Err(e) => {
+                    bilan.illisible(1, || format!("chunk ({}, {}) : {e}", approx.x, approx.z));
+                    continue;
+                }
             };
             let Ok(sc) = scan(&inflated) else {
-                bilan.illisibles += 1;
+                bilan.illisible(1, || {
+                    format!(
+                        "chunk ({}, {}) : NBT tronqué ou malformé",
+                        approx.x, approx.z
+                    )
+                });
                 continue;
             };
             let chunk = coordonnees(&sc, pos, brut.index);
@@ -185,7 +268,12 @@ pub fn sections_de_si<S: RegionSource + ?Sized>(
                         });
                     }
                     Ok(None) => bilan.sans_blocs += 1,
-                    Err(_) => bilan.illisibles += 1,
+                    Err(_) => bilan.illisible(1, || {
+                        format!(
+                            "chunk ({}, {}), section {} : blocs tronqués ou malformés",
+                            chunk.x, chunk.z, s.y
+                        )
+                    }),
                 }
             }
         }

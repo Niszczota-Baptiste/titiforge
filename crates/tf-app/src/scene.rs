@@ -372,10 +372,18 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
                     grille.poser(s.chunk.x, s.chunk.z, s.section);
                 },
             );
-            format!(
+            let mut quoi = format!(
                 "{nom} · chunks {x0}..{x1} × {z0}..{z1} · {} chunks, {} sections",
                 bilan.chunks, bilan.sections
-            )
+            );
+            if bilan.illisibles > 0 {
+                quoi.push_str(&format!(
+                    " · {} chunk(s) illisible(s){}",
+                    bilan.illisibles,
+                    bilan.pourquoi()
+                ));
+            }
+            quoi
         }
         Ou::Fixture => {
             // La fixture de BUILD : un bâtiment décoré, pas du terrain. C'est

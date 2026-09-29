@@ -1633,3 +1633,101 @@ fn deux_correctifs_d_un_document_s_enchainent_et_une_creation_se_refait() {
     rejouer(&st, e, Sens::Refaire).unwrap();
     assert_eq!(st.lire_fichier("projet").unwrap(), c);
 }
+
+/// **Ce que le jeu n'a jamais généré se COMPTE.** Une opération n'engendre pas
+/// de chunk : elle saute ceux qui manquent, et c'est juste — mais en silence,
+/// un « Remplir » qui déborde de la carte s'arrêtait net au bord du terrain, et
+/// l'essai sous Windows l'a pris pour une limite d'affichage.
+///
+/// La fixture porte 16 × 16 chunks en `r.0.0` ; le reste de la région, et
+/// toute autre région, n'existe pas.
+#[test]
+fn les_chunks_jamais_generes_de_la_zone_se_comptent() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let p = Plan::nouveau(
+        Masque::Etat(i.intern("minecraft:stone")),
+        Motif::Bloc(i.intern("minecraft:dirt")),
+    )
+    .en_comptant();
+
+    // Chunks 8..23 × 0..3 : la moitié est générée (8..15), l'autre non.
+    let r = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(128, -64, 0, 383, 0, 63),
+        &p,
+        &i,
+    )
+    .unwrap();
+    assert_eq!(r.chunks_presents, 32);
+    assert_eq!(r.chunks_absents, 32, "8 × 4 chunks au-delà du terrain");
+    assert!(!r.est_vide(), "ce qui existe a bien été écrit");
+
+    // Une région ENTIÈRE qui manque : chunks 31..33 sur une rangée. Le 31 est
+    // dans `r.0.0` sans y être généré, les deux autres dans `r.1.0`, absente.
+    let r = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(496, -64, 0, 543, 0, 15),
+        &p,
+        &i,
+    )
+    .unwrap();
+    assert_eq!((r.chunks_presents, r.chunks_absents), (0, 3));
+
+    // Tout est généré : rien à dire.
+    let r = appliquer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &boite(0, -64, 0, 255, 0, 255),
+        &p,
+        &i,
+    )
+    .unwrap();
+    assert_eq!((r.chunks_presents, r.chunks_absents), (256, 0));
+}
+
+/// Le compte reste EXACT sur une sélection démesurée, dont on ne visite que
+/// les régions qui existent : ce qui manque se déduit de ce qui existe.
+#[test]
+fn une_selection_demesuree_compte_exactement_ce_qui_manque() {
+    let (src, _) = monde();
+    let st = staging(src);
+    let mut i = Interner::new();
+    let p = Plan::nouveau(
+        Masque::Etat(i.intern("minecraft:stone")),
+        Motif::Bloc(i.intern("minecraft:dirt")),
+    );
+    let sel = boite(-30_000_000, -64, -30_000_000, 30_000_000, 319, 30_000_000);
+    let r = appliquer(&st, &SURFACE, DOSSIER, &sel, &p, &i).unwrap();
+    assert_eq!(r.chunks_presents, 256);
+    let total = tf_ops::edition::chunks_dans(&sel);
+    assert_eq!(
+        total,
+        3_750_001u64 * 3_750_001,
+        "la boîte, en colonnes de chunks"
+    );
+    assert_eq!(r.chunks_absents, total - 256);
+}
+
+/// Une opération COMPOSÉE absorbe les rapports de ses passes : ce qu'elles ont
+/// sauté faute de terrain s'additionne, comme le reste.
+#[test]
+fn les_chunks_absents_s_additionnent_d_une_passe_a_l_autre() {
+    let mut a = tf_ops::edition::RapportRegion {
+        chunks_presents: 3,
+        chunks_absents: 2,
+        ..Default::default()
+    };
+    a.absorber(tf_ops::edition::RapportRegion {
+        chunks_presents: 1,
+        chunks_absents: 5,
+        ..Default::default()
+    });
+    assert_eq!((a.chunks_presents, a.chunks_absents), (4, 7));
+}

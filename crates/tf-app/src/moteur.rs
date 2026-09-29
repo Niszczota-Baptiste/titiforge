@@ -928,6 +928,7 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         if approches > 0 {
             s.push_str(&format!(" · {approches} entité(s) approchée(s)"));
         }
+        s.push_str(&non_generes(rap.chunks_absents));
         if demandee.get() && regles.table().is_none() {
             s.push_str(" · orientations NON réécrites : les règles de rotation du pack manquent");
         } else if intacts > 0 {
@@ -1098,6 +1099,7 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         if !cr.approches.is_empty() {
             blocs.push_str(&format!(" · {} entité(s) approchée(s)", cr.approches.len()));
         }
+        blocs.push_str(&non_generes(r.chunks_absents));
         // **Un build à moitié tourné se DIT.** Sans règles, aucune
         // orientation n'a bougé ; avec, celles que le pack ne sait pas tourner
         // sont restées telles quelles. Les deux se lisent pareil à l'écran.
@@ -1399,6 +1401,21 @@ pub fn zones_de<'a>(
 
 /// L'heure, en secondes depuis l'époque. Zéro si l'horloge est absurde —
 /// une date fausse vaut mieux qu'un plantage dans un journal.
+/// **Ce qu'une opération a SAUTÉ faute de terrain**, à ajouter à son résumé.
+///
+/// Une opération n'écrit que dans les chunks que le jeu a générés ; au-delà du
+/// bord de la carte, elle s'arrête net. Sans cette phrase, l'arrêt se lisait
+/// comme une limite d'affichage.
+pub fn non_generes(absents: u64) -> String {
+    if absents == 0 {
+        return String::new();
+    }
+    format!(
+        " · {absents} chunk(s) de la zone jamais générés par le jeu : rien n'y \
+         est écrit — y aller en jeu d'abord, ou prégénérer la carte"
+    )
+}
+
 fn horodatage() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

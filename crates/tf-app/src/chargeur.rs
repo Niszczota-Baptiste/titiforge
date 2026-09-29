@@ -359,9 +359,10 @@ fn servir<S: RegionSource + ?Sized>(
         if bilan.illisibles > 0 {
             let _ = reponses.send(Reponse::Echec(format!(
                 "la région {} porte {} chunk(s) illisible(s) : ce qu'ils \
-                 contenaient n'est pas affiché",
+                 contenaient n'est pas affiché{}",
                 lot.region.file_name(),
-                bilan.illisibles
+                bilan.illisibles,
+                bilan.pourquoi()
             )));
         }
     }

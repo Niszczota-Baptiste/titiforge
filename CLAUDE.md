@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1160 tests aujourd’hui)
+cargo test            # tous les crates (1169 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -2401,4 +2401,21 @@ propres à ce dépôt.
   s'effacer — le sélecteur de blocs propose le bloc visé en tête —, et le
   bouton « pipette » ARME la pipette au lieu de la déclencher, sinon il
   prendrait le bloc du bord de la scène.
+- **Une opération qui SAUTE ce qui n'existe pas doit le dire.** Un chunk que
+  le jeu n'a jamais généré ne s'écrit pas — on ne sait pas générer le
+  terrain —, et `appliquer_region` le sautait sans un mot. Sur un monde neuf,
+  un « Remplir » qui débordait de la carte s'arrêtait net au bord du terrain :
+  1 220 856 blocs sur 3 719 352, et l'utilisateur a cherché une « limite de
+  blocs sur le visuel ». Le compte (`chunks_absents`) se DÉDUIT de ce qui
+  existe — chaque chunk de l'emprise est dans une seule région, et toute
+  région présente est visitée —, donc il reste exact sur une sélection
+  démesurée dont on ne visite que les régions présentes.
+- **Deux chemins de lecture, un seul savait lire un `.mcc`.** Les opérations
+  résolvaient les charges déportées ; la lecture d'AFFICHAGE
+  (`sections_de_si`) inflatait le talon vide et comptait le chunk
+  « illisible ». Un bâtiment de plus d'un mégaoctet compressé — des coffres
+  pleins, des centaines d'entités — disparaissait de l'écran en restant
+  éditable. Et « illisible » recouvrait cinq causes sans en nommer aucune :
+  le bilan dit maintenant POURQUOI (`Bilan::raisons`), chunk et cause, parce
+  qu'un message sans raison ne laisse rien à vérifier chez l'utilisateur.
 

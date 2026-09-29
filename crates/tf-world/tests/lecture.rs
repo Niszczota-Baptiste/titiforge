@@ -204,3 +204,245 @@ fn le_bilan_compte_ce_qui_a_vraiment_ete_rendu() {
     assert_eq!(bilan.chunks, 4, "2 × 2 chunks dans r.0.0");
     assert_eq!(bilan.sections, 8, "4 chunks × 2 sections");
 }
+
+// ── ce qui ne se lit pas, et POURQUOI ───────────────────────────────────────
+
+/// Le chunk (0, 0) d'un terrain de deux sections, inflaté.
+fn chunk_de_terrain() -> Vec<u8> {
+    let t = Terrain {
+        side: 1,
+        sections: 2,
+        ..Terrain::default()
+    };
+    let octets = region_en(&t, 0, 0);
+    let r = tf_anvil::read(&octets, 0, 0).unwrap();
+    let brut = r.get(0, 0).expect("la fixture porte le chunk (0, 0)");
+    tf_anvil::inflate(&brut.payload, brut.compression).unwrap()
+}
+
+/// Le même chunk, BOURRÉ d'un tableau d'octets incompressible glissé à la
+/// racine : plus d'un mégaoctet compressé, donc ce que le jeu DÉPORTE dans un
+/// `.mcc`. Le lecteur enjambe ce qu'il ne connaît pas, donc les sections sont
+/// celles du chunk d'origine.
+fn bourre(inflated: &[u8]) -> Vec<u8> {
+    let mut x = 0x5eed_u64;
+    let bruit: Vec<u8> = (0..1_100_000)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (x >> 56) as u8
+        })
+        .collect();
+    // Le dernier octet est le TAG_End de la racine : le champ passe avant.
+    let mut out = inflated[..inflated.len() - 1].to_vec();
+    out.push(7); // TAG_Byte_Array
+    out.extend_from_slice(&8u16.to_be_bytes());
+    out.extend_from_slice(b"Bourrage");
+    out.extend_from_slice(&(bruit.len() as i32).to_be_bytes());
+    out.extend_from_slice(&bruit);
+    out.push(0);
+    out
+}
+
+/// Une région dont les chunks `(i, 0)`, `i < n`, portent tous `charge`,
+/// annoncée sous `compression`.
+fn region_de(charge: &[u8], compression: tf_anvil::Compression, n: u16) -> tf_anvil::WriteOutput {
+    let mut r = tf_anvil::Region::vide(0, 0);
+    for i in 0..n {
+        r.slots[i as usize] = Some(tf_anvil::RawChunk {
+            index: i,
+            timestamp: 0,
+            compression,
+            payload: std::borrow::Cow::Owned(charge.to_vec()),
+            external: false,
+        });
+    }
+    tf_anvil::write(&r).unwrap()
+}
+
+fn lire_dans(src: &MemorySource, sel: &BBox) -> (tf_world::Bilan, Vec<(i8, Vec<String>)>) {
+    let mut interner = Interner::new();
+    let mut vues = Vec::new();
+    let bilan = sections_de(
+        src,
+        &Dimension::Overworld,
+        Folder::Region,
+        sel,
+        &mut interner,
+        |s| vues.push(s),
+    );
+    // Par NOM : chaque lecture numérote dans son propre interner.
+    let mut noms: Vec<(i8, Vec<String>)> = vues
+        .iter()
+        .map(|s| {
+            let mut p: Vec<String> = s
+                .section
+                .palette
+                .iter()
+                .map(|&id| interner.resolve(id).unwrap_or("?").to_string())
+                .collect();
+            p.sort();
+            (s.section.y, p)
+        })
+        .collect();
+    noms.sort();
+    (bilan, noms)
+}
+
+/// **Un chunk déporté se lit comme les autres.** Le jeu déporte dans un
+/// `c.X.Z.mcc` tout chunk de plus d'un mégaoctet compressé, et le `.mca` ne
+/// garde qu'un talon vide. Le chemin d'AFFICHAGE l'oubliait : il comptait le
+/// chunk « illisible » pendant que les opérations, qui le résolvent, le
+/// lisaient très bien — un bâtiment chargé d'entités disparaissait de l'écran
+/// et restait éditable.
+#[test]
+fn un_chunk_deporte_se_lit_comme_les_autres() {
+    let normal = chunk_de_terrain();
+    let temoin = MemorySource::new();
+    let z = tf_anvil::deflate(&normal, tf_anvil::Compression::Zlib).unwrap();
+    temoin
+        .write_region(
+            &Dimension::Overworld,
+            Folder::Region,
+            RegionPos::new(0, 0),
+            &region_de(&z, tf_anvil::Compression::Zlib, 1).region,
+        )
+        .unwrap();
+    let (b0, attendu) = lire_dans(&temoin, &boite(0, 0, 15, 15));
+    assert_eq!(b0.illisibles, 0);
+    assert!(!attendu.is_empty(), "le témoin doit porter des sections");
+
+    let gros = tf_anvil::deflate(&bourre(&normal), tf_anvil::Compression::Zlib).unwrap();
+    let out = region_de(&gros, tf_anvil::Compression::Zlib, 1);
+    assert_eq!(out.external.len(), 1, "le chunk doit partir en `.mcc`");
+    assert_eq!(out.external[0].name, "c.0.0.mcc");
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &out.region,
+    )
+    .unwrap();
+    src.write_external(
+        &Dimension::Overworld,
+        Folder::Region,
+        &out.external[0].name,
+        &out.external[0].bytes,
+    )
+    .unwrap();
+    let (bilan, vues) = lire_dans(&src, &boite(0, 0, 15, 15));
+    assert_eq!(bilan.illisibles, 0, "{:?}", bilan.raisons);
+    assert_eq!(bilan.chunks, 1);
+    assert_eq!(vues, attendu, "les sections du chunk, par nom");
+}
+
+/// Et quand le `.mcc` MANQUE, on le dit — par son nom, avec le chunk.
+#[test]
+fn un_chunk_deporte_sans_son_mcc_le_dit() {
+    let gros =
+        tf_anvil::deflate(&bourre(&chunk_de_terrain()), tf_anvil::Compression::Zlib).unwrap();
+    let out = region_de(&gros, tf_anvil::Compression::Zlib, 1);
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &out.region,
+    )
+    .unwrap();
+    let (bilan, vues) = lire_dans(&src, &boite(0, 0, 15, 15));
+    assert!(vues.is_empty());
+    assert_eq!(bilan.illisibles, 1);
+    assert_eq!(bilan.raisons.len(), 1);
+    let r = &bilan.raisons[0];
+    assert!(r.contains("chunk (0, 0)") && r.contains("c.0.0.mcc"), "{r}");
+    assert!(bilan.pourquoi().contains("c.0.0.mcc"));
+}
+
+/// **« Illisible » recouvre plusieurs défauts, et chacun se NOMME.** Une
+/// compression que le format ne définit pas — le LZ4 qu'un serveur récent
+/// peut choisir — n'a rien à voir avec un fichier tronqué, et ne se répare
+/// pas pareil.
+#[test]
+fn une_compression_inconnue_se_nomme() {
+    let out = region_de(&[1, 2, 3], tf_anvil::Compression::Other(4), 1);
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &out.region,
+    )
+    .unwrap();
+    let (bilan, _) = lire_dans(&src, &boite(0, 0, 15, 15));
+    assert_eq!(bilan.illisibles, 1);
+    let r = &bilan.raisons[0];
+    assert!(
+        r.contains("chunk (0, 0)") && r.contains("compression inconnue (4)"),
+        "{r}"
+    );
+}
+
+/// Un en-tête qui pointe au-delà de la fin du fichier : un `.mca` tronqué —
+/// ce qu'on obtient en le copiant pendant que le jeu l'écrit. Le chunk reste
+/// illisible, et la raison dit ce qu'il faut regarder.
+#[test]
+fn un_en_tete_qui_pointe_hors_du_fichier_se_dit() {
+    let z = tf_anvil::deflate(&chunk_de_terrain(), tf_anvil::Compression::Zlib).unwrap();
+    let mut octets = region_de(&z, tf_anvil::Compression::Zlib, 2).region;
+    octets.truncate(8192 + 100);
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &octets,
+    )
+    .unwrap();
+    let (bilan, vues) = lire_dans(&src, &boite(0, 0, 31, 15));
+    assert!(vues.is_empty());
+    assert_eq!(bilan.illisibles, 2, "les deux emplacements de l'en-tête");
+    assert_eq!(bilan.raisons.len(), 1, "une raison pour l'en-tête entier");
+    let r = &bilan.raisons[0];
+    assert!(
+        r.contains("r.0.0.mca") && r.contains("hors du fichier"),
+        "{r}"
+    );
+    assert!(r.contains("2 emplacement(s)"), "{r}");
+    // Une raison qui couvre deux illisibles n'en cache pas d'autres.
+    assert!(
+        !bilan.pourquoi().contains("d'autres"),
+        "{}",
+        bilan.pourquoi()
+    );
+}
+
+/// Les raisons sont PLAFONNÉES : une région abîmée en aurait mille, et dix
+/// raisons identiques n'en disent pas plus qu'une. Le compte, lui, reste
+/// exact, et le message dit qu'il y en a d'autres.
+#[test]
+fn les_raisons_sont_plafonnees_le_compte_non() {
+    let out = region_de(&[1, 2, 3], tf_anvil::Compression::Other(4), 10);
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &out.region,
+    )
+    .unwrap();
+    let (bilan, _) = lire_dans(&src, &boite(0, 0, 511, 15));
+    assert_eq!(bilan.illisibles, 10);
+    assert_eq!(bilan.raisons.len(), tf_world::lecture::RAISONS_MAX);
+    assert!(
+        bilan.pourquoi().ends_with("et d'autres"),
+        "{}",
+        bilan.pourquoi()
+    );
+
+    // Tout s'est lu : rien à dire.
+    let (sain, _) = lire(&boite(0, 0, 31, 31));
+    assert_eq!(sain.pourquoi(), "");
+}

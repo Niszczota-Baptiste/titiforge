@@ -846,6 +846,15 @@ fn main() {
             rap.biomes
         );
     }
+    // Ce qui n'a pas été écrit faute de terrain se DIT : sinon l'opération
+    // s'arrête au bord de la carte sans qu'on sache pourquoi.
+    if rap.chunks_absents > 0 {
+        println!(
+            "ATTENTION : {} chunk(s) de la zone n'ont jamais été générés par le \
+             jeu — rien n'y est écrit. Y aller en jeu d'abord, ou prégénérer la carte",
+            rap.chunks_absents
+        );
+    }
     match rap.bornes {
         Some(b) => println!(
             "portée réelle : {},{},{} → {},{},{}",

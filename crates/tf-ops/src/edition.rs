@@ -99,6 +99,20 @@ pub struct RapportRegion {
     /// au bloc : sa grille est de 4 × 4 × 4, et annoncer des blocs laisserait
     /// croire à une précision que le format n'a pas.
     pub biomes: u64,
+    /// Chunks de l'emprise qui EXISTENT dans le monde — ceux qu'une passe a
+    /// pu lire. C'est la moitié comptée de [`RapportRegion::chunks_absents`].
+    pub chunks_presents: u64,
+    /// **Chunks de l'emprise que le jeu n'a JAMAIS générés** : rien n'y a été
+    /// écrit.
+    ///
+    /// Une opération n'engendre pas de chunk — on ne sait pas générer le
+    /// terrain, et un chunk vide posé là serait un trou dans le monde. Elle
+    /// les SAUTE donc, et c'est juste ; mais en silence, un « Remplir » sur
+    /// une sélection qui déborde de la carte s'arrêtait net au bord du
+    /// terrain, et rien ne disait pourquoi — l'essai sous Windows l'a pris
+    /// pour une limite d'affichage. Rendu d'office, comme les entités
+    /// laissées.
+    pub chunks_absents: u64,
 }
 
 impl RapportRegion {
@@ -191,6 +205,8 @@ impl RapportRegion {
         self.mobiles_sans_terrain += autre.mobiles_sans_terrain;
         self.mobiles_autre_version += autre.mobiles_autre_version;
         self.biomes += autre.biomes;
+        self.chunks_presents += autre.chunks_presents;
+        self.chunks_absents += autre.chunks_absents;
     }
 }
 
@@ -1338,7 +1354,10 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     // ne dépendent donc pas du nombre de cœurs. Un journal qui changerait
     // d'ordre selon la machine rendrait deux annulations différentes du même
     // travail.
-    let mut rap = RapportRegion::default();
+    let mut rap = RapportRegion {
+        chunks_presents: travaux.len() as u64,
+        ..Default::default()
+    };
     let mut compte = op.compte().then_some(0u64);
     for f in faits {
         for (a, b) in rap.etages.iter_mut().zip(f.etages) {
@@ -1439,6 +1458,12 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
             Err(e) => return Err(echouer(staging, &total, e)),
         }
     }
+    // **Ce qui n'existe pas se déduit de ce qui existe.** Chaque chunk de
+    // l'emprise appartient à une seule région, et toute région qui existe a
+    // été visitée : la différence est exacte — y compris pour les régions
+    // entières qui manquent, et pour une sélection démesurée dont on ne
+    // visite que les régions présentes.
+    total.chunks_absents = chunks_dans(sel).saturating_sub(total.chunks_presents);
     // ── Les points d'intérêt, que le JEU relira.
     //
     // Un lit ou un poste de travail qu'on déplace reste inconnu à sa nouvelle
@@ -1454,6 +1479,15 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         }
     }
     Ok(total)
+}
+
+/// Le nombre de colonnes de chunks qu'une boîte touche. En `u64` : « tout
+/// sélectionner » sur un monde Minefield dépasse de loin un `u32`.
+pub fn chunks_dans(sel: &BBox) -> u64 {
+    let (a, b) = (sel.min.chunk(), sel.max.chunk());
+    let l = (b.x as i64 - a.x as i64 + 1).max(0) as u64;
+    let p = (b.z as i64 - a.z as i64 + 1).max(0) as u64;
+    l.saturating_mul(p)
 }
 
 /// Au-delà de combien de régions dans la BOÎTE on demande à la source
