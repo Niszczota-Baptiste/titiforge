@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1169**, zéro échec |
+| Tests | **1176**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1169 tests, répartis par ce qu'ils PROUVENT :
+1176 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -823,8 +823,10 @@ lecture d'AFFICHAGE n'allait jamais chercher la charge d'un chunk déporté en
 `.mcc` — un chunk de plus d'un mégaoctet compressé s'affichait « illisible »
 pendant que les opérations le lisaient très bien.
 
-**12 mutations** sur le compte des chunks absents et les raisons des
-illisibles, toutes tuées.
+**22 mutations, toutes tuées** : 12 sur le compte des chunks absents et les
+raisons des illisibles, 10 sur les chunks à mi-génération — le statut lu aux
+deux dispositions, la liste qui ne devine pas, et chacun des cinq endroits qui
+le lisent.
 
 ### Une opération qui échoue en route ne laisse rien
 

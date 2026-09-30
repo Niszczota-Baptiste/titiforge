@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1169 tests aujourd’hui)
+cargo test            # tous les crates (1176 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
