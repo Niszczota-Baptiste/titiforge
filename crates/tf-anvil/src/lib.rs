@@ -21,6 +21,7 @@ pub mod poi;
 pub mod region;
 pub mod section;
 pub mod state;
+pub mod vide;
 
 pub use biomes::{bits_biome, Biomes, VOL_BIOME};
 pub use chunk::{
@@ -45,3 +46,4 @@ pub use region::{
 };
 pub use section::{bits_for, in_section, local_index, Section, MAX_BITS, MAX_PALETTE, VOL};
 pub use state::{split_key, state_key, Interner, StateId};
+pub use vide::{chunk_vide, DV_1_18, SECTIONS_SURFACE};

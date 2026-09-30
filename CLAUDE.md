@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1176 tests aujourd’hui)
+cargo test            # tous les crates (1206 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -496,6 +496,8 @@ couvriront le même terrain.
 | Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas. Côté coque, son dossier dans `dossier_par_defaut` (`tf-app/src/etat.rs`, le compilateur l'exige) : là où l'outil qui le lit le CHERCHE. Son extension, l'export et la liste d'import la tirent de `Format::extension` |
 | Une règle de TEXTURE (uv par défaut, sens d'une face, `uvlock`) | `tf-assets/src/uv.rs`, dans l'ordre du jeu — jamais une correction dans un shader. Ses propriétés dans `tf-assets/tests/uv.rs` (ce que la règle doit VOULOIR DIRE : projection, texture qui suit la géométrie, alignement sur le monde), et la jonction au pixel dans `tf-render/tests/orientation.rs`. Le rendu ne reçoit que les uv de deux coins et l'échange des axes |
 | Un statut de génération INACHEVÉE (une version du jeu en ajoute une étape) | `STATUTS_INCOMPLETS` (`tf-anvil/src/chunk.rs`) — et rien ailleurs : l'affichage, l'écriture, la copie, la garde du `//move` et les entités le lisent tous par `ChunkScan::incomplet`. Une fixture de chunk inachevé : `tf_bench::avec_statut` |
+| Un monde où l'on peut CRÉER des chunks (un autre préréglage vide, une autre dimension, un format d'avant 1.18) | `Niveau::monde_vide` (`tf-world/src/niveau.rs`) décide si le monde est vide, `Staging::monde_vide` pour quelle dimension, et `peut_creer` (`tf-ops/src/edition.rs`) est la SEULE règle que les opérations consultent — garde du `//move` comprise. Le chunk vient de `tf_anvil::chunk_vide`, relu par le décodeur gelé. Jamais un chunk créé ailleurs : dans un monde qui a du terrain, un chunk vide est un puits jusqu'au fond du monde |
+| Ce que vise un rayon qui ne touche AUCUN bloc | `PlanDeReference` (`tf-app/src/etat.rs`) et `viser_plan` (`tf-render/src/viser.rs`). Un REPLI : un bloc gagne toujours. La touche a la forme d'une touche de bloc (`case`, `avant`, `face`), donc tout ce qui vise s'en sert sans le savoir ; ce qui ne doit pas agir sur le plan (casser, nommer) lit `SousLeCurseur::sur_le_plan` |
 | Un bloc plein d'eau SANS propriété qui le dise | `TOUJOURS_INONDES` (`tf-assets/src/fluides.rs`). Un bloc qui porte `waterlogged` — `minefield:*` compris — n'a rien à y faire : l'état le dit |
 | Une chose que la surface d'un fluide LIT (une case de plus, un voisin de plus) | d'abord la référence indépendante (`tf-mesh/tests/fluides.rs`, qui transcrit le jeu), puis la passe (`fluides.rs`) : c'est leur croisement qui tranche. Si elle lit à plus d'UN bloc, `voisines_fluides` (`chantier.rs`) doit s'élargir d'autant — les deux tests de remaillage avec de l'eau rougiront sinon |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
@@ -2410,7 +2412,20 @@ propres à ce dépôt.
   blocs sur le visuel ». Le compte (`chunks_absents`) se DÉDUIT de ce qui
   existe — chaque chunk de l'emprise est dans une seule région, et toute
   région présente est visitée —, donc il reste exact sur une sélection
-  démesurée dont on ne visite que les régions présentes.
+  démesurée dont on ne visite que les régions présentes. Le cas TOTAL a
+  attendu plus longtemps : une sélection tout entière hors de la carte
+  n'écrit rien, donc passait par `Reponse::Rien` — « Remplir — rien n'a
+  changé », qui se lit « c'était déjà ça ». Trouvé en écrivant l'essai du
+  plafond d'un monde vide ; la raison y est maintenant aussi.
+- **Une règle écrite pour le BORD de la carte vaut pour TOUT un monde vide.**
+  « Un chunk absent se saute », « une région absente est le cas normal »,
+  « un rayon qui ne touche rien ne vise rien » : trois règles justes au bord
+  d'un monde de terrain, et qui rendaient le préréglage « The Void »
+  inutilisable — rien ne s'y écrivait, rien ne s'y visait. On ne l'a pas
+  traité en contournant chacune : `peut_creer` et le plan de référence sont
+  les deux seuls endroits qui savent qu'un monde est vide. Et l'annulation
+  d'une création rend l'ABSENCE, pas le chunk vide imaginé en route — sinon
+  la région créée ne pourrait plus quitter la copie de travail.
 - **Un chunk que le jeu n'a pas fini de générer n'est pas un chunk.** Au
   bord de toute zone explorée, le jeu laisse une couronne de chunks à
   mi-génération (`Status` = `noise`, `liquid_carvers`, `features`…) et

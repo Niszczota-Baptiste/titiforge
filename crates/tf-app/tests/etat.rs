@@ -1605,3 +1605,292 @@ fn un_fichier_plus_recent_que_le_monde_se_signale() {
     e.echanges.version_monde = Some(3465);
     assert_eq!(e.presse_plus_recente(), None);
 }
+
+// ── le PLAN DE RÉFÉRENCE : viser dans un monde vide ─────────────────────────
+
+/// Un monde VIDE tel que `level.dat` le dit : plat, une couche d'air — le
+/// préréglage « The Void » du jeu.
+fn niveau_vide(apparition: Option<[i32; 3]>) -> tf_world::niveau::Niveau {
+    tf_world::niveau::Niveau {
+        apparition,
+        data_version: Some(2975),
+        generation: Some(tf_world::niveau::Generation {
+            genre: "minecraft:flat".into(),
+            couches: vec![("minecraft:air".into(), 1)],
+            biome: Some("minecraft:the_void".into()),
+        }),
+        ..Default::default()
+    }
+}
+
+/// Un plat « Classique » : du terrain, donc pas vide.
+fn niveau_plat_classique() -> tf_world::niveau::Niveau {
+    let mut n = niveau_vide(Some([3, -60, 9]));
+    n.generation.as_mut().unwrap().couches = vec![
+        ("minecraft:bedrock".into(), 1),
+        ("minecraft:dirt".into(), 2),
+        ("minecraft:grass_block".into(), 1),
+    ];
+    n
+}
+
+/// L'œil à y = 80, regardant à 45° vers le bas et vers l'est : il coupe le
+/// plan y = 64 seize blocs plus loin, en x = 16,5.
+fn camera_au_dessus_du_vide() -> Camera {
+    Camera {
+        oeil: [0.5, 80.0, 0.5],
+        cible: [1.5, 79.0, 0.5],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    }
+}
+
+fn etat_dans_le_vide() -> Etat {
+    let mut e = Etat::cadre([0.0; 3], [8.0; 3], 1.0);
+    e.regler_pour_le_monde(Some(&niveau_vide(Some([0, 64, 0]))));
+    e
+}
+
+/// **Dans un monde vide, un rayon qui ne touche rien vise le PLAN** — comme
+/// il viserait le dessus d'un sol : la case sous le plan est celle qu'on
+/// sélectionne, celle au-dessus celle où l'on pose.
+#[test]
+fn dans_un_monde_vide_on_vise_le_plan_comme_un_sol() {
+    let mut e = etat_dans_le_vide();
+    assert!(e.monde_vide);
+    assert_eq!(e.plan.hauteur(), Some(64));
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        256.0,
+        &|_| false,
+    );
+    assert_eq!(e.vise.case, Some(BlockPos::new(16, 63, 0)));
+    assert_eq!(e.vise.pose, Some(BlockPos::new(16, 64, 0)));
+    assert!(e.vise.sur_le_plan);
+
+    // Le coin de sélection se pose sur la case visée, comme sur un sol.
+    assert!(e.poser_coin(true));
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some([0.0, -0.5]),
+        256.0,
+        &|_| false,
+    );
+    assert!(e.poser_coin(false));
+    let b = e.selection.boite().unwrap();
+    assert_eq!((b.min.y, b.max.y), (63, 63), "la sélection quitte le plan");
+}
+
+/// **Un bloc réel gagne toujours** : le plan n'est qu'un repli, il ne vole
+/// jamais la visée de ce qu'on voit — ni devant lui, ni derrière.
+#[test]
+fn un_bloc_gagne_sur_le_plan() {
+    let mut e = etat_dans_le_vide();
+    // Devant le plan : un mur à partir de x = 8, que le rayon touche en
+    // y = 72 avant d'atteindre le plan.
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        256.0,
+        &|c| c[0] >= 8,
+    );
+    assert_eq!(e.vise.case, Some(BlockPos::new(8, 72, 0)));
+    assert!(!e.vise.sur_le_plan);
+    // DERRIÈRE le plan : un sous-sol en y = 50, que le plan cacherait s'il
+    // arrêtait le rayon. On vise à travers.
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        256.0,
+        &|c| c[1] <= 50,
+    );
+    assert_eq!(e.vise.case.map(|c| c.y), Some(50));
+    assert!(!e.vise.sur_le_plan);
+}
+
+/// Plan éteint, un rayon qui ne touche rien ne vise rien — c'est ce qui se
+/// passait partout avant le plan, et ce qui se passe encore dans un monde
+/// qui a du terrain.
+#[test]
+fn plan_eteint_le_vide_ne_se_vise_pas() {
+    let mut e = etat_dans_le_vide();
+    e.plan.actif = false;
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        256.0,
+        &|_| false,
+    );
+    assert_eq!(e.vise, Default::default());
+    // Au-delà de la portée, le plan ne se vise pas non plus.
+    e.plan.actif = true;
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        20.0,
+        &|_| false,
+    );
+    assert_eq!(e.vise.case, None, "le plan est à 22,6 blocs");
+}
+
+/// Le plan n'est pas un bloc : on ne le NOMME pas — la pipette prendrait de
+/// l'air, et « Poser » poserait du vide —, et on ne le casse pas.
+#[test]
+fn le_plan_ne_se_nomme_ni_ne_se_casse() {
+    let mut e = etat_dans_le_vide();
+    e.relever_vise(
+        &camera_au_dessus_du_vide(),
+        1.0,
+        Some(CENTRE),
+        256.0,
+        &|_| false,
+    );
+    e.nommer_vise(|_| "minecraft:air");
+    assert_eq!(e.bloc_vise, None);
+    assert!(!e.pipette());
+    assert!(e.casser_un_bloc().is_none());
+    assert!(e.message.contains("plan de référence"), "{}", e.message);
+    // Poser, lui, pose SUR le plan.
+    let pose = e.poser_un_bloc().expect("poser sur le plan");
+    match pose {
+        tf_app::moteur::Commande::Appliquer { sel, .. } => {
+            assert_eq!(sel.min, BlockPos::new(16, 64, 0));
+        }
+        _ => panic!("une pose est une opération"),
+    }
+}
+
+/// **Ce que le monde ouvert règle** : un monde vide allume le plan à la
+/// hauteur de son point d'apparition, bornée au monde ; un monde qui a du
+/// terrain l'éteint, mais garde cette hauteur pour qui l'allume à la main.
+#[test]
+fn le_monde_ouvert_regle_le_plan() {
+    let mut e = Etat::cadre([0.0; 3], [8.0; 3], 1.0);
+    e.regler_pour_le_monde(Some(&niveau_vide(Some([5, -60, 7]))));
+    assert!(e.monde_vide);
+    assert_eq!(e.plan.hauteur(), Some(-60));
+
+    // Bornée : au-delà du plafond ou sous le fond, le plan irait où rien
+    // ne se pose.
+    e.regler_pour_le_monde(Some(&niveau_vide(Some([0, 400, 0]))));
+    assert_eq!(e.plan.hauteur(), Some(320));
+    assert_eq!(e.plan.y, 320, "le champ montre la hauteur qu'on vise");
+    e.regler_pour_le_monde(Some(&niveau_vide(Some([0, -100, 0]))));
+    assert_eq!(e.plan.hauteur(), Some(-64));
+    // Sans point d'apparition, la hauteur de la mer.
+    e.regler_pour_le_monde(Some(&niveau_vide(None)));
+    assert_eq!(e.plan.hauteur(), Some(64));
+
+    // Du terrain : éteint, et la hauteur est celle de l'apparition.
+    e.regler_pour_le_monde(Some(&niveau_plat_classique()));
+    assert!(!e.monde_vide);
+    assert_eq!(e.plan.hauteur(), None);
+    assert_eq!(e.plan.y, -60);
+    // Rien ne se lit : ni vide, ni plan.
+    e.regler_pour_le_monde(None);
+    assert!(!e.monde_vide);
+    assert_eq!(e.plan.hauteur(), None);
+
+    // Changer de monde oublie le plan de l'ancien : c'est le nouveau qui le
+    // dit, par `regler_pour_le_monde`.
+    e.regler_pour_le_monde(Some(&niveau_vide(Some([0, 10, 0]))));
+    e.recadrer([0.0; 3], [8.0; 3], 1.0);
+    assert_eq!(e.plan, tf_app::etat::PlanDeReference::default());
+    assert!(!e.monde_vide);
+
+    // Une hauteur réglée hors bornes à la main est bornée à la visée.
+    e.plan = tf_app::etat::PlanDeReference {
+        actif: true,
+        y: 9999,
+    };
+    assert_eq!(e.plan.hauteur(), Some(tf_app::etat::PLAN_Y.1));
+}
+
+/// **Un monde qui ne montre rien se cadre sur son plan**, autour de là où
+/// l'on joue ; un monde qui montre quelque chose se cadre sur ce qu'il
+/// montre.
+#[test]
+fn un_monde_sans_contenu_se_cadre_sur_le_plan() {
+    use tf_app::etat::cadre_du_vide;
+    let contenu = Some(([0.0; 3], [8.0; 3]));
+    assert_eq!(cadre_du_vide(contenu, Some(64), Some([100, 70, -50])), None);
+    assert_eq!(cadre_du_vide(None, None, Some([100, 70, -50])), None);
+
+    let (a, b) = cadre_du_vide(None, Some(64), Some([100, 70, -50])).unwrap();
+    assert_eq!(a[1], 64.0, "le cadre part du plan");
+    assert!(b[1] > a[1]);
+    // Centré sur la colonne où l'on joue.
+    assert_eq!((a[0] + b[0]) / 2.0, 100.5);
+    assert_eq!((a[2] + b[2]) / 2.0, -49.5);
+    // Sans rien pour dire où l'on joue : l'origine.
+    let (a, b) = cadre_du_vide(None, Some(-60), None).unwrap();
+    assert_eq!(
+        ((a[0] + b[0]) / 2.0, a[1], (a[2] + b[2]) / 2.0),
+        (0.5, -60.0, 0.5)
+    );
+}
+
+/// La grille du plan se centre là où le REGARD le coupe — pas sous l'œil,
+/// qui peut être à cent blocs de ce qu'on regarde.
+#[test]
+fn la_grille_du_plan_suit_le_regard() {
+    let mut e = etat_dans_le_vide();
+    assert_eq!(
+        e.plan_a_dessiner(&camera_au_dessus_du_vide()),
+        Some((64, [16, 0]))
+    );
+    // Un regard qui ne coupe pas le plan : sous l'œil.
+    let vers_le_ciel = Camera {
+        cible: [1.5, 81.0, 0.5],
+        ..camera_au_dessus_du_vide()
+    };
+    assert_eq!(e.plan_a_dessiner(&vers_le_ciel), Some((64, [0, 0])));
+    e.plan.actif = false;
+    assert_eq!(e.plan_a_dessiner(&camera_au_dessus_du_vide()), None);
+}
+
+/// **La grille du plan** : à plat, un cheveu au-dessus du plan ; les lignes
+/// vives sur les frontières de chunks, quelle que soit la colonne regardée ;
+/// les fines ne repassent jamais sur une vive.
+#[test]
+fn la_grille_du_plan_est_a_plat_et_alignee_sur_les_chunks() {
+    use tf_app::scene::{grille_du_plan, PLAN_CHUNKS, PLAN_FIN};
+    for centre in [[0, 0], [37, -5], [-17, 200]] {
+        let l = grille_du_plan(-60, centre);
+        let (mut vives, mut fines) = (0, 0);
+        let vive = l.sommets[0].couleur;
+        for s in l.sommets.chunks(2) {
+            let (a, b) = (s[0].position, s[1].position);
+            for y in [a[1], b[1]] {
+                assert!(y > -60.0 && y < -59.9, "hors du plan : {y}");
+            }
+            // Un segment est parallèle à x ou à z : l'axe CONSTANT dit sur
+            // quelle ligne il est.
+            let fixe = if a[0] == b[0] { a[0] } else { a[2] };
+            if s[0].couleur == vive {
+                vives += 1;
+                assert_eq!(fixe.rem_euclid(16.0), 0.0, "ligne de chunk hors frontière");
+            } else {
+                fines += 1;
+                assert_ne!(fixe.rem_euclid(16.0), 0.0, "ligne fine sur une frontière");
+            }
+        }
+        assert_eq!(vives, 2 * (2 * PLAN_CHUNKS + 2) as usize);
+        // Une par bloc sur le carré fin, moins celles qui tombent sur une
+        // frontière de chunk.
+        let par_axe = |c: i32| {
+            (c - PLAN_FIN..=c + PLAN_FIN)
+                .filter(|v| v.rem_euclid(16) != 0)
+                .count()
+        };
+        assert_eq!(fines, par_axe(centre[0]) + par_axe(centre[1]));
+    }
+}

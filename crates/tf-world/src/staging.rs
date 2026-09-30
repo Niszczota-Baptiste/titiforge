@@ -64,6 +64,12 @@ pub struct Staging<S: RegionSource, O: RegionStore> {
     /// telles que titiforge les avait lues, et tout ce qui a été fait en jeu
     /// y serait perdu. La base est ce qui permet de le voir (voir [`classer`]).
     bases: RwLock<BTreeMap<Cle, Option<u64>>>,
+    /// **La surface de ce monde est-elle VIDE ?** Alors, et alors seulement,
+    /// une opération peut y créer les chunks qui manquent (voir
+    /// [`crate::niveau::MondeVide`]). Une propriété du MONDE, pas de
+    /// l'opération : c'est la copie de travail qui la porte, pour qu'aucun
+    /// hôte n'ait à la redire à chaque appel.
+    monde_vide: Option<crate::niveau::MondeVide>,
 }
 
 /// Le nom de la métadonnée qui porte les bases et les pierres tombales.
@@ -213,6 +219,22 @@ impl<S: RegionSource, O: RegionStore> Staging<S, O> {
             ecrits: RwLock::new(BTreeSet::new()),
             pierres_tombales: RwLock::new(BTreeSet::new()),
             bases: RwLock::new(BTreeMap::new()),
+            monde_vide: None,
+        }
+    }
+
+    /// Dit que la surface de ce monde est vide — ou qu'elle ne l'est pas.
+    pub fn avec_monde_vide(mut self, v: Option<crate::niveau::MondeVide>) -> Self {
+        self.monde_vide = v;
+        self
+    }
+
+    /// Le monde vide, pour CETTE dimension : seule la surface l'est — le
+    /// Nether et l'End d'un monde plat se génèrent comme partout.
+    pub fn monde_vide(&self, dim: &Dimension) -> Option<&crate::niveau::MondeVide> {
+        match dim {
+            Dimension::Overworld => self.monde_vide.as_ref(),
+            _ => None,
         }
     }
 
@@ -247,6 +269,7 @@ impl<S: RegionSource, O: RegionStore> Staging<S, O> {
             ecrits: RwLock::new(ecrits),
             pierres_tombales: RwLock::new(tombes),
             bases: RwLock::new(bases),
+            monde_vide: None,
         })
     }
 

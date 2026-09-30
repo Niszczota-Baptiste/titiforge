@@ -703,3 +703,72 @@ fn un_document_revenu_a_celui_de_la_save_n_est_plus_du_travail() {
         .unwrap();
     assert_eq!(s.fermer().unwrap(), Fermeture::Effacee);
 }
+
+/// Le `level.dat` d'un monde VIDE : plat, une couche d'air.
+fn level_dat_vide() -> Vec<u8> {
+    use tf_nbt::{tag, Writer};
+    let mut w = Writer::new();
+    w.field(tag::COMPOUND, "");
+    w.field(tag::COMPOUND, "Data");
+    w.field(tag::INT, "DataVersion").i32_payload(2975);
+    w.field(tag::COMPOUND, "WorldGenSettings");
+    w.field(tag::COMPOUND, "dimensions");
+    w.field(tag::COMPOUND, "minecraft:overworld");
+    w.field(tag::COMPOUND, "generator");
+    w.field(tag::STRING, "type").raw_str("minecraft:flat");
+    w.field(tag::COMPOUND, "settings");
+    w.field(tag::LIST, "layers").list_header(tag::COMPOUND, 1);
+    w.field(tag::STRING, "block").raw_str("minecraft:air");
+    w.field(tag::INT, "height").i32_payload(1);
+    w.end();
+    // settings, generator, overworld, dimensions, WorldGenSettings, Data,
+    // racine.
+    for _ in 0..7 {
+        w.end();
+    }
+    tf_anvil::deflate(&w.into_bytes(), tf_anvil::Compression::Gzip).unwrap()
+}
+
+/// **Une séance sur un monde VIDE le sait** — neuve, reprise, et quand elle
+/// repart de la save après une mise de côté. C'est sa copie de travail que
+/// toute écriture traverse : une séance qui l'oublierait ferait refuser, dans
+/// la fenêtre, la création de chunks que les essais font.
+#[test]
+fn une_seance_sur_un_monde_vide_le_sait() {
+    let d = TempDir::new("seance-vide");
+    let save = save(&d);
+    let racine = d.path().join("seances");
+    {
+        // La save des autres essais n'est PAS vide : son level.dat ne se lit
+        // pas.
+        let (s, _, _) = Seance::ouvrir(&racine, &save).unwrap();
+        assert!(s.staging().monde_vide(&SURFACE).is_none());
+        s.fermer().unwrap();
+    }
+    fs::write(save.join("level.dat"), level_dat_vide()).unwrap();
+    {
+        let (mut s, mut j, reprise) = Seance::ouvrir(&racine, &save).unwrap();
+        assert_eq!(reprise, Reprise::Neuve);
+        assert!(s.staging().monde_vide(&SURFACE).is_some(), "neuve");
+        s.staging()
+            .write_region(&SURFACE, R, ZERO, &octets(31_000, 99))
+            .unwrap();
+        let r = action(&mut j, "Remplir", 10);
+        s.noter(&mut j, &r).unwrap();
+        s.fermer().unwrap();
+    }
+    {
+        let (s, _, reprise) = Seance::ouvrir(&racine, &save).unwrap();
+        assert!(matches!(reprise, Reprise::Reprise { .. }), "{reprise:?}");
+        assert!(s.staging().monde_vide(&SURFACE).is_some(), "reprise");
+        s.fermer().unwrap();
+    }
+    jouer(&save, "r.0.0.mca", 42);
+    let (s, _, reprise) = Seance::ouvrir(&racine, &save).unwrap();
+    assert!(matches!(reprise, Reprise::MiseDeCote { .. }), "{reprise:?}");
+    assert!(
+        s.staging().monde_vide(&SURFACE).is_some(),
+        "repartie de la save après la mise de côté"
+    );
+    s.fermer().unwrap();
+}

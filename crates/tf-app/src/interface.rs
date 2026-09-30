@@ -16,7 +16,7 @@ use tf_ops::catalogue::{self, Param, Saisie, Valeur};
 use tf_render::controles::Mode;
 use tf_world::selection::DIRECTIONS;
 
-use crate::etat::{Etat, Note};
+use crate::etat::{Etat, Note, PLAN_Y};
 use crate::nuancier::Nuancier;
 
 /// **Ce qu'un champ de bloc propose** : le nuancier, et le bloc visé — la
@@ -116,6 +116,17 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
     ui.add_space(6.0);
     ui.label(RichText::new("SOUS LE CURSEUR").strong().color(GRIS));
     match (e.vise.case, e.vise.pose) {
+        // Le plan de référence n'est pas un bloc : on ne propose pas de le
+        // casser, on dit où l'on sélectionne et où l'on pose.
+        // La hauteur est celle du PLAN, pas déduite de la case : vue d'en
+        // dessous, la case visée est au-dessus de lui.
+        (Some(c), pose) if e.vise.sur_le_plan => {
+            ui.label(RichText::new(format!("plan de référence, y = {}", e.plan.y)).color(VERT));
+            ui.label(format!("case   : {}, {}, {}", c.x, c.y, c.z));
+            if let Some(p) = pose {
+                ui.label(format!("poser  : {}, {}, {}", p.x, p.y, p.z));
+            }
+        }
         (Some(c), pose) => {
             ui.label(format!("casser : {}, {}, {}", c.x, c.y, c.z));
             match pose {
@@ -230,6 +241,32 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
         ui.colored_label(ROUGE, "■");
         ui.label(RichText::new(".mca").small());
     });
+
+    // ── le plan de référence
+    ui.add_space(10.0);
+    ui.separator();
+    ui.label(RichText::new("PLAN DE RÉFÉRENCE").strong().color(GRIS));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut e.plan.actif, "viser le vide à y =");
+        ui.add_enabled(
+            e.plan.actif,
+            egui::DragValue::new(&mut e.plan.y)
+                .speed(0.25)
+                .range(PLAN_Y.0..=PLAN_Y.1),
+        );
+    });
+    ui.label(
+        RichText::new("ce que vise un rayon qui ne touche aucun bloc — un bloc gagne toujours")
+            .small()
+            .color(GRIS),
+    );
+    if e.monde_vide {
+        ui.label(
+            RichText::new("monde vide : une opération crée les chunks qui manquent")
+                .small()
+                .color(VERT),
+        );
+    }
 
     // ── l'accrochage
     ui.add_space(10.0);

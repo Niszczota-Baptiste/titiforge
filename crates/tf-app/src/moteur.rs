@@ -928,7 +928,11 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         if approches > 0 {
             s.push_str(&format!(" · {approches} entité(s) approchée(s)"));
         }
-        s.push_str(&non_generes(rap.chunks_absents));
+        s.push_str(&non_generes(
+            rap.chunks_absents,
+            rap.chunks_crees,
+            self.staging.monde_vide(&self.dim).is_some(),
+        ));
         if demandee.get() && regles.table().is_none() {
             s.push_str(" · orientations NON réécrites : les règles de rotation du pack manquent");
         } else if intacts > 0 {
@@ -1070,12 +1074,21 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
             .unwrap_or_else(|| op.to_string());
         // **Une opération qui n'écrit rien ne remplit pas le journal.**
         // `journaliser` le refuse déjà ; on le DIT plutôt que de laisser
-        // croire à un bouton mort.
+        // croire à un bouton mort — et POURQUOI, quand c'est que rien de la
+        // zone n'existe : « rien n'a changé » seul se lit « c'était déjà
+        // ça », sur une sélection tout entière hors de la carte.
         let Some(records) =
             cr.rapport
                 .journaliser(&mut self.journal, &label, op, Vec::new(), horodatage())
         else {
-            return Reponse::Rien(label);
+            return Reponse::Rien(format!(
+                "{label}{}",
+                non_generes(
+                    cr.rapport.chunks_absents,
+                    cr.rapport.chunks_crees,
+                    self.staging.monde_vide(&self.dim).is_some(),
+                )
+            ));
         };
         let note = self.noter(&records);
         let n = cr.rapport.patches.len();
@@ -1099,7 +1112,11 @@ impl<S: RegionSource, O: RegionStore> Chantier<S, O> {
         if !cr.approches.is_empty() {
             blocs.push_str(&format!(" · {} entité(s) approchée(s)", cr.approches.len()));
         }
-        blocs.push_str(&non_generes(r.chunks_absents));
+        blocs.push_str(&non_generes(
+            r.chunks_absents,
+            r.chunks_crees,
+            self.staging.monde_vide(&self.dim).is_some(),
+        ));
         // **Un build à moitié tourné se DIT.** Sans règles, aucune
         // orientation n'a bougé ; avec, celles que le pack ne sait pas tourner
         // sont restées telles quelles. Les deux se lisent pareil à l'écran.
@@ -1399,23 +1416,38 @@ pub fn zones_de<'a>(
         .collect()
 }
 
-/// L'heure, en secondes depuis l'époque. Zéro si l'horloge est absurde —
-/// une date fausse vaut mieux qu'un plantage dans un journal.
-/// **Ce qu'une opération a SAUTÉ faute de terrain**, à ajouter à son résumé.
+/// **Ce qu'une opération a SAUTÉ faute de terrain — ou CRÉÉ dans le vide**, à
+/// ajouter à son résumé.
 ///
 /// Une opération n'écrit que dans les chunks que le jeu a générés ; au-delà du
 /// bord de la carte, elle s'arrête net. Sans cette phrase, l'arrêt se lisait
-/// comme une limite d'affichage.
-pub fn non_generes(absents: u64) -> String {
-    if absents == 0 {
-        return String::new();
+/// comme une limite d'affichage. Dans un monde VIDE, elle crée ce qui manque
+/// — et ne laisse de côté que ce qui dépasse le plafond de création, ce qui
+/// se dit autrement : aller en jeu n'y changerait rien.
+pub fn non_generes(absents: u64, crees: u64, monde_vide: bool) -> String {
+    let mut t = String::new();
+    if crees > 0 {
+        t.push_str(&format!(" · {crees} chunk(s) créé(s) dans le vide"));
     }
-    format!(
-        " · {absents} chunk(s) de la zone jamais générés par le jeu : rien n'y \
-         est écrit — y aller en jeu d'abord, ou prégénérer la carte"
-    )
+    if absents > 0 {
+        t.push_str(&if monde_vide {
+            format!(
+                " · {absents} chunk(s) non créés : la zone dépasse le plafond d'un \
+                 monde vide ({} chunks) — la découper",
+                tf_ops::edition::CREATION_MAX
+            )
+        } else {
+            format!(
+                " · {absents} chunk(s) de la zone jamais générés par le jeu : rien \
+                 n'y est écrit — y aller en jeu d'abord, ou prégénérer la carte"
+            )
+        });
+    }
+    t
 }
 
+/// L'heure, en secondes depuis l'époque. Zéro si l'horloge est absurde —
+/// une date fausse vaut mieux qu'un plantage dans un journal.
 fn horodatage() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

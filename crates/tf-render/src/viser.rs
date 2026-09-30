@@ -170,6 +170,45 @@ pub fn viser(
     None
 }
 
+/// **Là où un rayon rencontre le PLAN DE RÉFÉRENCE** `y = h` — pour viser
+/// dans un monde où il n'y a rien à toucher.
+///
+/// Dans un monde vide, un rayon ne rencontre aucun bloc : sans plan, on ne
+/// pourrait poser ni un coin de sélection, ni un bloc, ni un composant. Le
+/// plan joue le rôle d'un SOL : venu d'au-dessus, on touche le dessus de la
+/// case juste sous lui, et l'on poserait sur lui ; venu d'en dessous,
+/// l'inverse. C'est la forme exacte d'une touche de bloc — `case`, `avant`,
+/// `face` — donc tout ce qui vise s'en sert sans le savoir.
+///
+/// `h` est une frontière de cases : le plan `y = 64` sépare la case 63 de la
+/// 64. `None` si le rayon est parallèle au plan, s'en éloigne, ou le
+/// rencontre au-delà de la portée.
+pub fn viser_plan(origine: [f32; 3], direction: [f32; 3], portee: f32, h: i32) -> Option<Touche> {
+    if !direction.iter().all(|c| c.is_finite()) || !origine.iter().all(|c| c.is_finite()) {
+        return None;
+    }
+    if direction[1].abs() < 1e-6 {
+        return None;
+    }
+    let t = (h as f32 - origine[1]) / direction[1];
+    if !(t > 0.0 && t <= portee) {
+        return None;
+    }
+    let x = (origine[0] + direction[0] * t).floor() as i32;
+    let z = (origine[2] + direction[2] * t).floor() as i32;
+    let (case, avant, face) = if direction[1] < 0.0 {
+        ([x, h - 1, z], [x, h, z], Face::PlusY)
+    } else {
+        ([x, h, z], [x, h - 1, z], Face::MoinsY)
+    };
+    Some(Touche {
+        case,
+        avant: Some(avant),
+        face: Some(face),
+        distance: t,
+    })
+}
+
 /// **Le point de l'écran sous un pixel de souris**, en coordonnées
 /// normalisées : ce que [`rayon_ecran`] prend.
 ///

@@ -221,7 +221,11 @@ impl Seance {
 
         let interrompue = fs::read_to_string(dossier.join(EN_COURS)).ok();
         let journal = lire_journal(&dossier)?;
-        let staging = Staging::reopen(source, FsSource::open(&couche)?)?;
+        // Le monde est-il vide ? C'est `level.dat` qui le dit, une fois ici :
+        // tout ce qui écrit passe par cette copie de travail.
+        let vide = crate::niveau::lire_fichier(monde).and_then(|n| n.monde_vide());
+        let staging =
+            Staging::reopen(source, FsSource::open(&couche)?)?.avec_monde_vide(vide.clone());
         let etats = staging.etats()?;
 
         let conflits: Vec<Cle> = etats
@@ -236,7 +240,8 @@ impl Seance {
             fs::write(dossier.join(JOURNAL), entete())?;
             fs::write(dossier.join(MONDE), texte_du_chemin(monde))?;
             let staging =
-                Staging::new(FsSource::open(monde)?.read_only(), FsSource::open(&couche)?);
+                Staging::new(FsSource::open(monde)?.read_only(), FsSource::open(&couche)?)
+                    .avec_monde_vide(vide);
             let s = Seance::nouvelle(dossier, staging, verrou);
             return Ok((s, Journal::new(), Reprise::MiseDeCote { vers, conflits }));
         }

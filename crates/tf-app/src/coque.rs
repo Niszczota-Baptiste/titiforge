@@ -217,6 +217,7 @@ impl ApplicationHandler for Coque {
                 if self.ouvert.editable() {
                     let chemin = std::path::PathBuf::from(&self.ouvert.nom);
                     let niveau = tf_world::niveau::lire_fichier(&chemin);
+                    regler_pour_le_monde(&mut g, &self.ouvert.monde, niveau.as_ref());
                     g.etat.situer_echanges(
                         tf_app::accueil::installation_de(&chemin),
                         Some(chemin),
@@ -610,6 +611,7 @@ impl Coque {
             let aspect = g.config.width as f32 / g.config.height.max(1) as f32;
             let m = &self.ouvert.monde;
             g.etat.recadrer(m.min, m.max, aspect);
+            regler_pour_le_monde(g, m, niveau.as_ref());
             // Le pack a pu changer avec l'installation ; les récents restent.
             g.etat.nuancier.repartir(self.ouvert.assets.noms());
             let nom_du_jeu = niveau.as_ref().and_then(|n| n.nom.clone());
@@ -831,6 +833,23 @@ fn voler(g: &mut Gpu) {
     }
 }
 
+/// **Ce que le monde ouvert change à la visée et au cadrage** : le plan de
+/// référence d'un monde vide, et, s'il n'y a rien à cadrer, un carré de ce
+/// plan autour de là où l'on joue. Une fonction pour les deux chemins
+/// d'ouverture — le lancement et l'accueil —, sinon l'un finirait par cadrer
+/// le vide et l'autre un cube à l'origine.
+fn regler_pour_le_monde(g: &mut Gpu, m: &scene::Monde, niveau: Option<&tf_world::niveau::Niveau>) {
+    g.etat.regler_pour_le_monde(niveau);
+    if let Some((a, b)) = tf_app::etat::cadre_du_vide(
+        m.bornes_d_ouverture(),
+        g.etat.plan.hauteur(),
+        niveau.and_then(|n| n.ou_regarder()),
+    ) {
+        let aspect = g.config.width as f32 / g.config.height.max(1) as f32;
+        g.etat.vue = tf_render::controles::Vue::cadrer(a, b, aspect);
+    }
+}
+
 fn preparer(f: &Arc<Window>, o: &mut scene::Ouvert) -> Result<Gpu, String> {
     let appareil = Appareil::ouvrir().map_err(|e| format!("pas d'adaptateur : {e}"))?;
     let surface = appareil
@@ -924,8 +943,14 @@ fn dessiner(f: &Arc<Window>, g: &mut Gpu, m: &scene::Monde) -> Result<(), String
         camera.oeil[1] as i32,
         camera.oeil[2] as i32,
     );
-    let y = (m.min[1] as i32, m.max[1] as i32);
-    let mut lignes = scene::quadrillage(&g.etat.quadrillage, oeil, y);
+    let y = m.hauteurs_du_decoupage(g.etat.plan.hauteur());
+    let mut lignes = match g.etat.plan_a_dessiner(&camera) {
+        Some((h, centre)) => scene::grille_du_plan(h, centre),
+        None => tf_render::Lignes::new(),
+    };
+    lignes
+        .sommets
+        .extend(scene::quadrillage(&g.etat.quadrillage, oeil, y).sommets);
     lignes
         .sommets
         .extend(scene::contour_selection(&g.etat.selection).sommets);

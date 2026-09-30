@@ -623,3 +623,50 @@ fn viser_accrocher_attraper_tirer() {
     // Et ce qu'un //set doit remplir est exactement le volume neuf.
     assert_eq!(b.volume(), 11);
 }
+
+// ── le plan de référence ─────────────────────────────────────────────────────
+
+/// **Venu d'au-dessus, le plan est un SOL** : on touche le dessus de la case
+/// juste sous lui, et l'on poserait SUR lui — la forme exacte d'une touche de
+/// bloc, donc tout ce qui vise s'en sert tel quel.
+#[test]
+fn le_plan_se_touche_comme_le_dessus_d_un_sol() {
+    use tf_render::viser::viser_plan;
+    let t = viser_plan([0.5, 70.0, 0.5], [1.0, -1.0, 0.0], 64.0, 64).unwrap();
+    assert_eq!(
+        t.case,
+        [6, 63, 0],
+        "la case SOUS le plan, là où le rayon le coupe"
+    );
+    assert_eq!(t.avant, Some([6, 64, 0]), "on pose SUR le plan");
+    assert_eq!(t.face, Some(Face::PlusY));
+    assert!((t.distance - 6.0).abs() < 1e-4, "{}", t.distance);
+
+    // Et d'en dessous : un plafond.
+    let t = viser_plan([0.5, 60.0, 0.5], [0.0, 1.0, -1.0], 64.0, 64).unwrap();
+    assert_eq!(t.case, [0, 64, -4]);
+    assert_eq!(t.avant, Some([0, 63, -4]));
+    assert_eq!(t.face, Some(Face::MoinsY));
+}
+
+/// Un rayon parallèle au plan, qui s'en éloigne, ou qui le coupe au-delà de la
+/// portée ne vise rien — et une coordonnée négative tombe dans la case d'en
+/// dessous, en division PLANCHER : −0,5 est dans la case −1.
+#[test]
+fn le_plan_ne_vise_que_ce_qu_il_coupe_devant_et_a_portee() {
+    use tf_render::viser::viser_plan;
+    assert!(
+        viser_plan([0.0, 70.0, 0.0], [1.0, 0.0, 0.0], 64.0, 64).is_none(),
+        "parallèle"
+    );
+    assert!(
+        viser_plan([0.0, 70.0, 0.0], [0.0, 1.0, 0.0], 64.0, 64).is_none(),
+        "s'en éloigne"
+    );
+    assert!(
+        viser_plan([0.0, 70.0, 0.0], [1.0, -0.01, 0.0], 64.0, 64).is_none(),
+        "trop loin"
+    );
+    let t = viser_plan([-0.5, 65.0, -0.5], [0.0, -1.0, 0.0], 64.0, 64).unwrap();
+    assert_eq!(t.case, [-1, 63, -1]);
+}

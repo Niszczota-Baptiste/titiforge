@@ -689,6 +689,25 @@ fn vers_des_chunks_a_mi_generation_une_copie_ne_pose_pas_ses_entites() {
     assert_eq!(contenu(&st), avant, "ni blocs ni entités écrits");
 }
 
+/// **Dans un monde VIDE, la même copie pose ses entités** : le terrain à venir
+/// y est du vide — le jeu y générera un chunk vide, et le collage y crée les
+/// chunks de blocs. Les laisser de côté serait appliquer à un monde vide la
+/// prudence d'un monde qui a du terrain à générer.
+#[test]
+fn dans_un_monde_vide_une_copie_vers_le_vide_pose_ses_entites() {
+    let st = monde().avec_monde_vide(Some(tf_world::niveau::MondeVide {
+        data_version: 3465,
+        biome: "minecraft:the_void".into(),
+    }));
+    let cr = lancer(&st, "copier-vers", &copier_vers([320, 0, 0], None), &sel());
+    assert_eq!(cr.rapport.mobiles_sans_terrain, 0);
+    assert_eq!(cr.rapport.mobiles_poses, 7);
+    assert!(
+        cr.rapport.chunks_crees >= 1,
+        "les blocs aussi ont trouvé leur place"
+    );
+}
+
 /// Un `//move` vers du terrain absent est refusé AVANT d'effacer : ni les
 /// blocs ni les entités ne bougent d'un octet.
 #[test]

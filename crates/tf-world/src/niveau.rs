@@ -16,6 +16,12 @@
 //! **Rien ici n'écrit `level.dat`.** Le jeu y garde l'inventaire du joueur en
 //! solo, ses coordonnées, l'heure, la météo : une réécriture approximative
 //! coûterait bien plus que ce qu'elle rapporterait.
+//!
+//! On y lit aussi le GÉNÉRATEUR de la surface, pour une raison : savoir si le
+//! monde est VIDE — plat, et toutes ses couches d'air. Dans un tel monde, et
+//! seulement là, une opération peut créer les chunks qui manquent : le jeu y
+//! générerait du vide, donc un chunk vide est exactement ce qu'il aurait
+//! écrit (voir [`MondeVide`]).
 
 use std::path::Path;
 
@@ -38,6 +44,64 @@ pub struct Niveau {
     /// Un fichier d'échange exporté l'emporte ; un fichier importé plus récent
     /// peut porter des blocs que ce monde ne connaît pas.
     pub data_version: Option<i32>,
+    /// Le générateur de la SURFACE (`WorldGenSettings`, 1.16+), s'il se lit.
+    pub generation: Option<Generation>,
+}
+
+/// Ce que le générateur de la surface dit de lui-même.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Generation {
+    /// `minecraft:flat`, `minecraft:noise`, ou celui d'un mod.
+    pub genre: String,
+    /// Les couches d'un monde plat, de bas en haut : bloc et épaisseur.
+    pub couches: Vec<(String, i32)>,
+    /// Le biome d'un monde plat, quand il le dit.
+    pub biome: Option<String>,
+}
+
+/// **Un monde dont la surface est VIDE** : plat, et toutes ses couches d'air
+/// — le préréglage « The Void » du jeu, ou un plat sans couche.
+///
+/// Ce qu'il porte est ce qu'il faut pour écrire le chunk que le jeu y
+/// générerait : la version, pour la forme des octets, et le biome, dont le
+/// jeu remplirait ses sections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MondeVide {
+    pub data_version: i32,
+    pub biome: String,
+}
+
+impl Niveau {
+    /// **Ce monde est-il vide ?** Plat, et chaque couche est de l'air.
+    ///
+    /// Un plat « Classique » (herbe, terre, bedrock) ne l'est pas : y créer un
+    /// chunk vide y creuserait un trou jusqu'au fond du monde. Sans
+    /// `DataVersion`, on ne sait pas quelle forme d'octets écrire : pas vide
+    /// non plus. Un monde plat qui ne nomme pas son biome reçoit celui que le
+    /// jeu lui donnerait, les plaines.
+    pub fn monde_vide(&self) -> Option<MondeVide> {
+        let g = self.generation.as_ref()?;
+        let plat = matches!(
+            g.genre.strip_prefix("minecraft:").unwrap_or(&g.genre),
+            "flat"
+        );
+        let air = |b: &str| {
+            matches!(
+                b.strip_prefix("minecraft:").unwrap_or(b),
+                "air" | "cave_air" | "void_air"
+            )
+        };
+        if !plat || !g.couches.iter().all(|(b, _)| air(b)) {
+            return None;
+        }
+        Some(MondeVide {
+            data_version: self.data_version?,
+            biome: g
+                .biome
+                .clone()
+                .unwrap_or_else(|| "minecraft:plains".to_string()),
+        })
+    }
 }
 
 impl Niveau {
@@ -98,6 +162,7 @@ fn lire_data(c: &mut Cur<'_>, n: &mut Niveau) -> Option<()> {
             (tag::INT, "SpawnZ") => spawn[2] = Some(c.i32().ok()?),
             (tag::INT, "DataVersion") => n.data_version = Some(c.i32().ok()?),
             (tag::COMPOUND, "Player") => lire_joueur(c, n)?,
+            (tag::COMPOUND, "WorldGenSettings") => lire_generation(c, n)?,
             _ => c.skip_payload(t).ok()?,
         }
     }
@@ -105,6 +170,75 @@ fn lire_data(c: &mut Cur<'_>, n: &mut Niveau) -> Option<()> {
         n.apparition = Some([x, y, z]);
     }
     Some(())
+}
+
+/// `WorldGenSettings.dimensions."minecraft:overworld".generator` — et rien
+/// d'autre : les dimensions d'un mod, le Nether et l'End sont sautés.
+fn lire_generation(c: &mut Cur<'_>, n: &mut Niveau) -> Option<()> {
+    while let Some((t, k)) = c.next_field().ok()? {
+        if (t, k) != (tag::COMPOUND, "dimensions") {
+            c.skip_payload(t).ok()?;
+            continue;
+        }
+        while let Some((t, k)) = c.next_field().ok()? {
+            if (t, k) != (tag::COMPOUND, "minecraft:overworld") {
+                c.skip_payload(t).ok()?;
+                continue;
+            }
+            while let Some((t, k)) = c.next_field().ok()? {
+                if (t, k) == (tag::COMPOUND, "generator") {
+                    n.generation = Some(lire_generateur(c)?);
+                } else {
+                    c.skip_payload(t).ok()?;
+                }
+            }
+        }
+    }
+    Some(())
+}
+
+fn lire_generateur(c: &mut Cur<'_>) -> Option<Generation> {
+    let mut g = Generation::default();
+    while let Some((t, k)) = c.next_field().ok()? {
+        match (t, k) {
+            (tag::STRING, "type") => g.genre = c.str().ok()?.to_string(),
+            // Un générateur de BRUIT nomme ses réglages par une chaîne : seul
+            // celui d'un monde plat est un compound, et c'est lui qu'on lit.
+            (tag::COMPOUND, "settings") => {
+                while let Some((t, k)) = c.next_field().ok()? {
+                    match (t, k) {
+                        (tag::STRING, "biome") => g.biome = Some(c.str().ok()?.to_string()),
+                        (tag::LIST, "layers") => {
+                            let (et, len) = c.list_header().ok()?;
+                            if et != tag::COMPOUND {
+                                c.skip_list_body(et, len).ok()?;
+                                continue;
+                            }
+                            for _ in 0..len {
+                                let (mut bloc, mut epaisseur) = (None, 0);
+                                while let Some((t, k)) = c.next_field().ok()? {
+                                    match (t, k) {
+                                        (tag::STRING, "block") => {
+                                            bloc = Some(c.str().ok()?.to_string())
+                                        }
+                                        (tag::INT, "height") => epaisseur = c.i32().ok()?,
+                                        _ => c.skip_payload(t).ok()?,
+                                    }
+                                }
+                                // Une couche sans bloc n'est pas de l'air :
+                                // on ne la devine pas.
+                                g.couches
+                                    .push((bloc.unwrap_or_else(|| "?".into()), epaisseur));
+                            }
+                        }
+                        _ => c.skip_payload(t).ok()?,
+                    }
+                }
+            }
+            _ => c.skip_payload(t).ok()?,
+        }
+    }
+    Some(g)
 }
 
 fn lire_joueur(c: &mut Cur<'_>, n: &mut Niveau) -> Option<()> {

@@ -149,13 +149,12 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Ce que `level.dat` dit du monde : où l'on joue, et s'il est vide.
+    let niveau = monde
+        .as_deref()
+        .and_then(|m| tf_world::niveau::lire_fichier(std::path::Path::new(m)));
     // **Où ouvrir** : la zone demandée, sinon là où l'on joue.
-    let zone = zone.unwrap_or_else(|| {
-        let n = monde
-            .as_deref()
-            .and_then(|m| tf_world::niveau::lire_fichier(std::path::Path::new(m)));
-        tf_app::accueil::zone_d_ouverture(n.as_ref())
-    });
+    let zone = zone.unwrap_or_else(|| tf_app::accueil::zone_d_ouverture(niveau.as_ref()));
 
     // **La séance** : la copie de travail et l'annulation, rangées à un endroit
     // STABLE pour survivre à la fermeture. Pas pour une capture, qui n'édite
@@ -244,6 +243,7 @@ fn main() {
                     composants,
                     presse: a_importer.map(|f| presse_de(&f)),
                     curseur,
+                    niveau,
                 },
             )
         }
@@ -300,6 +300,9 @@ struct AMontrer {
     presse: Option<tf_app::moteur::PressePapiers>,
     /// Le curseur, en pixels ; `None` = le centre de l'image.
     curseur: Option<[f32; 2]>,
+    /// Ce que `level.dat` dit du monde : un monde vide allume le plan de
+    /// référence, comme dans la fenêtre.
+    niveau: Option<tf_world::niveau::Niveau>,
 }
 
 /// Le presse-papiers qu'un fichier donnerait — lu par le MÊME lecteur que le
@@ -344,6 +347,7 @@ fn capturer(
         composants,
         presse,
         curseur,
+        niveau,
     } = montrer;
     let app = match Appareil::ouvrir() {
         Ok(a) => a,
@@ -355,6 +359,18 @@ fn capturer(
     println!("adaptateur : {}", app.decrire());
     let aspect = larg as f32 / haut as f32;
     let mut etat = Etat::cadre(m.min, m.max, aspect);
+    // Le plan de référence d'un monde vide, et le cadrage de ce plan quand il
+    // n'y a rien d'autre à cadrer — ce que la fenêtre fait en ouvrant.
+    etat.regler_pour_le_monde(niveau.as_ref());
+    let cadre = tf_app::etat::cadre_du_vide(
+        m.bornes_d_ouverture(),
+        etat.plan.hauteur(),
+        niveau.as_ref().and_then(|n| n.ou_regarder()),
+    );
+    if let Some((a, b)) = cadre {
+        etat.vue = tf_render::controles::Vue::cadrer(a, b, aspect);
+    }
+    let (min, max) = cadre.unwrap_or((m.min, m.max));
     // La capture dit la VÉRITÉ de ce qui est ouvert : une image qui montrerait
     // des boutons actifs sur une fixture non éditable serait une image fausse.
     etat.editable = editable;
@@ -370,16 +386,16 @@ fn capturer(
     // autour de y = −10. Les douze segments étaient bien émis, et hors champ —
     // une absence qui ne se voit pas, une fois de plus.
     let demo = tf_world::coords::BlockPos::new;
-    let c = |k: usize| ((m.min[k] + m.max[k]) * 0.5) as i32;
-    let quart = |k: usize| (((m.max[k] - m.min[k]) * 0.25) as i32).max(1);
+    let c = |k: usize| ((min[k] + max[k]) * 0.5) as i32;
+    let quart = |k: usize| (((max[k] - min[k]) * 0.25) as i32).max(1);
     etat.selection.poser_coin1(demo(
         c(0) - quart(0),
-        m.max[1] as i32 - 2 * quart(1),
+        max[1] as i32 - 2 * quart(1),
         c(2) - quart(2),
     ));
     etat.selection.poser_coin2(demo(
         c(0) + quart(0),
-        m.max[1] as i32 + quart(1),
+        max[1] as i32 + quart(1),
         c(2) + quart(2),
     ));
     etat.quadrillage.chunks = Some(1);
@@ -434,8 +450,15 @@ fn capturer(
         camera.oeil[1] as i32,
         camera.oeil[2] as i32,
     );
-    let y = (m.min[1] as i32, m.max[1] as i32);
-    let mut lignes = scene::quadrillage(&etat.quadrillage, oeil, y);
+    let y = m.hauteurs_du_decoupage(etat.plan.hauteur());
+    let mut lignes = match etat.plan_a_dessiner(&camera) {
+        Some((h, centre)) => scene::grille_du_plan(h, centre),
+        None => tf_render::Lignes::new(),
+    };
+    let plan = lignes.len();
+    lignes
+        .sommets
+        .extend(scene::quadrillage(&etat.quadrillage, oeil, y).sommets);
     let quadrillage = lignes.len();
     lignes
         .sommets
@@ -455,8 +478,10 @@ fn capturer(
         .sommets
         .extend(scene::contour_vise(etat.vise.case).sommets);
     println!(
-        "calque : {quadrillage} segment(s) de découpage, {selection} de sélection, \
-         {composants_vus} d'instances de composants, {} d'arrivée, {} du bloc visé",
+        "calque : {plan} segment(s) du plan de référence, {} de découpage, \
+         {selection} de sélection, {composants_vus} d'instances de composants, \
+         {} d'arrivée, {} du bloc visé",
+        quadrillage - plan,
         avant_vise - quadrillage - selection - composants_vus,
         lignes.len() - avant_vise
     );

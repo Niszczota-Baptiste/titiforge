@@ -745,7 +745,10 @@ fn ecrire<S: RegionSource, O: RegionStore>(
             let a = &arrivees[i];
             // Du terrain GÉNÉRÉ : un chunk laissé à mi-génération n'en a pas
             // encore, et le jeu recouvrira ce qu'on y aurait posé.
+            // Dans un monde vide, le terrain à venir EST du vide : le jeu y
+            // générera un chunk vide, et l'entité y sera ce qu'on a voulu.
             let terrain = match (genere.get(&a.chunk), &blocs) {
+                _ if staging.monde_vide(dim).is_some() => true,
                 (Some(&g), _) => g,
                 (None, None) => false,
                 (None, Some(r)) => {

@@ -36,6 +36,41 @@ impl Default for Quadrillage {
     }
 }
 
+/// **Le plan de référence** `y = hauteur` : ce que vise un rayon qui ne
+/// touche aucun bloc.
+///
+/// Sans lui, dans un monde vide, on ne pourrait rien viser — ni coin de
+/// sélection, ni pose. Un bloc réel gagne toujours : le plan n'est qu'un
+/// REPLI, il ne vole jamais la visée de ce qu'on voit.
+///
+/// Allumé et hauteur sont séparés, comme une case à cocher et son champ :
+/// éteindre puis rallumer rend la hauteur qu'on avait réglée, pas un défaut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanDeReference {
+    pub actif: bool,
+    /// Une frontière de cases, bornée par [`PLAN_Y`] : `y = 64` sépare la
+    /// case 63 de la 64, et l'on pose SUR le plan dans la 64.
+    pub y: i32,
+}
+
+impl Default for PlanDeReference {
+    fn default() -> Self {
+        // Éteint : un monde qui a du terrain a son vrai sol. La hauteur de
+        // la mer, pour qu'un plan allumé à la main ne commence pas au fond.
+        PlanDeReference {
+            actif: false,
+            y: 64,
+        }
+    }
+}
+
+impl PlanDeReference {
+    /// La hauteur du plan s'il est allumé.
+    pub fn hauteur(&self) -> Option<i32> {
+        self.actif.then_some(self.y.clamp(PLAN_Y.0, PLAN_Y.1))
+    }
+}
+
 /// Ce que le CURSEUR désigne, tel que la dernière image l'a trouvé.
 ///
 /// **Sous la souris, pas au centre de l'écran.** La souris est libre — la
@@ -52,6 +87,11 @@ pub struct SousLeCurseur {
     pub pose: Option<BlockPos>,
     /// Ce que l'accrochage a fait de `pose`, et pourquoi.
     pub accroche: Option<Accroche>,
+    /// Le rayon n'a touché AUCUN bloc : c'est le plan de référence qui l'a
+    /// arrêté. `case` est alors la case sous le plan — de l'air, qu'on
+    /// sélectionne comme le dessus d'un sol, mais qu'on ne casse ni ne
+    /// nomme.
+    pub sur_le_plan: bool,
 }
 
 /// **L'atelier : l'opération choisie et ses paramètres.**
@@ -460,6 +500,49 @@ pub fn fichiers_d_echange(dossiers: &[std::path::PathBuf]) -> Vec<Trouve> {
     v.into_iter().map(|(_, t)| t).take(40).collect()
 }
 
+/// Les hauteurs que le plan de référence peut prendre : les frontières de
+/// cases du monde depuis 1.18, du fond (−64) au plafond (320).
+pub const PLAN_Y: (i32, i32) = (-64, 320);
+
+/// Jusqu'où, le long du regard, on cherche le plan pour centrer sa grille.
+/// Au-delà, la grille se centre sous l'œil : un regard presque horizontal
+/// couperait le plan à des milliers de blocs.
+pub const PORTEE_DU_PLAN: f32 = 512.0;
+
+/// **Ce qu'on cadre en ouvrant un monde qui ne montre RIEN.**
+///
+/// Un monde vide n'a pas de bornes : le cadrage retombait sur un cube
+/// arbitraire à l'origine, et la caméra fixait un point du vide sans rien
+/// pour s'y repérer — le plan de référence pouvait être à cent blocs sous
+/// elle. On cadre donc un carré du PLAN autour de là où l'on joue.
+///
+/// `None` quand il y a quelque chose à cadrer (`bornes`), ou pas de plan :
+/// l'appelant garde alors son cadrage.
+pub fn cadre_du_vide(
+    bornes: Option<([f32; 3], [f32; 3])>,
+    plan: Option<i32>,
+    ou: Option<[i32; 3]>,
+) -> Option<([f32; 3], [f32; 3])> {
+    if bornes.is_some() {
+        return None;
+    }
+    let h = plan? as f32;
+    let [x, _, z] = ou.unwrap_or([0, 0, 0]);
+    let (x, z) = (x as f32 + 0.5, z as f32 + 0.5);
+    Some((
+        [x - CADRE_DU_VIDE, h, z - CADRE_DU_VIDE],
+        [
+            x + CADRE_DU_VIDE,
+            h + CADRE_DU_VIDE * 0.5,
+            z + CADRE_DU_VIDE,
+        ],
+    ))
+}
+
+/// Le demi-côté, en blocs, du carré de plan cadré dans un monde vide : deux
+/// chunks de part et d'autre, de quoi voir la grille sans la noyer.
+pub const CADRE_DU_VIDE: f32 = 32.0;
+
 /// La dimension que la scène montre. La coque ne dessine que la surface
 /// aujourd'hui (`scene.rs`) ; une instance d'une autre dimension n'est donc
 /// jamais « sous le curseur ».
@@ -587,6 +670,11 @@ pub struct Etat {
     /// scène prend le bloc au lieu d'agir. Le bouton ne peut pas la déclencher
     /// lui-même — pour l'atteindre, la souris a quitté ce qu'elle désignait.
     pub pipette_armee: bool,
+    /// Le plan de référence : ce que vise un rayon qui ne touche rien.
+    pub plan: PlanDeReference,
+    /// La surface du monde ouvert est-elle VIDE ? Alors les opérations y
+    /// créent les chunks qui manquent — l'interface le dit.
+    pub monde_vide: bool,
     /// Le document des composants, tel que le fil l'a PUBLIÉ. L'interface ne
     /// le lit jamais du disque.
     pub composants: crate::moteur::Composants,
@@ -645,6 +733,8 @@ impl Etat {
             nuancier: crate::nuancier::Nuancier::default(),
             bloc_vise: None,
             pipette_armee: false,
+            plan: PlanDeReference::default(),
+            monde_vide: false,
             composants: crate::moteur::Composants::default(),
             composant_choisi: None,
             nom_composant: String::new(),
@@ -677,6 +767,11 @@ impl Etat {
         // Le presse-papiers vivait dans le moteur de l'ANCIEN monde : ses
         // états sont ceux de son interner, et il est parti avec lui.
         self.presse = crate::moteur::PressePapiers::default();
+        // Le plan et le vide étaient ceux de l'ancien monde : c'est
+        // `regler_pour_le_monde` qui dit ceux du nouveau. Un plan resté
+        // allumé d'un monde vide viserait le ciel d'un monde de terrain.
+        self.plan = PlanDeReference::default();
+        self.monde_vide = false;
     }
 
     /// **Un monde vient de s'ouvrir** : les dossiers d'échange par défaut
@@ -956,6 +1051,9 @@ impl Etat {
     pub fn nommer_vise<'a>(&mut self, etat_en: impl FnOnce(BlockPos) -> &'a str) {
         match self.vise.case {
             None => self.bloc_vise = None,
+            // Le plan n'est pas un bloc : le nommer « air » ferait prendre de
+            // l'air à la pipette, et « Poser » poserait du vide.
+            Some(_) if self.vise.sur_le_plan => self.bloc_vise = None,
             Some(c) => {
                 let nom = etat_en(c);
                 if self.bloc_vise.as_deref() != Some(nom) {
@@ -978,6 +1076,45 @@ impl Etat {
         self.nuancier.utiliser(&cle);
         self.message = format!("en main : {}", self.bloc_tirage);
         true
+    }
+
+    /// **Ce que le monde ouvert change à la visée.** Un monde VIDE allume le
+    /// plan de référence, à la hauteur du point d'apparition — là où le joueur
+    /// arrive, donc là où il construira ; un monde qui a du terrain l'éteint,
+    /// son sol est le vrai. `niveau` est ce que `level.dat` dit du monde.
+    ///
+    /// La hauteur suit le point d'apparition dans les DEUX cas : un plan
+    /// allumé à la main part du sol de là où l'on arrive, pas d'un défaut.
+    pub fn regler_pour_le_monde(&mut self, niveau: Option<&tf_world::niveau::Niveau>) {
+        self.monde_vide = niveau.and_then(|n| n.monde_vide()).is_some();
+        self.plan = PlanDeReference {
+            actif: self.monde_vide,
+            y: niveau
+                .and_then(|n| n.apparition)
+                .map_or(PlanDeReference::default().y, |a| a[1])
+                .clamp(PLAN_Y.0, PLAN_Y.1),
+        };
+    }
+
+    /// **Où quadriller le plan de référence** : sa hauteur, et la colonne
+    /// autour de laquelle le dessiner — là où le REGARD le coupe, sinon sous
+    /// l'œil.
+    ///
+    /// Sous l'œil seulement, une caméra haute qui regarde au loin verrait sa
+    /// grille à cent blocs derrière ce qu'elle regarde : le repère serait
+    /// dessiné, et nulle part où il sert.
+    pub fn plan_a_dessiner(&self, camera: &tf_render::Camera) -> Option<(i32, [i32; 2])> {
+        let h = self.plan.hauteur()?;
+        let regard = [
+            camera.cible[0] - camera.oeil[0],
+            camera.cible[1] - camera.oeil[1],
+            camera.cible[2] - camera.oeil[2],
+        ];
+        let centre = match tf_render::viser::viser_plan(camera.oeil, regard, PORTEE_DU_PLAN, h) {
+            Some(t) => [t.case[0], t.case[2]],
+            None => [camera.oeil[0].floor() as i32, camera.oeil[2].floor() as i32],
+        };
+        Some((h, centre))
     }
 
     /// **Arme (ou désarme) la pipette** : c'est le bouton de l'inspecteur. Le
@@ -1036,7 +1173,16 @@ impl Etat {
     ) {
         let Some(ndc) = curseur else { return };
         let d = tf_render::viser::rayon_ecran(camera, ndc, aspect);
-        let Some(t) = tf_render::viser::viser(camera.oeil, d, portee, solide) else {
+        // Un bloc réel d'abord ; le plan de référence seulement si le rayon
+        // n'en a touché aucun.
+        let bloc = tf_render::viser::viser(camera.oeil, d, portee, solide);
+        let sur_le_plan = bloc.is_none();
+        let touche = bloc.or_else(|| {
+            self.plan
+                .hauteur()
+                .and_then(|h| tf_render::viser::viser_plan(camera.oeil, d, portee, h))
+        });
+        let Some(t) = touche else {
             self.vise = SousLeCurseur::default();
             return;
         };
@@ -1062,6 +1208,7 @@ impl Etat {
             case: Some(case),
             pose,
             accroche,
+            sur_le_plan,
         };
     }
 
@@ -1337,6 +1484,12 @@ impl Etat {
     /// `viser` existe pour fermer, et il se refermerait ici si l'un des deux
     /// gestes prenait la case de l'autre.
     pub fn casser_un_bloc(&mut self) -> Option<crate::moteur::Commande> {
+        // Sous le plan de référence, il n'y a que de l'air : envoyer une
+        // opération pour l'écrire ferait un aller-retour au moteur pour rien.
+        if self.vise.sur_le_plan {
+            self.message = "rien à casser : c'est le plan de référence".into();
+            return None;
+        }
         let c = self.vise.case?;
         self.commande_une_case(c, "minecraft:air".to_string())
     }

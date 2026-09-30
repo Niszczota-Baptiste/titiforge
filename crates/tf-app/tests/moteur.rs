@@ -945,5 +945,35 @@ fn ce_qui_n_est_pas_genere_se_dit_dans_la_reponse() {
         panic!("attendu Fait, reçu {r:?}");
     };
     assert!(!resume.contains("jamais générés"), "{resume}");
-    assert_eq!(tf_app::moteur::non_generes(0), "");
+    // Tout HORS de la carte : rien n'est écrit, et la réponse dit pourquoi —
+    // « rien n'a changé » seul se lirait « c'était déjà ça ».
+    let mut params = Params::new();
+    params.poser("bloc", Valeur::texte("minecraft:dirt"));
+    assert!(m.envoyer(Commande::Appliquer {
+        op: "poser",
+        params,
+        sel: BBox::new(BlockPos::new(1024, -48, 0), BlockPos::new(1055, -33, 31)),
+        forme: Forme::Boite,
+        compter: true,
+        seed: 0,
+    }));
+    let r = attendre(&mut m);
+    assert!(matches!(r, Reponse::Rien(_)), "{r:?}");
+    assert!(
+        r.texte().contains("4 chunk(s) de la zone jamais générés"),
+        "{}",
+        r.texte()
+    );
+
+    use tf_app::moteur::non_generes;
+    assert_eq!(non_generes(0, 0, false), "");
+    assert_eq!(non_generes(0, 0, true), "");
+    // Dans un monde vide : ce qui est créé, et ce qui dépasse le plafond —
+    // pas « allez-y en jeu », qui n'y changerait rien.
+    assert!(non_generes(0, 3, true).contains("3 chunk(s) créé(s)"));
+    let trop = non_generes(5, 0, true);
+    assert!(
+        trop.contains("plafond") && !trop.contains("en jeu"),
+        "{trop}"
+    );
 }

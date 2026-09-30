@@ -113,6 +113,10 @@ pub struct RapportRegion {
     /// pour une limite d'affichage. Rendu d'office, comme les entités
     /// laissées.
     pub chunks_absents: u64,
+    /// **Chunks CRÉÉS**, dans un monde vide : absents — ou laissés à
+    /// mi-génération — et devenus des chunks vides finis pour recevoir ce que
+    /// l'opération y écrit. Voir [`peut_creer`].
+    pub chunks_crees: u64,
 }
 
 impl RapportRegion {
@@ -207,6 +211,7 @@ impl RapportRegion {
         self.biomes += autre.biomes;
         self.chunks_presents += autre.chunks_presents;
         self.chunks_absents += autre.chunks_absents;
+        self.chunks_crees += autre.chunks_crees;
     }
 }
 
@@ -274,6 +279,10 @@ pub enum Erreur {
         /// Le premier d'entre eux, en coordonnées de chunk.
         exemple: ChunkPos,
     },
+    /// Un monde vide d'une version qui précède 1.18 : on ne sait pas écrire son
+    /// chunk vide (`tf_anvil::chunk_vide`). [`peut_creer`] l'écarte d'avance ;
+    /// l'erreur ne sert que si un appelant passait outre.
+    VersionSansChunkVide(i32),
     /// L'opération a échoué en route, ET ce qu'elle avait déjà écrit n'a pas
     /// pu être défait. Le seul cas où la copie de travail garde une action à
     /// moitié faite — et il se DIT.
@@ -354,6 +363,10 @@ impl std::fmt::Display for Erreur {
                 "cette action porte une correction d'un genre inconnu ({genre}) — \
                  écrite par une version plus récente de titiforge. Elle n'est pas \
                  rejouée, pas même en partie. Rien n'a été écrit"
+            ),
+            Erreur::VersionSansChunkVide(dv) => write!(
+                f,
+                "monde vide d'avant 1.18 (DataVersion {dv}) : on ne sait pas y créer de chunk"
             ),
             Erreur::TerrainAbsent { absents, exemple } => write!(
                 f,
@@ -493,6 +506,8 @@ struct Fait {
     /// Le jeu n'a pas fini de le générer : on n'y a RIEN fait, et il compte
     /// comme absent.
     incomplet: bool,
+    /// Il n'existait pas (ou pas fini) et on l'a CRÉÉ vide, dans un monde vide.
+    cree: bool,
 }
 
 /// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
@@ -514,9 +529,40 @@ fn un_chunk(
     op: &dyn Operation,
     cible: Cible,
     interner: &mut Interner,
+    creer: Option<&tf_world::niveau::MondeVide>,
 ) -> Result<Fait, Erreur> {
-    let avant = inflate(&t.charge, t.compression)?;
-    let balayage = scan(&avant)?;
+    // Ce qui était LÀ : le chunk, ou rien (une charge vide dit « absent »).
+    let origine = if t.charge.is_empty() {
+        Vec::new()
+    } else {
+        inflate(&t.charge, t.compression)?
+    };
+    let balayage_origine = if origine.is_empty() {
+        None
+    } else {
+        Some(scan(&origine)?)
+    };
+    // **Dans un monde vide, ce qui manque se CRÉE.** Un chunk absent, ou
+    // laissé à mi-génération, y devient un chunk vide FINI : c'est exactement
+    // ce que le jeu y générerait, à nos blocs près. Ailleurs, jamais — on ne
+    // sait pas générer le terrain.
+    let remplacer = match (&balayage_origine, creer) {
+        (None, Some(_)) => true,
+        (Some(b), Some(_)) => b.incomplet,
+        _ => false,
+    };
+    let (avant, balayage) = match (remplacer, creer, balayage_origine) {
+        (true, Some(v), _) => {
+            let nbt = tf_anvil::chunk_vide(t.cpos.x, t.cpos.z, v.data_version, &v.biome)
+                .ok_or(Erreur::VersionSansChunkVide(v.data_version))?;
+            let sc = scan(&nbt)?;
+            (Cow::Owned(nbt), sc)
+        }
+        (_, _, Some(sc)) => (Cow::Borrowed(origine.as_slice()), sc),
+        // Absent sans rien pour le créer : le ramassage ne l'envoie pas ici.
+        (_, _, None) => unreachable!("un chunk absent n'est ramassé que dans un monde vide"),
+    };
+    let avant: &[u8] = &avant;
     let mut fait = Fait {
         index: t.index,
         ecrit: None,
@@ -528,6 +574,7 @@ fn un_chunk(
         biomes: 0,
         blocs_changes: false,
         incomplet: false,
+        cree: false,
     };
     // **Un chunk que le jeu n'a pas fini de générer ne s'écrit pas.** Il
     // reprendra sa génération au chargement — bruit, surface, grottes,
@@ -570,7 +617,7 @@ fn un_chunk(
             if sel.clip_to_section(spos).is_none() {
                 continue;
             }
-            if let Some(s) = decode_section(&avant, &balayage, sc, interner)? {
+            if let Some(s) = decode_section(avant, &balayage, sc, interner)? {
                 prises.push((rang, s));
             }
         }
@@ -596,7 +643,7 @@ fn un_chunk(
         fait.bornes = unir(fait.bornes, r.bornes);
         for (rang, section) in colonnes.finir() {
             edits.extend(section_edits(
-                &avant,
+                avant,
                 &section,
                 &balayage.sections[rang],
                 interner,
@@ -615,7 +662,7 @@ fn un_chunk(
             if sel.clip_to_section(spos).is_none() {
                 continue;
             }
-            let Some(mut section) = decode_section(&avant, &balayage, sc, interner)? else {
+            let Some(mut section) = decode_section(avant, &balayage, sc, interner)? else {
                 continue;
             };
             // Les cases habitées de CETTE section, telles qu'elles sont avant.
@@ -643,7 +690,7 @@ fn un_chunk(
             // `section_edits` compare ce qu'il va écrire à ce qui est DÉJÀ là : une
             // section que l'opération n'a pas vraiment changée ne produit aucune
             // édition, donc aucune entrée de journal vide.
-            edits.extend(section_edits(&avant, &section, sc, interner)?);
+            edits.extend(section_edits(avant, &section, sc, interner)?);
         }
     }
 
@@ -668,7 +715,7 @@ fn un_chunk(
             // sache lire » — 1.13–1.17, ou une palette d'un type inattendu.
             // On passe : ne rien faire vaut mieux qu'écrire au jugé la carte
             // des biomes de quelqu'un.
-            let Some(mut b) = decode_biomes(&avant, sc, interner)? else {
+            let Some(mut b) = decode_biomes(avant, sc, interner)? else {
                 continue;
             };
             if !op.appliquer_biomes(&mut b, sel, spos) {
@@ -691,7 +738,7 @@ fn un_chunk(
                     },
                 )),
             );
-            edits.extend(biome_edits(&avant, &b, sc, interner)?);
+            edits.extend(biome_edits(avant, &b, sc, interner)?);
         }
     }
 
@@ -700,9 +747,9 @@ fn un_chunk(
         // de sa case, soit elle s'ajoute. Le compte se prend donc AVANT.
         fait.entites_posees = posees.len() as u64;
         let (voulues, retirees) =
-            liste_voulue(&avant, &balayage.entites.entrees, &orphelines, posees);
+            liste_voulue(avant, &balayage.entites.entrees, &orphelines, posees);
         fait.entites_retirees = retirees as u64;
-        if let Some(e) = edition_entites(&avant, &balayage.entites, balayage.layout, &voulues) {
+        if let Some(e) = edition_entites(avant, &balayage.entites, balayage.layout, &voulues) {
             edits.push(e);
         }
     }
@@ -717,8 +764,23 @@ fn un_chunk(
     }
 
     if !edits.is_empty() {
-        let apres = splice(&avant, &mut edits)?;
-        let patch = ChunkPatch::record(cible, &avant, &apres, &edits)?;
+        let apres = splice(avant, &mut edits)?;
+        let patch = if remplacer {
+            // Le correctif part de ce qui était LÀ — rien, ou le chunk
+            // inachevé —, pas du chunk vide imaginé en route : annuler rend
+            // l'absence, jamais une coquille que le jeu n'aurait pas écrite.
+            let tout = [tf_anvil::Edit {
+                span: tf_nbt::Span {
+                    start: 0,
+                    end: origine.len(),
+                },
+                bytes: apres.clone(),
+            }];
+            ChunkPatch::record(cible, &origine, &apres, &tout)?
+        } else {
+            ChunkPatch::record(cible, avant, &apres, &edits)?
+        };
+        fait.cree = remplacer;
         fait.ecrit = Some((patch, deflate_level(&apres, t.compression, NIVEAU_STAGING)?));
     }
     Ok(fait)
@@ -1291,14 +1353,20 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     op: &dyn Operation,
     interner: &Interner,
 ) -> Result<RapportRegion, Erreur> {
+    let creer = peut_creer(staging, dim, folder, sel);
     let bytes = match staging.read_region(dim, folder, pos) {
-        Ok(b) => b,
+        Ok(b) => Some(b),
+        // Dans un monde vide, une région absente est du vide à créer.
+        Err(SourceError::NotFound) if creer.is_some() => None,
         // Une région absente est le cas NORMAL au bord d'un monde. La
         // confondre avec un échec ferait refuser une save parfaitement saine.
         Err(SourceError::NotFound) => return Ok(RapportRegion::default()),
         Err(e) => return Err(e.into()),
     };
-    let mut region = read(&bytes, pos.x, pos.z)?;
+    let mut region = match &bytes {
+        Some(b) => read(b, pos.x, pos.z)?,
+        None => Region::vide(pos.x, pos.z),
+    };
 
     // ── Le ramassage, séquentiel : c'est lui qui touche au disque.
     //
@@ -1307,17 +1375,31 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     let mut travaux: Vec<Travail> = Vec::new();
     for cpos in chunks_de(sel, pos) {
         let (lx, lz) = (cpos.x.rem_euclid(32), cpos.z.rem_euclid(32));
-        let Some(brut) = region.get_mut(lx, lz) else {
-            continue;
+        let present = match region.get_mut(lx, lz) {
+            Some(brut) => {
+                if brut.needs_external() {
+                    let nom = external_file_name(cpos.x, cpos.z);
+                    let charge = staging.read_external(dim, folder, &nom)?;
+                    brut.resolve_external(charge);
+                }
+                !brut.payload.is_empty()
+            }
+            None => false,
         };
-        if brut.needs_external() {
-            let nom = external_file_name(cpos.x, cpos.z);
-            let charge = staging.read_external(dim, folder, &nom)?;
-            brut.resolve_external(charge);
-        }
-        if brut.payload.is_empty() {
+        if !present {
+            // Absent : sauté, sauf dans un monde vide, où il part au travail
+            // SANS charge — `un_chunk` le crée s'il y a quelque chose à écrire.
+            if creer.is_some() {
+                travaux.push(Travail {
+                    cpos,
+                    index: (lx + lz * 32) as u16,
+                    compression: Compression::Zlib,
+                    charge: Vec::new(),
+                });
+            }
             continue;
         }
+        let brut = region.get(lx, lz).expect("présent");
         travaux.push(Travail {
             cpos,
             index: brut.index,
@@ -1350,7 +1432,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
                 .par_iter()
                 .map_init(
                     || interner.clone(),
-                    |local, t| un_chunk(t, sel, op, cible(t.index), local),
+                    |local, t| un_chunk(t, sel, op, cible(t.index), local, creer),
                 )
                 .collect()
         }
@@ -1359,7 +1441,7 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
             let mut local = interner.clone();
             travaux
                 .iter()
-                .map(|t| un_chunk(t, sel, op, cible(t.index), &mut local))
+                .map(|t| un_chunk(t, sel, op, cible(t.index), &mut local, creer))
                 .collect()
         }
     };
@@ -1394,10 +1476,23 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
                 pos.z * 32 + (f.index / 32) as i32,
             ));
         }
+        if f.cree && f.ecrit.is_some() {
+            rap.chunks_crees += 1;
+        }
         if let Some((patch, charge)) = f.ecrit {
             let (lx, lz) = ((f.index % 32) as i32, (f.index / 32) as i32);
-            if let Some(brut) = region.get_mut(lx, lz) {
-                brut.payload = Cow::Owned(charge);
+            match region.get_mut(lx, lz) {
+                Some(brut) => brut.payload = Cow::Owned(charge),
+                // Un chunk CRÉÉ : l'emplacement n'existait pas.
+                None => {
+                    region.slots[f.index as usize] = Some(RawChunk {
+                        index: f.index,
+                        timestamp: 0,
+                        compression: Compression::Zlib,
+                        payload: Cow::Owned(charge),
+                        external: false,
+                    })
+                }
             }
             rap.patches.push(patch);
         }
@@ -1497,6 +1592,33 @@ pub fn appliquer<S: RegionSource, O: RegionStore>(
         }
     }
     Ok(total)
+}
+
+/// **Combien de chunks une opération peut CRÉER, au plus**, dans un monde
+/// vide : 16 384, soit seize régions — 2 048 blocs de côté.
+///
+/// Dans un monde vide, tout ce qui manque peut se créer ; mais un chunk créé
+/// est un chunk écrit, dans la copie puis dans la save, et « tout
+/// sélectionner » ne doit pas écrire des gigaoctets de vide en un clic. Au-delà,
+/// l'opération n'écrit que dans ce qui existe, et le compte rendu le DIT par
+/// le compte des chunks laissés de côté.
+pub const CREATION_MAX: u64 = 16_384;
+
+/// **Cette opération peut-elle créer les chunks qui manquent ?** Seulement
+/// dans un monde vide (`Staging::monde_vide`), dans le dossier des BLOCS, sur
+/// une emprise d'au plus [`CREATION_MAX`] chunks, et depuis 1.18 — le seul
+/// format de chunk vide qu'on sache écrire.
+pub fn peut_creer<'a, S: RegionSource, O: RegionStore>(
+    staging: &'a Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    sel: &BBox,
+) -> Option<&'a tf_world::niveau::MondeVide> {
+    let v = staging.monde_vide(dim)?;
+    (folder == Folder::Region
+        && v.data_version >= tf_anvil::DV_1_18
+        && chunks_dans(sel) <= CREATION_MAX)
+        .then_some(v)
 }
 
 /// Le nombre de colonnes de chunks qu'une boîte touche. En `u64` : « tout
@@ -1636,7 +1758,13 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
         air: pas.air,
         compter: false,
     };
-    let absents = chunks_absents(staging, dim, folder, &arrivee.chunks_ecrits())?;
+    // Dans un monde vide, le collage CRÉERA ce qui manque — pourvu que son
+    // emprise tienne sous le plafond de création : c'est elle qu'il vérifiera.
+    let absents = if peut_creer(staging, dim, folder, &arrivee.bornes()).is_some() {
+        Vec::new()
+    } else {
+        chunks_absents(staging, dim, folder, &arrivee.chunks_ecrits())?
+    };
     if let Some(&exemple) = absents.first() {
         return Err(Erreur::TerrainAbsent {
             absents: absents.len(),

@@ -203,6 +203,11 @@ pub struct Monde {
     pub atlas: tf_assets::Atlas,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// `min`/`max` sont-ils un DÉFAUT, faute de rien à borner ? Un monde vide
+    /// n'a pas de bornes ; ses `min`/`max` sont un cube arbitraire à
+    /// l'origine, qu'il ne faut pas prendre pour un contenu
+    /// (`bornes_d_ouverture`).
+    sans_contenu: bool,
     pub quoi: String,
     pub quads: usize,
     pub poses: usize,
@@ -246,6 +251,28 @@ impl Monde {
     /// Combien d'états la table de la scène porte.
     pub fn nb_etats(&self) -> usize {
         self.interner.len()
+    }
+
+    /// **Les bornes de ce que la scène montrait en s'OUVRANT**, ou `None` si
+    /// elle ne montrait rien — `min`/`max` ne sont alors qu'un défaut.
+    ///
+    /// À l'ouverture seulement, comme `min`/`max` : une édition ne les
+    /// déplace pas. Les tenir à jour coûterait un parcours de toute la scène à
+    /// chaque geste, pour décider d'un cadrage qui ne se fait qu'une fois.
+    pub fn bornes_d_ouverture(&self) -> Option<([f32; 3], [f32; 3])> {
+        (!self.sans_contenu).then_some((self.min, self.max))
+    }
+
+    /// **Les hauteurs du découpage** : celles du contenu, étendues au plan de
+    /// référence s'il est allumé. Sans ça, dans un monde vide, les boîtes des
+    /// chunks flotteraient à l'origine, loin du seul repère qu'il y ait.
+    pub fn hauteurs_du_decoupage(&self, plan: Option<i32>) -> (i32, i32) {
+        match (self.bornes_d_ouverture(), plan) {
+            (Some((a, b)), Some(h)) => ((a[1] as i32).min(h - 1), (b[1] as i32).max(h - 1)),
+            (Some((a, b)), None) => (a[1] as i32, b[1] as i32),
+            (None, Some(h)) => (h - 1, h - 1),
+            (None, None) => (self.min[1] as i32, self.max[1] as i32),
+        }
     }
 
     /// **La couture vers le monde, pour viser.** Un prédicat, comme le
@@ -438,8 +465,10 @@ pub fn charger_monde(a: &Assets, ou: Ou) -> Result<Monde, String> {
         &apparence_fluide(&atlas, &interner, climat, teintes),
     );
 
-    let (min, max) = arene.bornes().unwrap_or(([0.0; 3], [64.0; 3]));
+    let bornes = arene.bornes();
+    let (min, max) = bornes.unwrap_or(([0.0; 3], [64.0; 3]));
     Ok(Monde {
+        sans_contenu: bornes.is_none(),
         quads: chantier.quads(),
         poses: chantier.poses(),
         faces_fluides: chantier.fluides(),
@@ -762,7 +791,13 @@ impl Ouvert {
         std::fs::create_dir_all(&couche).map_err(|e| format!("copie de travail : {e}"))?;
         let overlay =
             tf_world::FsSource::open(&couche).map_err(|e| format!("copie de travail : {e:?}"))?;
-        let staging = std::sync::Arc::new(tf_world::Staging::new(source, overlay));
+        // Un monde VIDE, comme la séance le dit au sien : sans ça, un essai
+        // sur cette copie verrait refuser la création des chunks qu'une
+        // fenêtre, elle, ferait.
+        let vide =
+            tf_world::niveau::lire_fichier(std::path::Path::new(dir)).and_then(|n| n.monde_vide());
+        let staging =
+            std::sync::Arc::new(tf_world::Staging::new(source, overlay).avec_monde_vide(vide));
         Self::monter(assets, staging, dir, zone, Some(couche))
     }
 
@@ -1964,6 +1999,57 @@ pub fn quadrillage(q: &Quadrillage, centre: BlockPos, y: (i32, i32)) -> Lignes {
         for c in cellules_autour(centre, r, Niveau::Region, y) {
             let (a, b) = coins(&c);
             l.contour(a, b, tf_render::rgba(255, 90, 90, 230));
+        }
+    }
+    l
+}
+
+/// Le demi-côté, en blocs, de la grille FINE du plan de référence — une
+/// ligne par bloc. Plus loin, un bloc fait moins d'un pixel et la grille
+/// deviendrait un aplat moiré.
+pub const PLAN_FIN: i32 = 32;
+/// Le demi-côté, en CHUNKS, de la grille des chunks sur le plan.
+pub const PLAN_CHUNKS: i32 = 8;
+
+/// **Le plan de référence** `y = h`, quadrillé autour de la colonne
+/// `centre` : une ligne pâle par bloc tout près, une plus vive par chunk plus
+/// loin — les chunks sont ce qu'une opération crée dans le vide.
+///
+/// Dessiné un CHEVEU au-dessus du plan : pile dessus, la ligne se battrait
+/// avec la face supérieure d'un bloc posé en `h − 1`. Un bloc posé SUR le plan
+/// (en `h`) la cache, puisqu'elle passe en lui.
+pub fn grille_du_plan(h: i32, centre: [i32; 2]) -> Lignes {
+    const CHEVEU: f32 = 0.01;
+    let mut l = Lignes::new();
+    let y = h as f32 + CHEVEU;
+    let fine = tf_render::rgba(200, 210, 230, 40);
+    let vive = tf_render::rgba(200, 210, 230, 130);
+    // Les chunks : alignés sur les multiples de 16, quelle que soit la
+    // colonne regardée — une grille qui glisserait avec la caméra ne dirait
+    // plus où sont les frontières.
+    let (cx, cz) = (
+        tf_world::floor_div(centre[0], 16),
+        tf_world::floor_div(centre[1], 16),
+    );
+    let (x0, x1) = ((cx - PLAN_CHUNKS) * 16, (cx + PLAN_CHUNKS + 1) * 16);
+    let (z0, z1) = ((cz - PLAN_CHUNKS) * 16, (cz + PLAN_CHUNKS + 1) * 16);
+    for k in 0..=(2 * PLAN_CHUNKS + 1) {
+        let x = (x0 + k * 16) as f32;
+        l.segment([x, y, z0 as f32], [x, y, z1 as f32], vive);
+        let z = (z0 + k * 16) as f32;
+        l.segment([x0 as f32, y, z], [x1 as f32, y, z], vive);
+    }
+    // Les blocs, sauf là où passe déjà une ligne de chunk.
+    let (a0, a1) = (centre[0] - PLAN_FIN, centre[0] + PLAN_FIN);
+    let (b0, b1) = (centre[1] - PLAN_FIN, centre[1] + PLAN_FIN);
+    for x in a0..=a1 {
+        if x.rem_euclid(16) != 0 {
+            l.segment([x as f32, y, b0 as f32], [x as f32, y, b1 as f32], fine);
+        }
+    }
+    for z in b0..=b1 {
+        if z.rem_euclid(16) != 0 {
+            l.segment([a0 as f32, y, z as f32], [a1 as f32, y, z as f32], fine);
         }
     }
     l

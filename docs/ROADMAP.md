@@ -238,7 +238,10 @@ celle où l'on poserait, on pose
 les deux coins d'une sélection, on l'accroche à ce qui est bâti en voyant
 POURQUOI axe par axe, on allume le quadrillage des chunks et celui des `.mca`,
 et le panneau annonce ce que la sélection coûtera — en sections entières
-comptées, jamais en « alignée ».
+comptées, jamais en « alignée ». Dans un monde VIDE (le préréglage « The
+Void »), les opérations créent les chunks qui manquent et un plan de
+référence donne quelque chose à viser : de quoi essayer les outils sur une
+base vide, sans bord sur les côtés.
 
 **Les formulaires sont ENGENDRÉS.** `tf-ops/src/catalogue.rs` dit ce que les
 opérations prennent en paramètre — nom, noms WorldEdit, bornes, coût — et la

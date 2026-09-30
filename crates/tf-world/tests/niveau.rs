@@ -221,3 +221,178 @@ fn les_saves_d_une_installation_se_listent_de_la_plus_recente_a_la_plus_ancienne
     assert!(saves_de(&d.join("nulle-part")).is_empty());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// ── le générateur : ce monde est-il VIDE ? ──────────────────────────────────
+
+/// Un `level.dat` 1.18 dont la surface est générée par `generateur` ; le
+/// Nether, lui, est toujours un monde plat vide — pour prouver qu'on lit la
+/// SURFACE et pas la première dimension venue.
+fn level_dat_genere(generateur: impl Fn(&mut Writer), data_version: bool) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.field(tag::COMPOUND, "");
+    w.field(tag::COMPOUND, "Data");
+    w.field(tag::COMPOUND, "WorldGenSettings");
+    w.field(tag::BYTE, "bonus_chest").i8_payload(0);
+    w.field(tag::LONG, "seed").raw(&42i64.to_be_bytes());
+    w.field(tag::COMPOUND, "dimensions");
+    w.field(tag::COMPOUND, "minecraft:the_nether");
+    w.field(tag::STRING, "type").raw_str("minecraft:the_nether");
+    w.field(tag::COMPOUND, "generator");
+    w.field(tag::STRING, "type").raw_str("minecraft:flat");
+    w.field(tag::COMPOUND, "settings");
+    w.field(tag::LIST, "layers").list_header(tag::COMPOUND, 0);
+    w.end().end().end();
+    w.field(tag::COMPOUND, "minecraft:overworld");
+    w.field(tag::STRING, "type").raw_str("minecraft:overworld");
+    w.field(tag::COMPOUND, "generator");
+    generateur(&mut w);
+    w.end().end();
+    w.end().end();
+    if data_version {
+        w.field(tag::INT, "DataVersion").i32_payload(2975);
+    }
+    w.field(tag::STRING, "LevelName").raw_str("Bac à sable");
+    w.end().end();
+    deflate(&w.into_bytes(), Compression::Gzip).unwrap()
+}
+
+/// Un générateur plat : ses couches `(bloc, épaisseur)` et son biome.
+fn plat(
+    couches: &'static [(&'static str, i32)],
+    biome: Option<&'static str>,
+) -> impl Fn(&mut Writer) {
+    move |w: &mut Writer| {
+        w.field(tag::STRING, "type").raw_str("minecraft:flat");
+        w.field(tag::COMPOUND, "settings");
+        w.field(tag::BYTE, "features").i8_payload(1);
+        w.field(tag::LIST, "layers")
+            .list_header(tag::COMPOUND, couches.len());
+        for (bloc, h) in couches {
+            w.field(tag::STRING, "block").raw_str(bloc);
+            w.field(tag::INT, "height").i32_payload(*h);
+            w.end();
+        }
+        if let Some(b) = biome {
+            w.field(tag::STRING, "biome").raw_str(b);
+        }
+        w.field(tag::BYTE, "lakes").i8_payload(0);
+        w.end();
+    }
+}
+
+/// **Le préréglage « The Void »** : une couche d'air, le biome du vide. C'est
+/// le monde où l'on peut créer des chunks, et il porte ce qu'il faut pour les
+/// écrire comme le jeu les écrirait.
+#[test]
+fn le_preregle_du_vide_est_un_monde_vide() {
+    let n = lire(&level_dat_genere(
+        plat(&[("minecraft:air", 1)], Some("minecraft:the_void")),
+        true,
+    ))
+    .unwrap();
+    let g = n.generation.as_ref().unwrap();
+    assert_eq!(g.genre, "minecraft:flat");
+    assert_eq!(g.couches, vec![("minecraft:air".to_string(), 1)]);
+    assert_eq!(
+        n.monde_vide(),
+        Some(tf_world::niveau::MondeVide {
+            data_version: 2975,
+            biome: "minecraft:the_void".into()
+        })
+    );
+    assert_eq!(
+        n.nom.as_deref(),
+        Some("Bac à sable"),
+        "le reste se lit toujours"
+    );
+
+    // Les autres airs du jeu sont de l'air aussi — préfixés ou non, comme un
+    // préréglage tapé à la main les écrit.
+    let n = lire(&level_dat_genere(
+        plat(&[("minecraft:cave_air", 2), ("void_air", 1)], None),
+        true,
+    ))
+    .unwrap();
+    assert!(n.monde_vide().is_some(), "{:?}", n.generation);
+}
+
+/// Un plat SANS couche est vide aussi — et, sans biome nommé, il reçoit celui
+/// que le jeu lui donnerait : les plaines.
+#[test]
+fn un_plat_sans_couche_est_vide_et_prend_les_plaines() {
+    let n = lire(&level_dat_genere(plat(&[], None), true)).unwrap();
+    assert_eq!(
+        n.monde_vide().map(|v| v.biome),
+        Some("minecraft:plains".into())
+    );
+}
+
+/// **Ce qui n'est PAS vide ne l'est pas.** Un plat classique — y créer un
+/// chunk vide creuserait un trou jusqu'au fond du monde —, un monde de bruit,
+/// un monde sans `DataVersion` (on ne saurait pas quelle forme d'octets
+/// écrire), un vieux monde sans `WorldGenSettings`.
+#[test]
+fn ce_qui_n_est_pas_vide_ne_l_est_pas() {
+    let classique = plat(
+        &[
+            ("minecraft:bedrock", 1),
+            ("minecraft:dirt", 2),
+            ("minecraft:grass_block", 1),
+        ],
+        Some("minecraft:plains"),
+    );
+    assert_eq!(
+        lire(&level_dat_genere(classique, true))
+            .unwrap()
+            .monde_vide(),
+        None
+    );
+
+    // Un seul bloc qui n'est pas de l'air suffit.
+    let presque = plat(&[("minecraft:air", 60), ("minecraft:stone", 1)], None);
+    assert_eq!(
+        lire(&level_dat_genere(presque, true)).unwrap().monde_vide(),
+        None
+    );
+
+    let bruit = |w: &mut Writer| {
+        w.field(tag::STRING, "type").raw_str("minecraft:noise");
+        w.field(tag::STRING, "settings")
+            .raw_str("minecraft:overworld");
+    };
+    let n = lire(&level_dat_genere(bruit, true)).unwrap();
+    assert_eq!(
+        n.generation.as_ref().map(|g| g.genre.as_str()),
+        Some("minecraft:noise")
+    );
+    assert_eq!(n.monde_vide(), None, "le Nether plat vide n'y change rien");
+
+    let sans_version = plat(&[("minecraft:air", 1)], Some("minecraft:the_void"));
+    assert_eq!(
+        lire(&level_dat_genere(sans_version, false))
+            .unwrap()
+            .monde_vide(),
+        None
+    );
+
+    let ancien = lire(&level_dat(None, true)).unwrap();
+    assert_eq!(ancien.monde_vide(), None);
+}
+
+/// La copie de travail porte le monde vide pour la SURFACE seulement : le
+/// Nether et l'End d'un monde plat se génèrent comme partout.
+#[test]
+fn seule_la_surface_d_un_monde_vide_est_vide() {
+    use tf_world::source::{Dimension, MemorySource};
+    let v = tf_world::niveau::MondeVide {
+        data_version: 2975,
+        biome: "minecraft:the_void".into(),
+    };
+    let st = tf_world::Staging::new(MemorySource::new(), MemorySource::new())
+        .avec_monde_vide(Some(v.clone()));
+    assert_eq!(st.monde_vide(&Dimension::Overworld), Some(&v));
+    assert_eq!(st.monde_vide(&Dimension::Nether), None);
+    assert_eq!(st.monde_vide(&Dimension::End), None);
+    let normal = tf_world::Staging::new(MemorySource::new(), MemorySource::new());
+    assert_eq!(normal.monde_vide(&Dimension::Overworld), None);
+}

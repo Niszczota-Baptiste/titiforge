@@ -420,3 +420,57 @@ fn les_echanges_et_la_fiche_coller_se_dessinent() {
         assert!(e.presse_plus_recente().is_some() == plein);
     }
 }
+
+/// Le TEXTE que l'interface affiche, image faite — ce que l'œil lirait.
+fn texte_affiche(e: &mut Etat) -> String {
+    fn recueillir(s: &egui::Shape, t: &mut String) {
+        match s {
+            egui::Shape::Text(x) => {
+                t.push_str(x.galley.text());
+                t.push('\n');
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| recueillir(s, t)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    let sortie = ctx.run(egui::RawInput::default(), |ctx| {
+        tf_app::interface::dessiner(ctx, e);
+    });
+    let mut t = String::new();
+    for s in &sortie.shapes {
+        recueillir(&s.shape, &mut t);
+    }
+    t
+}
+
+/// **Sur le plan de référence, l'inspecteur dit la hauteur du PLAN** — pas une
+/// hauteur déduite de la case visée : vue d'en dessous, la case est AU-DESSUS
+/// du plan, et la déduire donnerait un plan d'un bloc trop haut. Il ne
+/// propose pas non plus de casser : sous le plan, il n'y a que de l'air.
+#[test]
+fn l_inspecteur_dit_la_hauteur_du_plan_vu_d_en_dessous() {
+    let mut e = Etat::cadre([0.0; 3], [32.0; 3], 1.0);
+    e.plan = tf_app::etat::PlanDeReference { actif: true, y: 64 };
+    let d_en_dessous = tf_render::Camera {
+        oeil: [0.5, 40.0, 0.5],
+        cible: [1.5, 41.0, 0.5],
+        fov: 1.0,
+        proche: 0.1,
+        loin: 1000.0,
+    };
+    e.relever_vise(&d_en_dessous, 1.0, Some([0.0, 0.0]), 256.0, &|_| false);
+    assert!(e.vise.sur_le_plan);
+    assert_eq!(
+        e.vise.case.map(|c| c.y),
+        Some(64),
+        "d'en dessous, la case est au-dessus"
+    );
+    let t = texte_affiche(&mut e);
+    assert!(t.contains("plan de référence, y = 64"), "{t}");
+    assert!(!t.contains("casser :"), "{t}");
+    assert!(
+        t.contains("PLAN DE RÉFÉRENCE"),
+        "la section de réglage : {t}"
+    );
+}
