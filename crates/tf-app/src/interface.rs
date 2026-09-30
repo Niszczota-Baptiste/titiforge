@@ -162,7 +162,7 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
                 let axe = ["x", "y", "z"][k];
                 ui.label(
                     RichText::new(format!(
-                        "  {axe} → {} ({}, {}, {})",
+                        "  {axe} ➡ {} ({}, {}, {})",
                         r.genre.nom(),
                         r.reference.x,
                         r.reference.y,
@@ -188,7 +188,7 @@ fn inspecteur(ui: &mut Ui, e: &mut Etat) {
             ui.label(format!("{sx} × {sy} × {sz} = {} blocs", r.volume));
             ui.label(
                 RichText::new(format!(
-                    "{}, {}, {} → {}, {}, {}",
+                    "{}, {}, {} ↔ {}, {}, {}",
                     r.min.x, r.min.y, r.min.z, r.max.x, r.max.y, r.max.z
                 ))
                 .small()
@@ -855,7 +855,7 @@ fn operations(ui: &mut Ui, e: &mut Etat) {
     for n in &notes {
         let (c, prefixe) = match n {
             Note::Bloquant(_) => (ROUGE, "✖ "),
-            Note::Attention(_) => (ORANGE, "▲ "),
+            Note::Attention(_) => (ORANGE, "⚠ "),
             Note::Info(_) => (GRIS, ""),
         };
         ui.label(
@@ -1317,7 +1317,7 @@ fn ligne_de_save(ui: &mut Ui, s: &crate::accueil::SaveVue) -> bool {
     };
     if s.seance_en_cours {
         ui.label(
-            RichText::new("  ✎ modifications pas encore écrites")
+            RichText::new("  ✏ modifications pas encore écrites")
                 .small()
                 .color(ORANGE),
         );

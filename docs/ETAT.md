@@ -21,7 +21,7 @@ n'y valent rien, **les comptes si**.
 
 | | |
 |---|---:|
-| Tests | **1206**, zéro échec |
+| Tests | **1207**, zéro échec |
 | `cargo clippy --all-targets` | propre |
 | Crates finis | tf-nbt · tf-anvil · tf-world · tf-blocks · tf-ops · tf-formats · tf-mesh · tf-assets · tf-render |
 | Crates commencés | **tf-app** — la coque : fenêtre `winit`, interface `egui`, et le même rendu hors écran |
@@ -41,7 +41,7 @@ n'y valent rien, **les comptes si**.
 cargo test --workspace
 ```
 
-1206 tests, répartis par ce qu'ils PROUVENT :
+1207 tests, répartis par ce qu'ils PROUVENT :
 
 | Famille | Tests | Ce qu'elle tient |
 |---|---:|---|
@@ -99,6 +99,7 @@ cargo test --workspace
 | `tf-app` accueil | 7 | l'ACCUEIL sans fenêtre : les saves des installations se proposent et le travail pas encore écrit se SIGNALE ; ce qui n'est pas une save est refusé en le disant ; un `level.dat` glissé désigne son dossier ; un chemin collé avec ses guillemets se comprend ; les récents montent en tête, sans doublon, bornés, et un récent qui n'est plus une save ne se propose pas ; un monde s'ouvre là où l'on joue ; et les assets viennent de l'installation du monde — jamais d'un launcher sans version téléchargée |
 | `tf-app` changer | 2 | changer de monde dans la même fenêtre donne EXACTEMENT la scène d'une ouverture directe, sans rien de l'ancien monde inscrit à la fenêtre de résidence ; la copie jetable de l'ancien part avec lui, celle d'une séance non |
 | `tf-app` interface | 13 | que CHAQUE genre de paramètre a son champ — le formulaire se génère, il ne s'écrit pas ; qu'une valeur du mauvais genre est refusée au lieu d'être convertie ; en pilotant egui sans fenêtre (focus, puis Entrée), que le champ de bloc COMPLÈTE ce qui n'est pas encore un bloc sans remplacer un identifiant exact par un voisin ; et que la fiche des composants se dessine, document lisible ou non, sans rien envoyer d'elle-même ; et que la section ÉCHANGES et la fiche « Coller » se dessinent, presse-papiers vide ou plein, fichier plus récent que le monde compris, sans rien envoyer d'elles-mêmes ; et, en lisant le TEXTE de l'image faite, que sur le plan de référence l'inspecteur dit la hauteur du plan, même vu d'en dessous, et ne propose pas de casser |
+| `tf-app` glyphes | 1 | que chaque caractère non ASCII que la coque ÉCRIT — lu dans les sources, entre guillemets, hors terminal — existe dans la police d'egui : sans, il s'affiche en carré, sans erreur ni avertissement |
 | `tf-app` regles | 6 | qu'une rotation lancée DEPUIS LA COQUE tourne aussi les états — un pack écrit à la volée, des règles dérivées de lui, le fil moteur, la copie de travail relue ; que sans règles la case bouge, l'orientation non, et que la réponse le DIT ; qu'un bloc que le pack ne sait pas tourner se signale autrement ; qu'un `//set` n'attend pas une dérivation en cours quand une rotation, si ; et qu'une dérivation MORTE vaut « aucune règle » au lieu d'un moteur qui attend pour toujours — chaque scénario dans un fil témoin à attente bornée |
 | `tf-app` nuancier | 9 | le SÉLECTEUR DE BLOCS : le visé, puis les récents, puis le monde — pas le pack entier — quand rien n'est tapé ; la correspondance classe avant l'origine, et chaque mot d'une recherche compte ; les états que le JEU a écrits passent avant le nom nu ; la syntaxe du jeu tapée à la main trouve ses états ; un ordre TOTAL, le même quel que soit l'ordre d'entrée ; des récents canoniques, sans air ni doublon, bornés, qui survivent au fichier ; et un bloc inconnu du pack ET du monde qui se signale |
 | `tf-ops` executer | 12 | la boucle complète depuis un NOM : chaque opération du catalogue s'exécute vraiment, la source reste intacte, annuler rend le monde d'avant OCTET pour octet — et un `//move` qui se chevauche s'annule dans le bon ORDRE |

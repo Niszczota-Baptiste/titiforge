@@ -209,7 +209,7 @@ contre 11 718 ms pour le moteur JS. Voir `docs/RESULTATS.md`.
 ## Commandes
 
 ```bash
-cargo test            # tous les crates (1206 tests aujourd’hui)
+cargo test            # tous les crates (1207 tests aujourd’hui)
 cargo clippy --all-targets
 cargo fmt
 
@@ -2426,6 +2426,14 @@ propres à ce dépôt.
   les deux seuls endroits qui savent qu'un monde est vide. Et l'annulation
   d'une création rend l'ABSENCE, pas le chunk vide imaginé en route — sinon
   la région créée ne pourrait plus quitter la copie de travail.
+- **Un glyphe que la police n'a pas s'affiche en CARRÉ — sans erreur.** Les
+  flèches « → » de l'inspecteur, le « ▲ » de chaque avertissement de l'atelier
+  et le « ✎ » de l'accueil se dessinaient « □ » depuis leur arrivée, sur
+  toutes les captures : un carré se lit comme une puce, et personne ne l'a
+  relevé. Vu en regardant de près une capture d'un monde vide. La police est
+  celle d'egui par défaut ; `tests/glyphes.rs` lit les sources et lui demande
+  chaque caractère non ASCII écrit entre guillemets. Remplaçants qu'elle a :
+  « ➡ », « ↔ », « ⚠ », « ✏ », « ✔ », « ✖ », « ▶ », « • ».
 - **Un chunk que le jeu n'a pas fini de générer n'est pas un chunk.** Au
   bord de toute zone explorée, le jeu laisse une couronne de chunks à
   mi-génération (`Status` = `noise`, `liquid_carvers`, `features`…) et
