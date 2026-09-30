@@ -1731,3 +1731,76 @@ fn les_chunks_absents_s_additionnent_d_une_passe_a_l_autre() {
     });
     assert_eq!((a.chunks_presents, a.chunks_absents), (4, 7));
 }
+
+// ── un chunk que le jeu n'a pas fini de générer ─────────────────────────────
+
+/// `r.0.0` de la fixture, avec les chunks (1, 0) et (0, 1) laissés à mi-
+/// génération — ce qu'on trouve au bord de toute zone explorée.
+fn monde_a_bord() -> MemorySource {
+    let brut = tf_bench::avec_statut(
+        &region(&Terrain::petite()),
+        0,
+        0,
+        &[(1, 0), (0, 1)],
+        "minecraft:liquid_carvers",
+    );
+    let m = MemorySource::new();
+    m.put_region(SURFACE, DOSSIER, ZERO, brut);
+    m
+}
+
+fn charge(st: &Staging<MemorySource, MemorySource>, cx: i32, cz: i32) -> Vec<u8> {
+    let octets = st.read_region(&SURFACE, DOSSIER, ZERO).unwrap();
+    let r = read(&octets, 0, 0).unwrap();
+    r.get(cx, cz).expect("le chunk existe").payload.to_vec()
+}
+
+/// **On n'écrit pas dans un chunk à mi-génération.** Le jeu reprendra sa
+/// génération au chargement — le bruit remplit ce qui est solide, la surface
+/// change en herbe la pierre qui voit le ciel, les grottes creusent, minerais
+/// et arbres se posent — par-dessus ce qu'on y aurait écrit. Il reste donc tel
+/// quel, octet pour octet, et compte parmi les chunks jamais générés.
+#[test]
+fn un_chunk_a_mi_generation_ne_s_ecrit_pas() {
+    let st = staging(monde_a_bord());
+    let avant = (charge(&st, 1, 0), charge(&st, 0, 1), charge(&st, 1, 1));
+    let mut i = Interner::new();
+    let p = Plan::nouveau(
+        Masque::Etat(i.intern("minecraft:stone")),
+        Motif::Bloc(i.intern("minecraft:dirt")),
+    )
+    .en_comptant();
+    let r = appliquer(&st, &SURFACE, DOSSIER, &boite(0, -64, 0, 31, 0, 31), &p, &i).unwrap();
+    assert_eq!(charge(&st, 1, 0), avant.0, "à mi-génération : intact");
+    assert_eq!(charge(&st, 0, 1), avant.1, "à mi-génération : intact");
+    assert_ne!(charge(&st, 1, 1), avant.2, "un chunk fini, lui, est écrit");
+    assert_eq!((r.chunks_presents, r.chunks_absents), (2, 2));
+    assert_eq!(r.patches.len(), 2, "deux chunks écrits, pas quatre");
+}
+
+/// Et on n'en COPIE rien : tant que le jeu n'y est pas revenu, ce qu'il y a
+/// là n'est pas encore le monde. Un extrait qui le déborde y porte de l'air,
+/// comme sur un chunk absent.
+#[test]
+fn un_chunk_a_mi_generation_se_copie_comme_de_l_air() {
+    let st = staging(monde_a_bord());
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let sel = boite(0, -64, 0, 31, -60, 15);
+    let p = copier(&st, &SURFACE, DOSSIER, &sel, &mut i).unwrap();
+    let (mut chunk_fini, mut chunk_a_mi) = (0usize, 0usize);
+    for y in 0..5u32 {
+        for z in 0..16u32 {
+            for x in 0..32u32 {
+                let non_air = p.get(x, y, z) != Some(air);
+                if x < 16 && non_air {
+                    chunk_fini += 1;
+                } else if x >= 16 && non_air {
+                    chunk_a_mi += 1;
+                }
+            }
+        }
+    }
+    assert!(chunk_fini > 0, "le chunk fini doit porter de la matière");
+    assert_eq!(chunk_a_mi, 0, "le chunk à mi-génération : de l'air");
+}

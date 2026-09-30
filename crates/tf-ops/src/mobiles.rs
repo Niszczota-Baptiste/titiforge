@@ -738,10 +738,22 @@ fn ecrire<S: RegionSource, O: RegionStore>(
             None => Region::vide(pos.x, pos.z),
         };
         let mut versions: HashMap<ChunkPos, Option<Option<i32>>> = HashMap::new();
+        // Une fois par CHUNK : cinquante cadres sur un mur ne décompressent pas
+        // cinquante fois le même chunk.
+        let mut genere: HashMap<ChunkPos, bool> = HashMap::new();
         for &i in idx {
             let a = &arrivees[i];
-            let (lx, lz) = (a.chunk.x.rem_euclid(32), a.chunk.z.rem_euclid(32));
-            let terrain = blocs.as_ref().is_some_and(|r| r.get(lx, lz).is_some());
+            // Du terrain GÉNÉRÉ : un chunk laissé à mi-génération n'en a pas
+            // encore, et le jeu recouvrira ce qu'on y aurait posé.
+            let terrain = match (genere.get(&a.chunk), &blocs) {
+                (Some(&g), _) => g,
+                (None, None) => false,
+                (None, Some(r)) => {
+                    let g = crate::edition::chunk_genere(staging, dim, Folder::Region, r, a.chunk)?;
+                    genere.insert(a.chunk, g);
+                    g
+                }
+            };
             let refus = if !terrain {
                 Some(Refus::SansTerrain)
             } else {

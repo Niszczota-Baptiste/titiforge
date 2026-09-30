@@ -666,6 +666,29 @@ fn sans_terrain_a_l_arrivee_une_copie_ne_pose_pas_ses_entites() {
     assert_eq!(contenu(&st), avant);
 }
 
+/// Et vers des chunks que le jeu n'a pas fini de GÉNÉRER, pareil : pour lui
+/// ils n'existent pas encore, et c'est dans leur terrain à venir que les
+/// entités se retrouveraient debout. La règle est celle de la garde du
+/// `//move` (`chunk_genere`), pas une seconde.
+#[test]
+fn vers_des_chunks_a_mi_generation_une_copie_ne_pose_pas_ses_entites() {
+    let st = monde();
+    let a_bord = tf_bench::avec_statut(
+        &region(&Terrain::petite()),
+        0,
+        0,
+        &[(8, 0), (9, 0)],
+        "minecraft:features",
+    );
+    st.write_region(&SURFACE, Folder::Region, ZERO, &a_bord)
+        .unwrap();
+    let avant = contenu(&st);
+    let cr = lancer(&st, "copier-vers", &copier_vers([128, 0, 0], None), &sel());
+    assert_eq!(cr.rapport.mobiles_sans_terrain, 7);
+    assert_eq!(cr.rapport.mobiles_poses, 0);
+    assert_eq!(contenu(&st), avant, "ni blocs ni entités écrits");
+}
+
 /// Un `//move` vers du terrain absent est refusé AVANT d'effacer : ni les
 /// blocs ni les entités ne bougent d'un octet.
 #[test]

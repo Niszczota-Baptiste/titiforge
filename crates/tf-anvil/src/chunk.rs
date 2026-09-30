@@ -54,6 +54,56 @@ pub struct ChunkScan {
     /// Le CHAMP `Heightmaps` entier — type, nom et charge — pour pouvoir le
     /// faire disparaître.
     pub hauteurs: Option<Span>,
+    /// **Le jeu n'a pas fini de le générer** (`Status` d'une étape
+    /// intermédiaire — voir [`statut_incomplet`]).
+    pub incomplet: bool,
+}
+
+/// **Les étapes de génération d'un chunk que le jeu n'a pas finies.**
+///
+/// Au bord de la zone explorée, le jeu laisse des chunks à mi-chemin :
+/// débuts de structures, bruit, surface, grottes… Il REPREND leur génération
+/// quand un joueur approche — le bruit remplit ce qui est solide, les règles
+/// de surface changent en herbe et en terre la pierre qui voit le ciel, les
+/// grottes creusent, les minerais et les arbres se posent. Un mur écrit là
+/// ressortirait en jeu couvert d'herbe, percé de grottes et semé de minerai.
+/// Pour le jeu, un tel chunk n'existe pas encore : il ne l'affiche pas, et ce
+/// dépôt non plus.
+///
+/// **La liste nomme ce qu'on SAIT incomplet**, de 1.13 à aujourd'hui, et
+/// rien d'autre : un statut inconnu — une version future, un mod — reste
+/// traité comme fini. Le deviner incomplet cacherait le monde de quelqu'un.
+pub const STATUTS_INCOMPLETS: [&str; 20] = [
+    // 1.14 et après
+    "empty",
+    "structure_starts",
+    "structure_references",
+    "biomes",
+    "noise",
+    "surface",
+    "carvers",
+    "liquid_carvers",
+    "features",
+    "initialize_light",
+    "light",
+    "spawn",
+    "heightmaps",
+    // 1.13
+    "base",
+    "carved",
+    "liquid_carved",
+    "decorated",
+    "lighted",
+    "mobs_spawned",
+    "finalized",
+];
+
+/// Le statut `Status` d'un chunk désigne-t-il une génération inachevée ?
+/// Avec ou sans espace de noms : le jeu écrit `minecraft:full` depuis 1.18,
+/// `full` avant.
+pub fn statut_incomplet(statut: &str) -> bool {
+    let nu = statut.strip_prefix("minecraft:").unwrap_or(statut);
+    STATUTS_INCOMPLETS.contains(&nu)
 }
 
 impl Default for ChunkScan {
@@ -68,6 +118,7 @@ impl Default for ChunkScan {
             packing: Packing::NoStraddle,
             lumiere: None,
             hauteurs: None,
+            incomplet: false,
         }
     }
 }
@@ -157,6 +208,7 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
         };
         match (t, key) {
             (tag::INT, "DataVersion") => out.data_version = c.i32()?,
+            (tag::STRING, "Status") => out.incomplet = statut_incomplet(c.str()?),
             (tag::INT, "xPos") => out.x_pos = Some(c.i32()?),
             (tag::INT, "zPos") => out.z_pos = Some(c.i32()?),
             (tag::BYTE, "isLightOn") => {
@@ -212,6 +264,7 @@ pub fn scan(inflated: &[u8]) -> R<ChunkScan> {
                     break;
                 };
                 match (t, key) {
+                    (tag::STRING, "Status") => out.incomplet = statut_incomplet(lc.str()?),
                     (tag::INT, "xPos") => out.x_pos = Some(lc.i32()?),
                     (tag::INT, "zPos") => out.z_pos = Some(lc.i32()?),
                     (tag::BYTE, "isLightOn") => {

@@ -25,8 +25,8 @@ pub mod state;
 pub use biomes::{bits_biome, Biomes, VOL_BIOME};
 pub use chunk::{
     biome_edits, decode_biomes, decode_section, edition_entites, encode_section, inverse_edits,
-    scan, section_edits, splice, BiomeSpans, ChunkScan, Edit, EncodeError, ScannedSection,
-    SectionSpans, SpliceError,
+    scan, section_edits, splice, statut_incomplet, BiomeSpans, ChunkScan, Edit, EncodeError,
+    ScannedSection, SectionSpans, SpliceError, STATUTS_INCOMPLETS,
 };
 pub use codec::{deflate, deflate_level, inflate, CodecError};
 pub use entites::{Ancrage, Entite, EntiteReperee, ListeEntites};

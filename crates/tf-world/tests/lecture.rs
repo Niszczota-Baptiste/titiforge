@@ -446,3 +446,43 @@ fn les_raisons_sont_plafonnees_le_compte_non() {
     let (sain, _) = lire(&boite(0, 0, 31, 31));
     assert_eq!(sain.pourquoi(), "");
 }
+
+/// **Un chunk que le jeu n'a pas fini de générer ne s'affiche pas.** Pour le
+/// jeu il n'existe pas encore — il ne l'affiche pas non plus, et le recouvrira
+/// en reprenant sa génération. Ce n'est pas une anomalie (il y en a une
+/// couronne au bord de toute zone explorée) : il est COMPTÉ à part, pas parmi
+/// les illisibles, et ne fait l'objet d'aucun message.
+#[test]
+fn un_chunk_a_mi_generation_ne_s_affiche_pas() {
+    let t = Terrain {
+        side: 2,
+        sections: 2,
+        ..Terrain::default()
+    };
+    let octets = tf_bench::avec_statut(&region_en(&t, 0, 0), 0, 0, &[(1, 0)], "minecraft:features");
+    let src = MemorySource::new();
+    src.write_region(
+        &Dimension::Overworld,
+        Folder::Region,
+        RegionPos::new(0, 0),
+        &octets,
+    )
+    .unwrap();
+    let mut interner = Interner::new();
+    let mut chunks = std::collections::BTreeSet::new();
+    let bilan = sections_de(
+        &src,
+        &Dimension::Overworld,
+        Folder::Region,
+        &boite(0, 0, 31, 31),
+        &mut interner,
+        |s| {
+            chunks.insert((s.chunk.x, s.chunk.z));
+        },
+    );
+    assert_eq!(chunks, [(0, 0), (0, 1), (1, 1)].into_iter().collect());
+    assert_eq!(bilan.chunks, 3);
+    assert_eq!(bilan.incomplets, 1);
+    assert_eq!(bilan.illisibles, 0, "ce n'est pas un défaut du fichier");
+    assert_eq!(bilan.pourquoi(), "");
+}

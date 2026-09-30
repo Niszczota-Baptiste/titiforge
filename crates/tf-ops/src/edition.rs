@@ -490,6 +490,9 @@ struct Fait {
     biomes: u64,
     /// Les BLOCS de ce chunk ont-ils changé ?
     blocs_changes: bool,
+    /// Le jeu n'a pas fini de le générer : on n'y a RIEN fait, et il compte
+    /// comme absent.
+    incomplet: bool,
 }
 
 /// La chaîne complète sur un chunk : décompresser, balayer, appliquer,
@@ -524,7 +527,16 @@ fn un_chunk(
         entites_retirees: 0,
         biomes: 0,
         blocs_changes: false,
+        incomplet: false,
     };
+    // **Un chunk que le jeu n'a pas fini de générer ne s'écrit pas.** Il
+    // reprendra sa génération au chargement — bruit, surface, grottes,
+    // minerais, arbres — par-dessus ce qu'on y aurait posé. Pour le jeu il
+    // n'existe pas encore : il compte comme absent.
+    if balayage.incomplet {
+        fait.incomplet = true;
+        return Ok(fait);
+    }
     let mut edits = Vec::new();
 
     // ── Les block entities, avant toute chose.
@@ -941,6 +953,11 @@ pub(crate) fn copier_blocs<S: RegionSource, O: RegionStore>(
             }
             let avant = inflate(&brut.payload, brut.compression)?;
             let balayage = scan(&avant)?;
+            // Pas fini de générer : de l'air, comme un chunk absent — c'est
+            // ce que le jeu y a vraiment, tant qu'il n'y est pas revenu.
+            if balayage.incomplet {
+                continue;
+            }
 
             // Les coffres de ce chunk qui tombent DANS la sélection. Sans eux,
             // un build copié puis reposé ailleurs arrive vide — le piège
@@ -1354,8 +1371,9 @@ pub fn appliquer_region<S: RegionSource, O: RegionStore>(
     // ne dépendent donc pas du nombre de cœurs. Un journal qui changerait
     // d'ordre selon la machine rendrait deux annulations différentes du même
     // travail.
+    let incomplets = faits.iter().filter(|f| f.incomplet).count();
     let mut rap = RapportRegion {
-        chunks_presents: travaux.len() as u64,
+        chunks_presents: (travaux.len() - incomplets) as u64,
         ..Default::default()
     };
     let mut compte = op.compte().then_some(0u64);
@@ -1654,7 +1672,10 @@ pub fn deplacer<S: RegionSource, O: RegionStore>(
 /// Ceux de ces chunks qui n'existent pas, dans l'ordre (z, x).
 ///
 /// Un chunk dont la charge est vide compte comme absent : `appliquer_region`
-/// le saute, donc un collage n'y écrirait rien non plus.
+/// le saute, donc un collage n'y écrirait rien non plus. Un chunk que le jeu
+/// n'a pas fini de générer aussi, pour la même raison — et c'est lui qu'on
+/// rencontre au bord de toute zone explorée. Le savoir demande de le
+/// décompresser : on ne le fait que pour les chunks présents de la liste.
 pub(crate) fn chunks_absents<S: RegionSource, O: RegionStore>(
     staging: &Staging<S, O>,
     dim: &Dimension,
@@ -1678,11 +1699,10 @@ pub(crate) fn chunks_absents<S: RegionSource, O: RegionStore>(
             None => None,
         };
         for c in cs {
-            let (lx, lz) = (c.x.rem_euclid(32), c.z.rem_euclid(32));
-            let present = region
-                .as_ref()
-                .and_then(|r| r.get(lx, lz))
-                .is_some_and(|brut| brut.external || !brut.payload.is_empty());
+            let present = match &region {
+                Some(r) => chunk_genere(staging, dim, folder, r, c)?,
+                None => false,
+            };
             if !present {
                 absents.push(c);
             }
@@ -1690,6 +1710,38 @@ pub(crate) fn chunks_absents<S: RegionSource, O: RegionStore>(
     }
     absents.sort_by_key(|c| (c.z, c.x));
     Ok(absents)
+}
+
+/// **Ce chunk existe-t-il, GÉNÉRÉ jusqu'au bout ?** Absent, vide, ou laissé à
+/// mi-génération par le jeu : non. La seule règle pour tout ce qui doit
+/// savoir s'il y a du terrain à l'arrivée — la garde du `//move`, les
+/// entités d'un collage —, parce que deux règles finiraient par diverger sur
+/// le chunk que seule l'une connaît.
+///
+/// Une charge qu'on ne sait pas lire fait échouer : une garde ne doit pas
+/// laisser passer ce qu'elle n'a pas vu.
+pub(crate) fn chunk_genere<S: RegionSource, O: RegionStore>(
+    staging: &Staging<S, O>,
+    dim: &Dimension,
+    folder: Folder,
+    region: &tf_anvil::Region<'_>,
+    c: ChunkPos,
+) -> Result<bool, Erreur> {
+    let Some(b) = region.get(c.x.rem_euclid(32), c.z.rem_euclid(32)) else {
+        return Ok(false);
+    };
+    let deporte;
+    let charge: &[u8] = if b.needs_external() {
+        deporte = staging.read_external(dim, folder, &external_file_name(c.x, c.z))?;
+        &deporte
+    } else {
+        &b.payload
+    };
+    if charge.is_empty() {
+        return Ok(false);
+    }
+    let inflated = inflate(charge, b.compression)?;
+    Ok(!scan(&inflated)?.incomplet)
 }
 
 /// `//stack` : répéter le contenu d'une sélection `fois` fois.

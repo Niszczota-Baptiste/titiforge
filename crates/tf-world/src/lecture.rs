@@ -63,6 +63,11 @@ pub struct Bilan {
     pub decompresses: usize,
     /// Sections dont on a su lire les biomes.
     pub avec_biomes: usize,
+    /// Chunks que le jeu n'a pas fini de GÉNÉRER (`tf_anvil::statut_incomplet`),
+    /// sautés : pour le jeu ils n'existent pas encore, et il les recouvrira.
+    /// Ce n'est pas une anomalie — il y en a une couronne au bord de toute
+    /// zone explorée —, donc ce n'est pas un illisible.
+    pub incomplets: usize,
 }
 
 /// Au-delà, on compte sans décrire.
@@ -227,6 +232,10 @@ pub fn sections_de_si<S: RegionSource + ?Sized>(
             };
             let chunk = coordonnees(&sc, pos, brut.index);
             if chunk.x < a.x || chunk.x > b.x || chunk.z < a.z || chunk.z > b.z || !garder(chunk) {
+                continue;
+            }
+            if sc.incomplet {
+                bilan.incomplets += 1;
                 continue;
             }
             bilan.chunks += 1;

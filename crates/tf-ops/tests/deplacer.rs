@@ -466,3 +466,39 @@ fn rejouer(region: &[u8], p: &tf_world::journal::ChunkPatch, annuler: bool) -> V
     brut.payload = Cow::Owned(deflate(&voulu, brut.compression).unwrap());
     write(&r).unwrap().region
 }
+
+/// Un chunk que le jeu n'a pas fini de générer compte comme ABSENT pour la
+/// garde : le collage ne l'écrira pas, et la source serait partie quand même.
+/// C'est le cas le plus courant au bord de toute zone explorée.
+#[test]
+fn un_chunk_a_mi_generation_compte_comme_absent() {
+    let brut = tf_bench::avec_statut(
+        &region(&Terrain::peuplee(2)),
+        0,
+        0,
+        &[(1, 0)],
+        "minecraft:noise",
+    );
+    let m = MemorySource::new();
+    m.put_region(SURFACE, DOSSIER, ZERO, brut);
+    let st = staging(m);
+    let mut i = Interner::new();
+    let air = i.intern("minecraft:air");
+    let sel = boite((0, -40, 0), (15, -35, 15));
+    match deplacer(
+        &st,
+        &SURFACE,
+        DOSSIER,
+        &sel,
+        pas([16, 0, 0], air),
+        air,
+        &mut i,
+    ) {
+        Err(tf_ops::edition::Erreur::TerrainAbsent { absents, exemple }) => {
+            assert_eq!(absents, 1);
+            assert_eq!((exemple.x, exemple.z), (1, 0), "{exemple:?}");
+        }
+        autre => panic!("refus attendu, obtenu {autre:?}"),
+    }
+    assert!(st.is_clean(), "pas un octet écrit");
+}

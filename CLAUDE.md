@@ -495,6 +495,7 @@ couvriront le même terrain.
 | Une ENTRÉE de dessin à la scène (une cible autre que la fenêtre et la capture) | elle passe par `Scene::dessiner` (`tf-render/src/scene.rs`) : c'est lui qui écrit la caméra et DÉCOUPE les lignes pour elle. Une entrée qui appellerait `passe` directement enverrait au rastériseur des lignes qui sortent de l'écran — et seule la capture est vérifiée au pixel |
 | Un format d'échange | son module dans `tf-formats/src/` (lire + écrire), sa variante de `Format`, et sa détection dans `lire` (`lib.rs`) — par le CONTENU, jamais l'extension. Ses tests : un aller-retour (`aller_retour.rs`), un fichier tel que l'OUTIL D'ORIGINE l'écrit, construit par l'écrivain d'arbre indépendant (`outils.rs`), et la troncature à chaque longueur (`robustesse.rs`). Un lecteur ne réserve jamais une grille que le fichier ne remplit pas. Côté coque, son dossier dans `dossier_par_defaut` (`tf-app/src/etat.rs`, le compilateur l'exige) : là où l'outil qui le lit le CHERCHE. Son extension, l'export et la liste d'import la tirent de `Format::extension` |
 | Une règle de TEXTURE (uv par défaut, sens d'une face, `uvlock`) | `tf-assets/src/uv.rs`, dans l'ordre du jeu — jamais une correction dans un shader. Ses propriétés dans `tf-assets/tests/uv.rs` (ce que la règle doit VOULOIR DIRE : projection, texture qui suit la géométrie, alignement sur le monde), et la jonction au pixel dans `tf-render/tests/orientation.rs`. Le rendu ne reçoit que les uv de deux coins et l'échange des axes |
+| Un statut de génération INACHEVÉE (une version du jeu en ajoute une étape) | `STATUTS_INCOMPLETS` (`tf-anvil/src/chunk.rs`) — et rien ailleurs : l'affichage, l'écriture, la copie, la garde du `//move` et les entités le lisent tous par `ChunkScan::incomplet`. Une fixture de chunk inachevé : `tf_bench::avec_statut` |
 | Un bloc plein d'eau SANS propriété qui le dise | `TOUJOURS_INONDES` (`tf-assets/src/fluides.rs`). Un bloc qui porte `waterlogged` — `minefield:*` compris — n'a rien à y faire : l'état le dit |
 | Une chose que la surface d'un fluide LIT (une case de plus, un voisin de plus) | d'abord la référence indépendante (`tf-mesh/tests/fluides.rs`, qui transcrit le jeu), puis la passe (`fluides.rs`) : c'est leur croisement qui tranche. Si elle lit à plus d'UN bloc, `voisines_fluides` (`chantier.rs`) doit s'élargir d'autant — les deux tests de remaillage avec de l'eau rougiront sinon |
 | Un piège rencontré | ici, en disant ce qu'il a COÛTÉ et comment on l'a mesuré |
@@ -2410,6 +2411,22 @@ propres à ce dépôt.
   existe — chaque chunk de l'emprise est dans une seule région, et toute
   région présente est visitée —, donc il reste exact sur une sélection
   démesurée dont on ne visite que les régions présentes.
+- **Un chunk que le jeu n'a pas fini de générer n'est pas un chunk.** Au
+  bord de toute zone explorée, le jeu laisse une couronne de chunks à
+  mi-génération (`Status` = `noise`, `liquid_carvers`, `features`…) et
+  REPREND leur génération quand un joueur approche : le bruit remplit ce qui
+  est solide, les règles de surface changent en herbe la pierre qui voit le
+  ciel, les grottes creusent, minerais et arbres se posent. On les affichait
+  et on y écrivait comme dans les autres : un mur posé au bord d'un monde neuf
+  serait ressorti en jeu couvert d'herbe et semé de minerai — sans rien de
+  faux dans nos fichiers, ce qui l'aurait rendu introuvable. Trouvé en lisant
+  le code qui saute les chunks ABSENTS, pas par un test : aucune fixture
+  n'écrivait autre chose que `minecraft:full`. Pour le jeu ils n'existent
+  pas ; ici non plus — ni affichés, ni écrits, ni copiés, et la garde du
+  `//move` comme les entités d'un collage passent par UNE règle
+  (`chunk_genere`). La liste nomme ce qu'on SAIT incomplet ; un statut
+  inconnu reste fini, parce que le deviner incomplet cacherait le monde de
+  quelqu'un.
 - **Deux chemins de lecture, un seul savait lire un `.mcc`.** Les opérations
   résolvaient les charges déportées ; la lecture d'AFFICHAGE
   (`sections_de_si`) inflatait le talon vide et comptait le chunk

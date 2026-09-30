@@ -437,6 +437,70 @@ pub fn region_de_chunks(rx: i32, rz: i32, chunks: &[(i32, i32, Vec<u8>)]) -> Vec
     out
 }
 
+/// **Le même `.mca`, avec des chunks laissés à mi-génération.**
+///
+/// Au bord de toute zone explorée, le jeu laisse une couronne de chunks à une
+/// étape intermédiaire — `Status` vaut `minecraft:features`, `noise`… — qu'il
+/// reprendra quand un joueur approchera. Les fixtures n'écrivent que des
+/// chunks FINIS ; celle-ci réécrit le `Status` des chunks demandés (en
+/// coordonnées MONDE) et rien d'autre : mêmes sections, même contenu partout.
+///
+/// Relue et réécrite à la main, comme `region_en` : une fixture n'emprunte
+/// pas le lecteur ni l'écrivain qu'elle sert à vérifier.
+pub fn avec_statut(
+    region: &[u8],
+    rx: i32,
+    rz: i32,
+    chunks: &[(i32, i32)],
+    statut: &str,
+) -> Vec<u8> {
+    use std::io::Read;
+    let mut tous: Vec<(i32, i32, Vec<u8>)> = Vec::new();
+    for i in 0..1024usize {
+        let loc = u32::from_be_bytes(region[i * 4..i * 4 + 4].try_into().unwrap());
+        let (off, n) = ((loc >> 8) as usize * SECTOR, loc & 0xff);
+        if off == 0 || n == 0 {
+            continue;
+        }
+        let len = u32::from_be_bytes(region[off..off + 4].try_into().unwrap()) as usize;
+        assert_eq!(region[off + 4], 2, "une fixture compresse en zlib");
+        let mut nbt = Vec::new();
+        flate2::read::ZlibDecoder::new(&region[off + 5..off + 4 + len])
+            .read_to_end(&mut nbt)
+            .unwrap();
+        let (cx, cz) = (rx * 32 + (i % 32) as i32, rz * 32 + (i / 32) as i32);
+        if chunks.contains(&(cx, cz)) {
+            nbt = remplacer_statut(&nbt, statut);
+        }
+        tous.push((cx, cz, nbt));
+    }
+    for c in chunks {
+        assert!(
+            tous.iter().any(|(x, z, _)| (*x, *z) == *c),
+            "le chunk {c:?} n'est pas dans la région"
+        );
+    }
+    region_de_chunks(rx, rz, &tous)
+}
+
+/// Remplace la valeur du champ `Status` d'un chunk inflaté. Une chaîne NBT
+/// porte sa longueur, et rien au-dessus d'elle : un compound n'a pas de
+/// longueur, donc changer celle de la chaîne ne décale rien d'autre.
+fn remplacer_statut(nbt: &[u8], statut: &str) -> Vec<u8> {
+    let cle: &[u8] = &[tag::STRING, 0, 6, b'S', b't', b'a', b't', b'u', b's'];
+    let debut = nbt
+        .windows(cle.len())
+        .position(|w| w == cle)
+        .expect("le chunk porte un Status")
+        + cle.len();
+    let ancien = u16::from_be_bytes([nbt[debut], nbt[debut + 1]]) as usize;
+    let mut out = nbt[..debut].to_vec();
+    out.extend_from_slice(&(statut.len() as u16).to_be_bytes());
+    out.extend_from_slice(statut.as_bytes());
+    out.extend_from_slice(&nbt[debut + 2 + ancien..]);
+    out
+}
+
 /// Occupation mémoire résidente du processus, en octets.
 ///
 /// Lue dans `/proc/self/statm` : c'est la seule mesure qui compte pour ce
